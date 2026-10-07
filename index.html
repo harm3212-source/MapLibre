@@ -496,7 +496,7 @@
             type: "raster-dem",
             encoding: "mapbox",
             tiles: [
-              "./terrain/{z}/{x}/{y}.png"
+              "./terrain-natural-v2/{z}/{x}/{y}.png?v=2"
             ],
             tileSize: 256,
             minzoom: 0,
@@ -506,7 +506,7 @@
 
         map.setTerrain({
           source: "bigane-dem",
-          exaggeration: 1.0
+          exaggeration: 0.5
         });
 
         // Hillshade from the same DEM.
