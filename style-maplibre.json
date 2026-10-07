@@ -1,5 +1,5 @@
 {
-"version": 8,
+  "version": 8,
   "name": "Bigane world 2.0",
   "metadata": {
     "mapbox:autocomposite": true,
@@ -50,70 +50,6 @@
   "zoom": 0.7895336245123687,
   "bearing": 0,
   "pitch": 0,
-  "lights": [
-    {
-      "id": "directional",
-      "type": "directional",
-      "properties": {
-        "cast-shadows": true
-      }
-    },
-    {
-      "id": "flat",
-      "type": "flat",
-      "properties": {
-        "color": "hsl(0, 0%, 100%)",
-        "anchor": "map"
-      }
-    }
-  ],
-  "terrain": null,
-  "fog": {
-    "color": "#ffffff",
-    "horizon-blend": [
-      "interpolate",
-      [
-        "linear"
-      ],
-      [
-        "zoom"
-      ],
-      4,
-      0,
-      7,
-      0
-    ],
-    "range": [
-      10,
-      10
-    ],
-    "star-intensity": [
-      "interpolate",
-      [
-        "linear"
-      ],
-      [
-        "zoom"
-      ],
-      5,
-      0.35,
-      6,
-      0
-    ],
-    "space-color": [
-      "interpolate",
-      [
-        "linear"
-      ],
-      [
-        "zoom"
-      ],
-      4,
-      "#010b19",
-      7,
-      "#367ab9"
-    ]
-  },
   "sources": {
     "composite": {
       "type": "vector",
@@ -122,9 +58,6 @@
   },
   "sprite": "https://api.mapbox.com/styles/v1/fitzchevalric/clmj7x4rt01oz01r4h0j07f13/af3n0lg65wanst1z5p4f92p8a/sprite?access_token=pk.eyJ1IjoiZml0emNoZXZhbHJpYyIsImEiOiJjazdzdXYzazUwazk0M2VtcnJ0N3BkZzY4In0.agcwn8WbpxmAVcXzzaXbsQ",
   "glyphs": "https://api.mapbox.com/fonts/v1/mapbox/{fontstack}/{range}.pbf?access_token=pk.eyJ1IjoiZml0emNoZXZhbHJpYyIsImEiOiJjazdzdXYzazUwazk0M2VtcnJ0N3BkZzY4In0.agcwn8WbpxmAVcXzzaXbsQ",
-  "projection": {
-    "name": "globe"
-  },
   "layers": [
     {
       "id": "background",
@@ -218,102 +151,6 @@
           ],
           "seamless_texture_10_mirrored",
           ""
-        ],
-        "fill-emissive-strength": 1
-      }
-    },
-    {
-      "id": "biomesbigane2-7auf3g",
-      "type": "fill-extrusion",
-      "source": "composite",
-      "source-layer": "BiomesBigane2-7auf3g",
-      "minzoom": 6,
-      "filter": [
-        "match",
-        [
-          "get",
-          "Biome"
-        ],
-        [
-          "Temperate rainforest",
-          "Deep Wood",
-          "Tropical rainforest",
-          "Tropical seasonal forest",
-          "Temperate deciduous forest"
-        ],
-        true,
-        false
-      ],
-      "layout": {
-        "fill-extrusion-edge-radius": 1,
-        "visibility": "none"
-      },
-      "paint": {
-        "fill-extrusion-pattern": [
-          "match",
-          [
-            "get",
-            "Biome"
-          ],
-          [
-            "Tundra"
-          ],
-          "seamless_texture",
-          [
-            "Grassland"
-          ],
-          "seamless_texture_2",
-          [
-            "Glacier"
-          ],
-          "seamless_texture_3",
-          [
-            "Cold desert",
-            "Hot desert"
-          ],
-          "seamless_texture_4",
-          [
-            "Temperate rainforest",
-            "Tropical seasonal forest",
-            "Temperate deciduous forest"
-          ],
-          "seamless_texture_5",
-          [
-            "Tropical rainforest",
-            "Deep Wood"
-          ],
-          "seamless_texture_6",
-          [
-            "Taiga"
-          ],
-          "seamless_texture_7",
-          [
-            "Wetland"
-          ],
-          "seamless_texture_9_mirrored",
-          [
-            "Savanna"
-          ],
-          "seamless_texture_10_mirrored",
-          ""
-        ],
-        "fill-extrusion-height-alignment": "terrain",
-        "fill-extrusion-flood-light-intensity": 0.3,
-        "fill-extrusion-ambient-occlusion-intensity": 0.3,
-        "fill-extrusion-opacity": 0.5,
-        "fill-extrusion-height": [
-          "match",
-          [
-            "get",
-            "Biome"
-          ],
-          [
-            "Temperate rainforest",
-            "Tropical rainforest",
-            "Deep Wood"
-          ],
-          6000,
-          3000
         ]
       }
     },
@@ -588,7 +425,6 @@
         ],
         "text-anchor": "bottom",
         "text-pitch-alignment": "viewport",
-        "symbol-z-elevate": true,
         "text-ignore-placement": true,
         "text-allow-overlap": true,
         "text-radial-offset": 1,
@@ -824,7 +660,6 @@
       },
       "source": "composite",
       "source-layer": "7000burgroutes-cffynf",
-      "slot": "",
       "filter": [
         "match",
         [
@@ -1034,7 +869,6 @@
         ],
         "icon-rotation-alignment": "map",
         "text-ignore-placement": true,
-        "symbol-z-elevate": true,
         "text-offset": [
           "interpolate",
           [
@@ -1487,7 +1321,6 @@
         "text-allow-overlap": true,
         "icon-image": "border-dot-13",
         "icon-rotation-alignment": "map",
-        "symbol-z-elevate": true,
         "text-offset": [
           0.5,
           0
@@ -1636,7 +1469,6 @@
         ],
         "text-allow-overlap": true,
         "text-ignore-placement": true,
-        "symbol-z-elevate": true,
         "text-radial-offset": 2,
         "text-anchor": "bottom",
         "text-font": [
@@ -1695,7 +1527,6 @@
           "Arial Unicode MS Regular"
         ],
         "text-padding": 0,
-        "symbol-z-elevate": true,
         "text-anchor": "bottom-right",
         "text-field": [
           "get",
@@ -1848,6 +1679,5 @@
         ]
       }
     }
-  ],
-  "protected": false
+  ]
 }
