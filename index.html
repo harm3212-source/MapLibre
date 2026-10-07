@@ -490,31 +490,61 @@
 
         setupLayerSwitcher();
 
-        // --- Terrain: original Bigane DEM, rendered by MapLibre ---
-        if (!map.getSource("bigane-dem")) {
-          map.addSource("bigane-dem", {
+        // --- Terrain LOD: explicitly switch between fixed DEM zoom sources ---
+        // This avoids relying on MapLibre's internal raster-dem zoom selection/cache.
+        const terrainFolder = "./terrain-v11-beautiful-mountains";
+        const terrainMaxZ = 6;
+
+        // One source per DEM zoom level. Each URL is hard-wired to exactly one z folder.
+        for (let z = 0; z <= terrainMaxZ; z++) {
+          const sourceId = `bigane-dem-z${z}`;
+          if (!map.getSource(sourceId)) {
+            map.addSource(sourceId, {
+              type: "raster-dem",
+              encoding: "mapbox",
+              tiles: [`${terrainFolder}/${z}/{x}/{y}.png`],
+              tileSize: 256,
+              minzoom: z,
+              maxzoom: z
+            });
+          }
+        }
+
+        // Separate ordinary DEM source for hillshade only.
+        if (!map.getSource("bigane-dem-hillshade")) {
+          map.addSource("bigane-dem-hillshade", {
             type: "raster-dem",
             encoding: "mapbox",
-            tiles: [
-              "./terrain-v11-beautiful-mountains/{z}/{x}/{y}.png"
-            ],
+            tiles: [`${terrainFolder}/{z}/{x}/{y}.png`],
             tileSize: 256,
             minzoom: 0,
-            maxzoom: 6
+            maxzoom: terrainMaxZ
           });
         }
 
-        map.setTerrain({
-          source: "bigane-dem",
-          exaggeration: 1
-        });
+        let activeTerrainZ = null;
+        function setExplicitTerrainLOD() {
+          const targetZ = Math.max(0, Math.min(terrainMaxZ, Math.floor(map.getZoom())));
+          if (targetZ === activeTerrainZ) return;
 
-        // Hillshade from the same DEM.
+          activeTerrainZ = targetZ;
+          map.setTerrain({
+            source: `bigane-dem-z${targetZ}`,
+            exaggeration: 1
+          });
+          console.log(`[Bigane terrain] map zoom ${map.getZoom().toFixed(2)} -> forced DEM z${targetZ}`);
+        }
+
+        // Set immediately and swap source only when crossing an integer map zoom.
+        setExplicitTerrainLOD();
+        map.on("zoom", setExplicitTerrainLOD);
+
+        // Hillshade uses a separate DEM source so changing terrain LOD cannot affect it.
         if (!map.getLayer("bigane-hillshade")) {
           const hillshadeLayer = {
             id: "bigane-hillshade",
             type: "hillshade",
-            source: "bigane-dem",
+            source: "bigane-dem-hillshade",
             paint: {
               "hillshade-exaggeration": 0.08,
               "hillshade-shadow-color": "#000000",
