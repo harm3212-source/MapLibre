@@ -61,6 +61,33 @@
         style.projection = { type: style.projection.name };
       }
 
+      // Convert Mapbox v4 TileJSON vector sources to direct vector tile URLs.
+      // This avoids MapLibre having to JSON-parse Mapbox's TileJSON endpoint.
+      if (style.sources) {
+        for (const source of Object.values(style.sources)) {
+          if (source?.type === "vector" && typeof source.url === "string") {
+            const match = source.url.match(
+              /^https:\/\/api\.mapbox\.com\/v4\/([^?]+)\.json\?(.*)$/
+            );
+
+            if (match) {
+              const tilesetIds = match[1];
+              const params = new URLSearchParams(match[2]);
+              const token = params.get("access_token");
+
+              if (token) {
+                delete source.url;
+                source.tiles = [
+                  `https://api.mapbox.com/v4/${tilesetIds}/{z}/{x}/{y}.vector.pbf?access_token=${encodeURIComponent(token)}`
+                ];
+                source.minzoom = source.minzoom ?? 0;
+                source.maxzoom = source.maxzoom ?? 14;
+              }
+            }
+          }
+        }
+      }
+
       // Remove Mapbox-only layer properties unsupported by MapLibre.
       if (Array.isArray(style.layers)) {
         const unsupportedPaintProps = [
@@ -111,10 +138,11 @@
 
       map.on("error", (event) => {
         const message = event?.error?.message || "Onbekende MapLibre-fout";
+        const sourceId = event?.sourceId ? ` [source: ${event.sourceId}]` : "";
         console.error("MapLibre error:", event.error || event);
         if (firstError) {
           firstError = false;
-          status.textContent = "Fout: " + message;
+          status.textContent = "Fout: " + message + sourceId;
         }
       });
     } catch (error) {
