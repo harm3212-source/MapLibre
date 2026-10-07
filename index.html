@@ -61,6 +61,20 @@
         style.projection = { type: style.projection.name };
       }
 
+      // TEMPORARY TEST: remove Mapbox sprite endpoint.
+      // MapLibre appends .json/.png to sprite URLs; a Mapbox sprite URL with
+      // an access_token query can otherwise become malformed and trigger JSON.parse errors.
+      delete style.sprite;
+
+      // Remove icon-image references so symbol layers do not request missing sprites.
+      if (Array.isArray(style.layers)) {
+        for (const layer of style.layers) {
+          if (layer?.layout && Object.prototype.hasOwnProperty.call(layer.layout, "icon-image")) {
+            delete layer.layout["icon-image"];
+          }
+        }
+      }
+
       // Convert Mapbox v4 TileJSON vector sources to direct vector tile URLs.
       // This avoids MapLibre having to JSON-parse Mapbox's TileJSON endpoint.
       if (style.sources) {
