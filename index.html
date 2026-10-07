@@ -486,9 +486,49 @@
       }
 
       map.on("load", () => {
-        status.textContent = "Bigane-style werkt. Kanka laden...";
+        status.textContent = "Bigane-style + terrain werkt. Kanka laden...";
 
         setupLayerSwitcher();
+
+        // --- Terrain: original Bigane DEM, rendered by MapLibre ---
+        if (!map.getSource("bigane-dem")) {
+          map.addSource("bigane-dem", {
+            type: "raster-dem",
+            encoding: "mapbox",
+            tiles: [
+              "https://api.mapbox.com/v4/fitzchevalric.68qxzm7k/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiZml0emNoZXZhbHJpYyIsImEiOiJjazdzdXYzazUwazk0M2VtcnJ0N3BkZzY4In0.agcwn8WbpxmAVcXzzaXbsQ"
+            ],
+            tileSize: 256,
+            minzoom: 0,
+            maxzoom: 6
+          });
+        }
+
+        map.setTerrain({
+          source: "bigane-dem",
+          exaggeration: 0.06
+        });
+
+        // Hillshade from the same DEM.
+        if (!map.getLayer("bigane-hillshade")) {
+          const hillshadeLayer = {
+            id: "bigane-hillshade",
+            type: "hillshade",
+            source: "bigane-dem",
+            paint: {
+              "hillshade-exaggeration": 0.08,
+              "hillshade-shadow-color": "#000000",
+              "hillshade-highlight-color": "#ffffff"
+            }
+          };
+
+          if (map.getLayer("Biomes")) {
+            map.addLayer(hillshadeLayer, "Biomes");
+          } else {
+            map.addLayer(hillshadeLayer);
+          }
+        }
+
 
         for (const layerId of ["Town names", "Capitals", "clickable"]) {
           if (!map.getLayer(layerId)) continue;
