@@ -5,8 +5,7 @@
     <meta charset="utf-8" />
     <title>Bigane Map - MapLibre Port</title>
 <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
-    <link href="https://unpkg.com/maplibre-gl@6.9.1/dist/maplibre-gl.css" rel="stylesheet" />
-    <script src="https://unpkg.com/maplibre-gl@6.9.1/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.css" rel="stylesheet" />
     <style>
         body {
             margin: 0;
@@ -195,7 +194,9 @@
 <div id="map"></div>
 <div id="port-badge" style="position:absolute;left:10px;bottom:28px;z-index:5;background:rgba(255,255,255,.88);padding:6px 9px;border-radius:8px;font:12px/1.2 sans-serif;box-shadow:0 1px 5px rgba(0,0,0,.22)">MapLibre port</div>
 
-    <script>
+    <script type="module">
+import * as maplibregl from "https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs";
+
 const KANKA_ACCESS_TOKEN_KEY = "kankaAccessToken";
         const map = new maplibregl.Map({
             container: "map",
