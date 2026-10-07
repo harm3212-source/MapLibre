@@ -61,11 +61,28 @@
         style.projection = { type: style.projection.name };
       }
 
-      // Mapbox-only symbol property: MapLibre does not support symbol-z-elevate.
+      // Remove Mapbox-only layer properties unsupported by MapLibre.
       if (Array.isArray(style.layers)) {
+        const unsupportedPaintProps = [
+          "fill-emissive-strength",
+          "line-emissive-strength",
+          "circle-emissive-strength",
+          "icon-emissive-strength",
+          "text-emissive-strength",
+          "background-emissive-strength"
+        ];
+
         for (const layer of style.layers) {
           if (layer?.layout && Object.prototype.hasOwnProperty.call(layer.layout, "symbol-z-elevate")) {
             delete layer.layout["symbol-z-elevate"];
+          }
+
+          if (layer?.paint) {
+            for (const prop of unsupportedPaintProps) {
+              if (Object.prototype.hasOwnProperty.call(layer.paint, prop)) {
+                delete layer.paint[prop];
+              }
+            }
           }
         }
       }
