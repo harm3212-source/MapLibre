@@ -2,9 +2,5 @@ map.addSource("bigane-dem", {
   type: "raster-dem",
   encoding: "mapbox",
   tiles: ["./terrain/{z}/{x}/{y}.png"],
-  tileSize: 256,
-  minzoom: 0,
-  maxzoom: 6
+  tileSize: 256, minzoom: 0, maxzoom: 6
 });
-
-map.setTerrain({ source: "bigane-dem", exaggeration: 0.06 });
