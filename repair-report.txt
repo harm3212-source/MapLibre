@@ -1,0 +1,13 @@
+cold_desert.png: cols=[0, 1, 2, 125, 126, 127], rows=[], LR=0.000, TB=0.000
+deep_wood.png: cols=[], rows=[], LR=0.000, TB=0.000
+glacier.png: cols=[0, 1, 2, 125, 126, 127], rows=[], LR=0.000, TB=0.000
+grassland.png: cols=[0, 1, 126, 127], rows=[], LR=0.000, TB=0.000
+hot_desert.png: cols=[0, 1, 126, 127], rows=[], LR=0.000, TB=0.000
+savanna.png: cols=[], rows=[], LR=0.000, TB=0.000
+taiga.png: cols=[0, 1, 126, 127], rows=[], LR=0.000, TB=0.000
+temperate_deciduous.png: cols=[], rows=[], LR=0.000, TB=0.000
+temperate_rainforest.png: cols=[61, 62, 63, 64, 65, 66], rows=[], LR=0.000, TB=0.000
+tropical_rainforest.png: cols=[0, 1, 126, 127], rows=[], LR=0.000, TB=0.000
+tropical_seasonal.png: cols=[61, 62, 63, 64, 65, 66], rows=[], LR=0.000, TB=0.000
+tundra.png: cols=[], rows=[], LR=0.000, TB=0.000
+wetland.png: cols=[], rows=[], LR=0.000, TB=0.000
