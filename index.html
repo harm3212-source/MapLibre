@@ -686,7 +686,7 @@
               id: "Biome soft blend",
               type: "raster",
               source: "biome-softblend",
-              paint: { "raster-opacity": 0.88 }
+              paint: { "raster-opacity": 1.0 }
             };
             if (map.getLayer("Biomes")) {
               map.addLayer(layer, "Biomes");
@@ -695,9 +695,9 @@
             }
           }
 
-          // Only soften the hard vector colour AFTER the overlay is safely installed.
+          // Keep the normal biome base fully opaque at all times. The soft overlay sits above it.
           if (map.getLayer("Sandwich")) {
-            map.setPaintProperty("Sandwich", "fill-opacity", 0.18);
+            map.setPaintProperty("Sandwich", "fill-opacity", 1);
           }
         } catch (error) {
           // Fail safe: keep the normal opaque biome colour if the overlay fails.
