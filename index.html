@@ -185,8 +185,25 @@
 
   <script type="module">
     import * as maplibregl from "https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs";
-    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js";
-    import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/loaders/GLTFLoader.js";
+
+    // Three.js is deliberately loaded lazily. A failed 3D dependency must never
+    // prevent the base MapLibre map from starting.
+    let THREE = null;
+    let GLTFLoader = null;
+    let threeLoadPromise = null;
+
+    async function ensureThreeJs() {
+      if (THREE && GLTFLoader) return;
+      if (!threeLoadPromise) {
+        threeLoadPromise = (async () => {
+          const threeModule = await import("https://esm.sh/three@0.169.0");
+          const loaderModule = await import("https://esm.sh/three@0.169.0/examples/jsm/loaders/GLTFLoader.js");
+          THREE = threeModule;
+          GLTFLoader = loaderModule.GLTFLoader;
+        })();
+      }
+      await threeLoadPromise;
+    }
 
     const KANKA_ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiMjdhZWUxZDFlMmY2NzY5NTgxOWQxNzVmMTViMTc1OTQ1NzczOWZiNTAwOGU2NGM4NWVkMjg4NGUxNjU0ZGExZjNjMmI1ZTQ2NDk1ZTQ5MTUiLCJpYXQiOjE3OTA2ODIwOTYuNjg2NzYsIm5iZiI6MTc5MDY4MjA5Ni42ODY3NjEsImV4cCI6MTgyMjIxODA5Ni42ODE0OTMsInN1YiI6IjIwMTY1MCIsInNjb3BlcyI6W119.VzFgAQZcD6U92h1uoLA70gxNZ_14RfHtVTkhe3X4cVxA-haNtGTGH3ULugqmje0EkRSptcJyNglIOlNiKe3qFnGakEp9evGOmnkWbmTYrsgjZEMHFKGfA9HtCKh07ITRZrToAYxK3_u6nm4JWZcK3uSKXNuXwr4C5VQ0OOTulUR20ZSbyvFMaAWH3J9XtFrV5wK1xYmMAqr3T_Wj4FVmk95xZrobz8-SlEOyELS_jdKrtdbvmWnNAZt5PH0Osixn2lSKy3YH7qr_fIRG7R4pdGJNtW14n_lJ5NgJpQ1jI9K7L117CNfpCUaWcGrVatz8m4_aEQwroPEb2pHOK6vZKyAp4zv-Rr5EZYF1Fe1MzpW49rwdWYl6eES5KsYEj0_eGPY9utKrHg73ETyGOkK5DqpYIuo9lpDV9dlZKdWzWbodUngp_rkjTjZCitA9qNgoaqyJOOV6sNlr2vUXS6SNH6jBJC_Hyxntq4uweFbUmcWkrg0eGBH87d7yUg4UX_XbFs4ssNw4jvzEL1LVgQ1pPlSZB1Uhlr5q7tULEVT5NrqTSjz5-NtnxJrgXl2TC0yrLgkObssW4VOB-kFo37eHC13dnhvvNvwxNiH9Ay67z5qzS4LVyh3GN6hAuJsT0dnmm0ShU-Vz5K2HiCAXjZkG0NvzFYQjFh1Tm9FlTR-Qm-w";
     const KANKA_CAMPAIGN_ID = "196997";
@@ -760,6 +777,7 @@
       }
 
       async function loadForestPrototype(url) {
+        await ensureThreeJs();
         const loader = new GLTFLoader();
         const gltf = await loader.loadAsync(url);
         const root = gltf.scene;
@@ -791,6 +809,9 @@
 
       async function installDenseThreeForestLayer() {
         if (map.getLayer("bigane-3d-forest")) return;
+
+        // Load Three only after the base map has finished loading.
+        await ensureThreeJs();
 
         const response = await fetch(FOREST_CLUSTER_FILE, { cache: "no-store" });
         if (!response.ok) throw new Error(`3D forest data HTTP ${response.status}`);
