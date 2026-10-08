@@ -1,0 +1,10 @@
+Forest cluster prototype v15
+
+Tropical rainforest: 400
+Temperate rainforest: 357
+Deep Wood: 57
+Tropical seasonal forest: 335
+Temperate deciduous forest: 426
+Taiga: 172
+
+Total: 1747

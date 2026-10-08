@@ -708,10 +708,133 @@
         }
       }
 
+
+      function polygon(ctx, pts, fill) {
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+        ctx.closePath();
+        ctx.fillStyle = fill;
+        ctx.fill();
+      }
+
+      function makeForestClusterImage(kind, variant) {
+        const size = 96;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = true;
+
+        const palettes = {
+          "tropical-rainforest": ["#254f34", "#367047", "#4d8b5c", "#72a66b"],
+          "tropical-seasonal": ["#4d6435", "#6d7e3d", "#879347", "#a8aa5b"],
+          "temperate-rainforest": ["#315341", "#47715a", "#618b6f", "#83a181"],
+          "temperate-deciduous": ["#47643a", "#667d48", "#819557", "#a0aa67"],
+          "taiga": ["#29463c", "#365b4b", "#4c705b", "#66826b"],
+          "deep-wood": ["#172d28", "#25433a", "#31564a", "#46675a"]
+        };
+        const p = palettes[kind] || palettes["temperate-deciduous"];
+        const trunk = kind === "deep-wood" ? "#30271e" : "#4a3827";
+
+        const variants = [
+          [[23,62,18],[45,58,24],[67,63,19],[35,72,15],[58,73,17]],
+          [[20,69,16],[38,58,20],[58,59,23],[75,69,15],[49,74,17]],
+          [[26,61,20],[51,56,25],[73,64,17],[40,75,16],[63,76,14]]
+        ];
+        const trees = variants[variant % variants.length];
+
+        // Back-to-front for a compact cluster.
+        const ordered = [...trees].sort((a,b)=>a[1]-b[1]);
+        for (const [x,y,r] of ordered) {
+          // solid trunk
+          ctx.fillStyle = trunk;
+          ctx.fillRect(Math.round(x-r*0.10), Math.round(y+r*0.15), Math.max(2,Math.round(r*0.20)), Math.round(r*0.75));
+
+          if (kind === "taiga" || kind === "deep-wood") {
+            // stacked faceted cones
+            polygon(ctx, [[x,y-r*1.25],[x-r*0.72,y+r*0.42],[x+r*0.72,y+r*0.42]], p[1]);
+            polygon(ctx, [[x,y-r*1.25],[x,y+r*0.42],[x+r*0.72,y+r*0.42]], p[0]);
+            polygon(ctx, [[x,y-r*0.70],[x-r*0.88,y+r*0.72],[x+r*0.88,y+r*0.72]], p[2]);
+            polygon(ctx, [[x,y-r*0.70],[x,y+r*0.72],[x+r*0.88,y+r*0.72]], p[1]);
+          } else {
+            // low-poly broadleaf crown: hexagon split into facets
+            const top=[x,y-r*0.82], left=[x-r*0.82,y-r*0.05], bl=[x-r*0.55,y+r*0.62];
+            const bot=[x,y+r*0.78], br=[x+r*0.62,y+r*0.58], right=[x+r*0.86,y-r*0.02];
+            const c=[x,y];
+            polygon(ctx,[top,left,c],p[2]);
+            polygon(ctx,[left,bl,c],p[1]);
+            polygon(ctx,[bl,bot,c],p[1]);
+            polygon(ctx,[bot,br,c],p[0]);
+            polygon(ctx,[br,right,c],p[0]);
+            polygon(ctx,[right,top,c],p[3]);
+          }
+        }
+        return ctx.getImageData(0,0,size,size);
+      }
+
+      async function installForestClusters() {
+        try {
+          const kinds = [
+            "tropical-rainforest", "tropical-seasonal", "temperate-rainforest",
+            "temperate-deciduous", "taiga", "deep-wood"
+          ];
+          for (const kind of kinds) {
+            for (let variant = 0; variant < 3; variant++) {
+              const id = `forest-${kind}-${variant}`;
+              if (!map.hasImage(id)) map.addImage(id, makeForestClusterImage(kind, variant), { pixelRatio: 2 });
+            }
+          }
+
+          if (!map.getSource("forest-clusters")) {
+            map.addSource("forest-clusters", {
+              type: "geojson",
+              data: "./forest-clusters.geojson"
+            });
+          }
+
+          if (!map.getLayer("Forest clusters")) {
+            const layer = {
+              id: "Forest clusters",
+              type: "symbol",
+              source: "forest-clusters",
+              minzoom: 4.8,
+              layout: {
+                "icon-image": ["get", "icon"],
+                "icon-size": [
+                  "*", ["get", "scale"],
+                  ["interpolate", ["linear"], ["zoom"],
+                    4.8, 0.34,
+                    5.8, 0.48,
+                    7.0, 0.66,
+                    9.0, 0.88
+                  ]
+                ],
+                "icon-allow-overlap": false,
+                "icon-ignore-placement": false,
+                "icon-padding": 2,
+                "icon-pitch-alignment": "viewport",
+                "icon-rotation-alignment": "viewport"
+              },
+              paint: {
+                "icon-opacity": ["interpolate", ["linear"], ["zoom"], 4.8, 0, 5.2, 0.88, 6.0, 1]
+              }
+            };
+            if (map.getLayer("Town names")) map.addLayer(layer, "Town names");
+            else if (map.getLayer("Capitals")) map.addLayer(layer, "Capitals");
+            else map.addLayer(layer);
+          }
+          console.info("Forest clusters geladen.");
+        } catch (error) {
+          console.warn("Forest clusters overgeslagen; kaart blijft werken:", error);
+        }
+      }
+
       map.on("load", () => {
         status.textContent = "Bigane-style + GitHub terrain werkt. Kanka laden...";
 
         installBiomeTextures().catch(error => console.warn("Biome textures overgeslagen:", error));
+        installForestClusters();
         installBiomeSoftBlend();
 
         setupLayerSwitcher();
