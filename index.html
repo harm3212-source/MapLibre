@@ -92,10 +92,13 @@
       box-sizing: border-box;
       border-radius: 50%;
       overflow: hidden;
-      border: 3px solid rgba(255,255,255,.96);
+      border: 4px solid rgba(255,255,255,.96);
       background: #d7d7d7;
       box-shadow: 0 4px 12px rgba(0,0,0,.32);
       cursor: pointer;
+      opacity: 1;
+      transition: opacity .22s ease, border-color .18s ease, box-shadow .14s ease;
+      will-change: opacity;
     }
     .kanka-city-marker img {
       display: block;
@@ -392,6 +395,81 @@
         return map.queryRenderedFeatures({ layers });
       }
 
+      function pointInRing(point, ring) {
+        const x = point[0], y = point[1];
+        let inside = false;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          const xi = ring[i][0], yi = ring[i][1];
+          const xj = ring[j][0], yj = ring[j][1];
+          const intersects = ((yi > y) !== (yj > y)) &&
+            (x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-12) + xi);
+          if (intersects) inside = !inside;
+        }
+        return inside;
+      }
+
+      function pointInPolygonCoordinates(point, polygon) {
+        if (!polygon?.length || !pointInRing(point, polygon[0])) return false;
+        for (let i = 1; i < polygon.length; i++) {
+          if (pointInRing(point, polygon[i])) return false;
+        }
+        return true;
+      }
+
+      function featureContainsCoordinate(feature, coordinate) {
+        const geometry = feature?.geometry;
+        if (!geometry) return false;
+        if (geometry.type === "Polygon") {
+          return pointInPolygonCoordinates(coordinate, geometry.coordinates);
+        }
+        if (geometry.type === "MultiPolygon") {
+          return geometry.coordinates.some(poly => pointInPolygonCoordinates(coordinate, poly));
+        }
+        return false;
+      }
+
+      function stateColorAt(coordinates) {
+        try {
+          const states = map.querySourceFeatures("composite", { sourceLayer: "StatesBigane2-1rnkj4" });
+          for (const state of states) {
+            if (!featureContainsCoordinate(state, coordinates)) continue;
+            const color = state.properties?.Color;
+            if (color) return color;
+          }
+        } catch (error) {
+          console.warn("State color lookup failed:", error);
+        }
+        return "rgba(255,255,255,.96)";
+      }
+
+      function markerOpacityForZoom(zoom) {
+        if (zoom <= 3.8) return 0;
+        if (zoom >= 5.3) return 1;
+        const t = (zoom - 3.8) / (5.3 - 3.8);
+        return Math.max(0, Math.min(1, t));
+      }
+
+      function markerLiftForZoom(zoom) {
+        // The labels themselves grow and move farther from the city point at higher zooms.
+        if (zoom <= 4) return 46;
+        if (zoom >= 7) return 82;
+        return 46 + (zoom - 4) * 12;
+      }
+
+      function updateKankaMarkerVisuals() {
+        const zoom = map.getZoom();
+        const opacity = markerOpacityForZoom(zoom);
+        const lift = markerLiftForZoom(zoom);
+
+        for (const marker of kankaCityMarkers.values()) {
+          marker.setOffset([0, -lift]);
+          const el = marker.getElement();
+          if (!el) continue;
+          el.style.opacity = String(opacity);
+          el.style.pointerEvents = opacity < 0.12 ? "none" : "auto";
+        }
+      }
+
       function refreshKankaCityMarkers() {
         if (!kankaLocationsLoaded || refreshingKankaMarkers || !map.loaded()) return;
         refreshingKankaMarkers = true;
@@ -410,11 +488,17 @@
             const coordinates = feature.geometry.coordinates.slice(0, 2);
             const key = `${normalizeLocationName(cityName)}|${coordinates[0].toFixed(6)}|${coordinates[1].toFixed(6)}`;
             wanted.add(key);
-            if (kankaCityMarkers.has(key)) continue;
+            if (kankaCityMarkers.has(key)) {
+              const existingMarker = kankaCityMarkers.get(key);
+              const existingElement = existingMarker?.getElement();
+              if (existingElement) existingElement.style.borderColor = stateColorAt(coordinates);
+              continue;
+            }
 
             const el = document.createElement("div");
             el.className = "kanka-city-marker";
             el.title = `${cityName} - klik voor details`;
+            el.style.borderColor = stateColorAt(coordinates);
 
             const img = document.createElement("img");
             img.src = location.markerImage;
@@ -430,9 +514,15 @@
               openKankaPopup(feature);
             });
 
-            const marker = new maplibregl.Marker({ element: el, anchor: "bottom", offset: [0, -10] })
+            const marker = new maplibregl.Marker({
+              element: el,
+              anchor: "bottom",
+              offset: [0, -markerLiftForZoom(map.getZoom())]
+            })
               .setLngLat(coordinates)
               .addTo(map);
+
+            el.style.opacity = String(markerOpacityForZoom(map.getZoom()));
 
             kankaCityMarkers.set(key, marker);
           }
@@ -443,6 +533,8 @@
               kankaCityMarkers.delete(key);
             }
           }
+
+          updateKankaMarkerVisuals();
         } finally {
           refreshingKankaMarkers = false;
         }
@@ -544,6 +636,7 @@
       });
 
       map.on("idle", refreshKankaCityMarkers);
+      map.on("zoom", updateKankaMarkerVisuals);
 
       map.on("error", (event) => {
         console.error("MapLibre error:", event.error || event);
