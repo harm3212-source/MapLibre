@@ -595,8 +595,80 @@
         }
       }
 
+
+      async function installBiomeTextures() {
+        const biomeImages = {
+          "biome-tropical-rainforest": "./biome-textures/tropical_rainforest.png",
+          "biome-tropical-seasonal": "./biome-textures/tropical_seasonal.png",
+          "biome-temperate-rainforest": "./biome-textures/temperate_rainforest.png",
+          "biome-temperate-deciduous": "./biome-textures/temperate_deciduous.png",
+          "biome-taiga": "./biome-textures/taiga.png",
+          "biome-grassland": "./biome-textures/grassland.png",
+          "biome-savanna": "./biome-textures/savanna.png",
+          "biome-wetland": "./biome-textures/wetland.png",
+          "biome-tundra": "./biome-textures/tundra.png",
+          "biome-glacier": "./biome-textures/glacier.png",
+          "biome-hot-desert": "./biome-textures/hot_desert.png",
+          "biome-cold-desert": "./biome-textures/cold_desert.png",
+          "biome-deep-wood": "./biome-textures/deep_wood.png"
+        };
+
+        const failed = [];
+        for (const [id, url] of Object.entries(biomeImages)) {
+          try {
+            if (!map.hasImage(id)) {
+              const image = await map.loadImage(url);
+              map.addImage(id, image.data);
+            }
+          } catch (error) {
+            failed.push(id);
+            console.warn(`Biome-texture kon niet worden geladen: ${id}`, error);
+          }
+        }
+
+        if (!map.getLayer("Biomes")) return;
+
+        // Only activate pattern rendering after all local images have had a chance to load.
+        // Unknown/missing biome values fall back to transparent pattern id "" and retain
+        // the colour layer underneath (Sandwich), so the map never disappears.
+        const pattern = [
+          "match", ["get", "Biome"],
+          "Tropical rainforest", "biome-tropical-rainforest",
+          "Tropical seasonal forest", "biome-tropical-seasonal",
+          "Temperate rainforest", "biome-temperate-rainforest",
+          "Temperate deciduous forest", "biome-temperate-deciduous",
+          "Taiga", "biome-taiga",
+          "Grassland", "biome-grassland",
+          "Savanna", "biome-savanna",
+          "Wetland", "biome-wetland",
+          "Tundra", "biome-tundra",
+          "Glacier", "biome-glacier",
+          "Hot desert", "biome-hot-desert",
+          "Cold desert", "biome-cold-desert",
+          "Deep Wood", "biome-deep-wood",
+          ""
+        ];
+
+        map.setPaintProperty("Biomes", "fill-pattern", pattern);
+        map.setPaintProperty("Biomes", "fill-opacity", [
+          "interpolate", ["linear"], ["zoom"],
+          2, 0.0,
+          3.5, 0.18,
+          6, 0.30,
+          9, 0.38
+        ]);
+
+        if (failed.length) {
+          console.warn("Niet alle biome-textures zijn geladen:", failed);
+        } else {
+          console.info("Alle biome-textures zijn lokaal geladen.");
+        }
+      }
+
       map.on("load", () => {
         status.textContent = "Bigane-style + GitHub terrain werkt. Kanka laden...";
+
+        installBiomeTextures().catch(error => console.warn("Biome textures overgeslagen:", error));
 
         setupLayerSwitcher();
 
