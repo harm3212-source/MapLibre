@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bigane - MapLibre + Kanka</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.css" />
+  <style>
+    html, body, #map { width: 100%; height: 100%; margin: 0; }
+
+    #status {
+      position: absolute;
+      z-index: 10;
+      left: 10px;
+      top: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,.94);
+      font: 13px/1.3 Arial, sans-serif;
+      box-shadow: 0 2px 8px rgba(0,0,0,.2);
+      max-width: 520px;
+      word-break: break-word;
+    }
+
+    .maplibregl-popup { max-width: 330px !important; }
+    .maplibregl-popup-content {
+      padding: 0;
+      overflow: hidden;
+      border-radius: 14px;
+      background: rgba(255,255,255,.98);
+      box-shadow: 0 12px 30px rgba(0,0,0,.24);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    .maplibregl-popup-close-button {
+      z-index: 10;
+      top: 8px;
+      right: 8px;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.9);
+      color: #222;
+      font-size: 20px;
+      line-height: 28px;
+    }
+    .maplibregl-popup-tip { border-top-color: rgba(255,255,255,.98) !important; }
+
+    .location-popup-image {
+      display: block;
+      width: 100%;
+      height: 170px;
+      object-fit: cover;
+      background: #e9e9e9;
+    }
+    .location-popup-body { padding: 15px 17px 17px; }
+    .location-popup-title {
+      margin: 0 0 10px;
+      font-size: 22px;
+      line-height: 1.15;
+      color: #222;
+    }
+    .location-popup-title a { color: inherit; text-decoration: none; }
+    .location-popup-title a:hover { text-decoration: underline; }
+    .location-popup-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .location-popup-tag {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #eef0f3;
+      color: #444;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .location-popup-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      padding-top: 9px;
+      border-top: 1px solid #ededed;
+      font-size: 14px;
+    }
+    .location-popup-label { color: #777; }
+    .location-popup-value { font-weight: 600; color: #333; text-align: right; }
+
+    .kanka-city-marker {
+      width: 42px;
+      height: 42px;
+      box-sizing: border-box;
+      border-radius: 50%;
+      overflow: hidden;
+      border: 3px solid rgba(255,255,255,.96);
+      background: #d7d7d7;
+      box-shadow: 0 4px 12px rgba(0,0,0,.32);
+      cursor: pointer;
+    }
+    .kanka-city-marker img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scale(1);
+      transition: transform .14s ease;
+    }
+    .kanka-city-marker:hover { box-shadow: 0 6px 16px rgba(0,0,0,.38); z-index: 20; }
+    .kanka-city-marker:hover img { transform: scale(1.10); }
+
+    .kanka-token-control {
+      background: #fff;
+      border-radius: 4px;
+      box-shadow: 0 0 0 2px rgba(0,0,0,.1);
+      overflow: hidden;
+    }
+    .kanka-token-control button {
+      width: 34px;
+      height: 34px;
+      border: 0;
+      background: #fff;
+      cursor: pointer;
+      font-size: 17px;
+      line-height: 34px;
+      padding: 0;
+    }
+    .kanka-token-control button:hover { background: #f2f2f2; }
+
+    .layer-switcher {
+      position: absolute;
+      z-index: 12;
+      top: 10px;
+      right: 10px;
+      min-width: 180px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(255,255,255,.95);
+      box-shadow: 0 2px 10px rgba(0,0,0,.22);
+      font: 13px/1.35 Arial, sans-serif;
+    }
+    .layer-switcher strong {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 13px;
+    }
+    .layer-switcher label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0;
+      cursor: pointer;
+      user-select: none;
+    }
+    .layer-switcher input {
+      margin: 0;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="status">Bigane + Kanka initialiseren...</div>
+
+  <div class="layer-switcher" id="layer-switcher">
+    <strong>Lagen</strong>
+    <label>
+      <input type="checkbox" id="toggle-states" />
+      <span>States</span>
+    </label>
+    <label>
+      <input type="checkbox" id="toggle-towns" checked />
+      <span>Town names / Capitals</span>
+    </label>
+  </div>
+
+
+  <script type="module">
+    import * as maplibregl from "https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs";
+
+    const KANKA_ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiMjdhZWUxZDFlMmY2NzY5NTgxOWQxNzVmMTViMTc1OTQ1NzczOWZiNTAwOGU2NGM4NWVkMjg4NGUxNjU0ZGExZjNjMmI1ZTQ2NDk1ZTQ5MTUiLCJpYXQiOjE3OTA2ODIwOTYuNjg2NzYsIm5iZiI6MTc5MDY4MjA5Ni42ODY3NjEsImV4cCI6MTgyMjIxODA5Ni42ODE0OTMsInN1YiI6IjIwMTY1MCIsInNjb3BlcyI6W119.VzFgAQZcD6U92h1uoLA70gxNZ_14RfHtVTkhe3X4cVxA-haNtGTGH3ULugqmje0EkRSptcJyNglIOlNiKe3qFnGakEp9evGOmnkWbmTYrsgjZEMHFKGfA9HtCKh07ITRZrToAYxK3_u6nm4JWZcK3uSKXNuXwr4C5VQ0OOTulUR20ZSbyvFMaAWH3J9XtFrV5wK1xYmMAqr3T_Wj4FVmk95xZrobz8-SlEOyELS_jdKrtdbvmWnNAZt5PH0Osixn2lSKy3YH7qr_fIRG7R4pdGJNtW14n_lJ5NgJpQ1jI9K7L117CNfpCUaWcGrVatz8m4_aEQwroPEb2pHOK6vZKyAp4zv-Rr5EZYF1Fe1MzpW49rwdWYl6eES5KsYEj0_eGPY9utKrHg73ETyGOkK5DqpYIuo9lpDV9dlZKdWzWbodUngp_rkjTjZCitA9qNgoaqyJOOV6sNlr2vUXS6SNH6jBJC_Hyxntq4uweFbUmcWkrg0eGBH87d7yUg4UX_XbFs4ssNw4jvzEL1LVgQ1pPlSZB1Uhlr5q7tULEVT5NrqTSjz5-NtnxJrgXl2TC0yrLgkObssW4VOB-kFo37eHC13dnhvvNvwxNiH9Ay67z5qzS4LVyh3GN6hAuJsT0dnmm0ShU-Vz5K2HiCAXjZkG0NvzFYQjFh1Tm9FlTR-Qm-w";
+    const KANKA_CAMPAIGN_ID = "196997";
+    const status = document.getElementById("status");
+
+    const escapeHtml = (value) => String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+
+    const normalizeLocationName = (name) => String(name || "").trim().toLocaleLowerCase();
+
+    function showError(prefix, error) {
+      const message = error?.message || String(error || "Onbekende fout");
+      status.textContent = prefix + message;
+      console.error(prefix, error);
+    }
+
+    class KankaTokenControl {
+      onAdd(map) {
+        this.map = map;
+        this.container = document.createElement("div");
+        this.container.className = "maplibregl-ctrl kanka-token-control";
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.title = "Kanka access token instellen";
+        button.setAttribute("aria-label", "Kanka access token instellen");
+        button.textContent = "K";
+        button.addEventListener("click", () => {
+          const existing = KANKA_ACCESS_TOKEN || "";
+          const token = prompt("Plak je Kanka access token hier:", existing);
+          if (token && token.trim()) {
+            localStorage.setItem(KANKA_ACCESS_TOKEN_KEY, token.trim());
+            location.reload();
+          }
+        });
+
+        this.container.appendChild(button);
+        return this.container;
+      }
+      onRemove() {
+        this.container?.remove();
+        this.map = undefined;
+      }
+    }
+
+    try {
+      const response = await fetch("./style-maplibre.json", { cache: "no-store" });
+      if (!response.ok) throw new Error(`style-maplibre.json kon niet worden geladen (HTTP ${response.status})`);
+      const style = await response.json();
+
+      const map = new maplibregl.Map({
+        container: "map",
+        style,
+        center: [-10, 40],
+        zoom: 5.4,
+        pitch: 0,
+        bearing: 0,
+        minZoom: 1,
+        maxZoom: 22,
+        maxPitch: 60,
+        renderWorldCopies: false
+      });
+
+      map.addControl(new maplibregl.NavigationControl(), "top-right");
+      map.addControl(new KankaTokenControl(), "top-right");
+
+      const kankaLocationsByName = new Map();
+      const kankaCityMarkers = new Map();
+      let kankaLocationsLoaded = false;
+      let refreshingKankaMarkers = false;
+
+      function getKankaToken() { return KANKA_ACCESS_TOKEN; }
+
+      function authHeaders() {
+        return {
+          "Accept": "application/json",
+          "Authorization": `Bearer ${getKankaToken()}`
+        };
+      }
+
+      function findExactKankaEntity(entities, expectedName) {
+        const wanted = normalizeLocationName(expectedName);
+        return (entities || []).find(entity =>
+          normalizeLocationName(entity?.name || "") === wanted &&
+          entity?.type === "location"
+        ) || null;
+      }
+
+      async function getKankaEntityForName(name) {
+        const token = getKankaToken();
+        if (!token) return null;
+
+        const url = `https://api.kanka.io/1.0/campaigns/${KANKA_CAMPAIGN_ID}/entities?` +
+          new URLSearchParams({ types: "location", name });
+
+        const res = await fetch(url, { headers: authHeaders() });
+        if (!res.ok) throw new Error(`Kanka entities API: HTTP ${res.status}`);
+        const data = await res.json();
+        return findExactKankaEntity(data.data, name);
+      }
+
+      async function getKankaLocation(childId) {
+        if (!childId || !getKankaToken()) return null;
+        const res = await fetch(
+          `https://api.kanka.io/1.0/campaigns/${KANKA_CAMPAIGN_ID}/locations/${childId}`,
+          { headers: authHeaders() }
+        );
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.data || null;
+      }
+
+      function createLocationPopup(feature, link = null, imageUrl = null) {
+        const props = feature.properties || {};
+        const name = escapeHtml(props.Burg || "");
+        const population = escapeHtml(props.Population || "");
+        const state = escapeHtml(props.State || "");
+        const culture = escapeHtml(props.Culture || "");
+
+        const imageHtml = imageUrl
+          ? `<img class="location-popup-image" src="${escapeHtml(imageUrl)}" alt="${name}">`
+          : "";
+
+        const titleHtml = link
+          ? `<h3 class="location-popup-title"><a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">${name}</a></h3>`
+          : `<h3 class="location-popup-title">${name}</h3>`;
+
+        const tagsHtml = (state || culture)
+          ? `<div class="location-popup-tags">${state ? `<span class="location-popup-tag">${state}</span>` : ""}${culture ? `<span class="location-popup-tag">${culture}</span>` : ""}</div>`
+          : "";
+
+        const populationHtml = population
+          ? `<div class="location-popup-row"><span class="location-popup-label">Population</span><span class="location-popup-value">${population}</span></div>`
+          : "";
+
+        new maplibregl.Popup({ offset: [0, -15], maxWidth: "330px" })
+          .setLngLat(feature.geometry.coordinates)
+          .setHTML(`${imageHtml}<div class="location-popup-body">${titleHtml}${tagsHtml}${populationHtml}</div>`)
+          .addTo(map);
+      }
+
+      async function openKankaPopup(feature) {
+        const name = feature.properties?.Burg;
+        if (!name || !getKankaToken()) {
+          createLocationPopup(feature);
+          return;
+        }
+
+        try {
+          const entity = await getKankaEntityForName(name);
+          if (!entity) {
+            createLocationPopup(feature);
+            return;
+          }
+
+          let imageUrl = null;
+          if (entity.child_id) {
+            const location = await getKankaLocation(entity.child_id);
+            imageUrl = location?.image_full || location?.image_thumb || null;
+          }
+
+          createLocationPopup(feature, entity.urls?.view || null, imageUrl);
+        } catch (error) {
+          console.warn("Kanka popup error:", error);
+          createLocationPopup(feature);
+        }
+      }
+
+      async function loadKankaLocationsWithImages() {
+        if (!getKankaToken()) {
+          status.textContent = "Kaart werkt. Klik rechtsboven op K om je Kanka-token in te stellen.";
+          return;
+        }
+
+        let nextUrl = `https://api.kanka.io/1.0/campaigns/${KANKA_CAMPAIGN_ID}/locations`;
+        let pageCount = 0;
+
+        try {
+          while (nextUrl && pageCount < 30) {
+            pageCount++;
+            const res = await fetch(nextUrl, { headers: authHeaders() });
+            if (!res.ok) throw new Error(`Kanka locations API: HTTP ${res.status}`);
+            const result = await res.json();
+
+            for (const location of (result.data || [])) {
+              const imageUrl = location.image_thumb || location.image_full || null;
+              if (!location.name || !imageUrl) continue;
+              kankaLocationsByName.set(normalizeLocationName(location.name), {
+                ...location,
+                markerImage: imageUrl,
+                popupImage: location.image_full || location.image_thumb || null
+              });
+            }
+
+            nextUrl = result.links?.next || null;
+          }
+
+          kankaLocationsLoaded = true;
+          status.textContent = `MapLibre + Kanka werkt. ${kankaLocationsByName.size} locaties met afbeelding geladen.`;
+          refreshKankaCityMarkers();
+        } catch (error) {
+          console.warn(error);
+          status.textContent = `Kaart werkt, maar Kanka kon niet laden: ${error.message}`;
+        }
+      }
+
+      function getVisibleCityFeatures() {
+        const layers = ["Town names", "Capitals", "clickable"].filter(id => map.getLayer(id));
+        if (!layers.length) return [];
+        return map.queryRenderedFeatures({ layers });
+      }
+
+      function refreshKankaCityMarkers() {
+        if (!kankaLocationsLoaded || refreshingKankaMarkers || !map.loaded()) return;
+        refreshingKankaMarkers = true;
+
+        try {
+          const wanted = new Set();
+
+          for (const feature of getVisibleCityFeatures()) {
+            const cityName = feature.properties?.Burg;
+            if (!cityName) continue;
+
+            const location = kankaLocationsByName.get(normalizeLocationName(cityName));
+            if (!location) continue;
+            if (feature.geometry?.type !== "Point" || !Array.isArray(feature.geometry.coordinates)) continue;
+
+            const coordinates = feature.geometry.coordinates.slice(0, 2);
+            const key = `${normalizeLocationName(cityName)}|${coordinates[0].toFixed(6)}|${coordinates[1].toFixed(6)}`;
+            wanted.add(key);
+            if (kankaCityMarkers.has(key)) continue;
+
+            const el = document.createElement("div");
+            el.className = "kanka-city-marker";
+            el.title = `${cityName} - klik voor details`;
+
+            const img = document.createElement("img");
+            img.src = location.markerImage;
+            img.alt = cityName;
+            img.width = 36;
+            img.height = 36;
+            img.decoding = "async";
+            el.appendChild(img);
+
+            el.addEventListener("click", (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              openKankaPopup(feature);
+            });
+
+            const marker = new maplibregl.Marker({ element: el, anchor: "bottom", offset: [0, -10] })
+              .setLngLat(coordinates)
+              .addTo(map);
+
+            kankaCityMarkers.set(key, marker);
+          }
+
+          for (const [key, marker] of kankaCityMarkers) {
+            if (!wanted.has(key)) {
+              marker.remove();
+              kankaCityMarkers.delete(key);
+            }
+          }
+        } finally {
+          refreshingKankaMarkers = false;
+        }
+      }
+
+
+      function setLayerVisibility(layerId, visible) {
+        if (!map.getLayer(layerId)) return;
+        map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+      }
+
+      function setupLayerSwitcher() {
+        const statesToggle = document.getElementById("toggle-states");
+        const townsToggle = document.getElementById("toggle-towns");
+
+        // Match the original style defaults.
+        const statesInitiallyVisible =
+          map.getLayer("States") &&
+          map.getLayoutProperty("States", "visibility") !== "none";
+
+        const townLayerIds = ["Town names", "Capitals"];
+        const townsInitiallyVisible = townLayerIds.some(
+          id => map.getLayer(id) && map.getLayoutProperty(id, "visibility") !== "none"
+        );
+
+        if (statesToggle) {
+          statesToggle.checked = Boolean(statesInitiallyVisible);
+          statesToggle.addEventListener("change", () => {
+            setLayerVisibility("States", statesToggle.checked);
+          });
+        }
+
+        if (townsToggle) {
+          townsToggle.checked = Boolean(townsInitiallyVisible);
+          townsToggle.addEventListener("change", () => {
+            for (const id of townLayerIds) {
+              setLayerVisibility(id, townsToggle.checked);
+            }
+          });
+        }
+      }
+
+      map.on("load", () => {
+        status.textContent = "Bigane-style + GitHub terrain werkt. Kanka laden...";
+
+        setupLayerSwitcher();
+
+        // --- Terrain: original Bigane DEM, rendered by MapLibre ---
+        if (!map.getSource("bigane-dem")) {
+          map.addSource("bigane-dem", {
+            type: "raster-dem",
+            encoding: "mapbox",
+            tiles: [
+              "./terrain-v14-gritty-512/{z}/{x}/{y}.png"
+            ],
+            tileSize: 512,
+            minzoom: 0,
+            maxzoom: 6
+          });
+        }
+
+        map.setTerrain({
+          source: "bigane-dem",
+          exaggeration: 1
+        });
+
+        // Hillshade from the same DEM.
+        if (!map.getLayer("bigane-hillshade")) {
+          const hillshadeLayer = {
+            id: "bigane-hillshade",
+            type: "hillshade",
+            source: "bigane-dem",
+            paint: {
+              "hillshade-exaggeration": 0.08,
+              "hillshade-shadow-color": "#000000",
+              "hillshade-highlight-color": "#ffffff"
+            }
+          };
+
+          if (map.getLayer("Biomes")) {
+            map.addLayer(hillshadeLayer, "Biomes");
+          } else {
+            map.addLayer(hillshadeLayer);
+          }
+        }
+
+
+        for (const layerId of ["Town names", "Capitals", "clickable"]) {
+          if (!map.getLayer(layerId)) continue;
+          map.on("click", layerId, (event) => {
+            const feature = event.features?.[0];
+            if (feature) openKankaPopup(feature);
+          });
+          map.on("mouseenter", layerId, () => { map.getCanvas().style.cursor = "pointer"; });
+          map.on("mouseleave", layerId, () => { map.getCanvas().style.cursor = ""; });
+        }
+
+        loadKankaLocationsWithImages();
+      });
+
+      map.on("idle", refreshKankaCityMarkers);
+
+      map.on("error", (event) => {
+        console.error("MapLibre error:", event.error || event);
+      });
+
+    } catch (error) {
+      showError("Fout: ", error);
+    }
+  </script>
+</body>
+</html>
