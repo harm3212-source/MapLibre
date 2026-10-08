@@ -1,0 +1,93 @@
+{
+  "tropical_rainforest": {
+    "width": 128,
+    "height": 128,
+    "x": 0,
+    "y": 0,
+    "pixelRatio": 1
+  },
+  "tropical_seasonal": {
+    "width": 128,
+    "height": 128,
+    "x": 128,
+    "y": 0,
+    "pixelRatio": 1
+  },
+  "temperate_rainforest": {
+    "width": 128,
+    "height": 128,
+    "x": 256,
+    "y": 0,
+    "pixelRatio": 1
+  },
+  "temperate_deciduous": {
+    "width": 128,
+    "height": 128,
+    "x": 384,
+    "y": 0,
+    "pixelRatio": 1
+  },
+  "taiga": {
+    "width": 128,
+    "height": 128,
+    "x": 0,
+    "y": 128,
+    "pixelRatio": 1
+  },
+  "grassland": {
+    "width": 128,
+    "height": 128,
+    "x": 128,
+    "y": 128,
+    "pixelRatio": 1
+  },
+  "savanna": {
+    "width": 128,
+    "height": 128,
+    "x": 256,
+    "y": 128,
+    "pixelRatio": 1
+  },
+  "wetland": {
+    "width": 128,
+    "height": 128,
+    "x": 384,
+    "y": 128,
+    "pixelRatio": 1
+  },
+  "tundra": {
+    "width": 128,
+    "height": 128,
+    "x": 0,
+    "y": 256,
+    "pixelRatio": 1
+  },
+  "glacier": {
+    "width": 128,
+    "height": 128,
+    "x": 128,
+    "y": 256,
+    "pixelRatio": 1
+  },
+  "hot_desert": {
+    "width": 128,
+    "height": 128,
+    "x": 256,
+    "y": 256,
+    "pixelRatio": 1
+  },
+  "cold_desert": {
+    "width": 128,
+    "height": 128,
+    "x": 384,
+    "y": 256,
+    "pixelRatio": 1
+  },
+  "deep_wood": {
+    "width": 128,
+    "height": 128,
+    "x": 0,
+    "y": 384,
+    "pixelRatio": 1
+  }
+}
