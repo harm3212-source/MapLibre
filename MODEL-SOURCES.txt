@@ -1,0 +1,18 @@
+3D forest models used at runtime
+================================
+Source: Gobkit Nature Kit
+Manifest: https://gobkit.com/api/free
+License: CC0 1.0 / public domain
+
+Runtime GLB URLs:
+https://gobkit.com/freebies/environment/TreeHigh001.glb
+https://gobkit.com/freebies/environment/TreeHigh002.glb
+https://gobkit.com/freebies/environment/TreeHigh003.glb
+https://gobkit.com/freebies/environment/TreeMed001.glb
+https://gobkit.com/freebies/environment/TreeMed002.glb
+https://gobkit.com/freebies/environment/TreeMed003.glb
+https://gobkit.com/freebies/environment/TreeLow001.glb
+https://gobkit.com/freebies/environment/TreeLow002.glb
+https://gobkit.com/freebies/environment/TreeLow003.glb
+
+The models are not bundled in this zip; the map streams them from Gobkit's public URLs.
