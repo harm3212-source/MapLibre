@@ -653,9 +653,9 @@
         map.setPaintProperty("Biomes", "fill-opacity", [
           "interpolate", ["linear"], ["zoom"],
           2, 0.0,
-          3.5, 0.18,
-          6, 0.30,
-          9, 0.38
+          3.5, 0.16,
+          6, 0.26,
+          9, 0.34
         ]);
 
         if (failed.length) {
@@ -665,10 +665,54 @@
         }
       }
 
+
+      async function installBiomeSoftBlend() {
+        try {
+          if (!map.getSource("biome-softblend")) {
+            map.addSource("biome-softblend", {
+              type: "image",
+              url: "./biome-blend-overlay.png",
+              coordinates: [
+                [-88.1391, 52.7208],
+                [93.3291, 52.7208],
+                [93.3291, -53.4408],
+                [-88.1391, -53.4408]
+              ]
+            });
+          }
+
+          if (!map.getLayer("Biome soft blend")) {
+            const layer = {
+              id: "Biome soft blend",
+              type: "raster",
+              source: "biome-softblend",
+              paint: { "raster-opacity": 0.88 }
+            };
+            if (map.getLayer("Biomes")) {
+              map.addLayer(layer, "Biomes");
+            } else {
+              map.addLayer(layer);
+            }
+          }
+
+          // Only soften the hard vector colour AFTER the overlay is safely installed.
+          if (map.getLayer("Sandwich")) {
+            map.setPaintProperty("Sandwich", "fill-opacity", 0.18);
+          }
+        } catch (error) {
+          // Fail safe: keep the normal opaque biome colour if the overlay fails.
+          console.warn("Biome soft blend overgeslagen:", error);
+          if (map.getLayer("Sandwich")) {
+            map.setPaintProperty("Sandwich", "fill-opacity", 1);
+          }
+        }
+      }
+
       map.on("load", () => {
         status.textContent = "Bigane-style + GitHub terrain werkt. Kanka laden...";
 
         installBiomeTextures().catch(error => console.warn("Biome textures overgeslagen:", error));
+        installBiomeSoftBlend();
 
         setupLayerSwitcher();
 
@@ -698,11 +742,7 @@
             type: "hillshade",
             source: "bigane-dem",
             paint: {
-<<<<<<< HEAD
-              "hillshade-exaggeration": 0.18,
-=======
-              "hillshade-exaggeration": 0.10,
->>>>>>> 79f802ba5fe0290c7f7086086f5a3898ab7cbedf
+              "hillshade-exaggeration": 0.16,
               "hillshade-shadow-color": "#000000",
               "hillshade-highlight-color": "#ffffff"
             }
