@@ -54,6 +54,10 @@
     "composite": {
       "type": "vector",
       "url": "https://api.mapbox.com/v4/fitzchevalric.8h5heyjd,fitzchevalric.755feu6p,fitzchevalric.3hdrkxoo,fitzchevalric.bquk9llc,fitzchevalric.0fpkx97d,fitzchevalric.32hzqex2,fitzchevalric.8iog1np4,fitzchevalric.4lcpzj0z,fitzchevalric.dllcnwai,fitzchevalric.bfvulqd4,fitzchevalric.az3domzu,fitzchevalric.b47np1zn,fitzchevalric.4davn6jb.json?secure&access_token=pk.eyJ1IjoiZml0emNoZXZhbHJpYyIsImEiOiJjazdzdXYzazUwazk0M2VtcnJ0N3BkZzY4In0.agcwn8WbpxmAVcXzzaXbsQ"
+    },
+    "routes-v18": {
+      "type": "geojson",
+      "data": "./Merged_routes_v18_terrain_aware.geojson"
     }
   },
   "sprite": "https://api.mapbox.com/styles/v1/fitzchevalric/clmj7x4rt01oz01r4h0j07f13/af3n0lg65wanst1z5p4f92p8a/sprite?access_token=pk.eyJ1IjoiZml0emNoZXZhbHJpYyIsImEiOiJjazdzdXYzazUwazk0M2VtcnJ0N3BkZzY4In0.agcwn8WbpxmAVcXzzaXbsQ",
@@ -522,8 +526,7 @@
       "metadata": {
         "mapbox:group": "43fc029a1fe950a0494e43bb4c1a6193"
       },
-      "source": "composite",
-      "source-layer": "7000burgroutes-cffynf",
+      "source": "routes-v18",
       "filter": [
         "match",
         [
@@ -559,8 +562,7 @@
       "metadata": {
         "mapbox:group": "43fc029a1fe950a0494e43bb4c1a6193"
       },
-      "source": "composite",
-      "source-layer": "7000burgroutes-cffynf",
+      "source": "routes-v18",
       "filter": [
         "match",
         [
@@ -617,8 +619,7 @@
       "metadata": {
         "mapbox:group": "43fc029a1fe950a0494e43bb4c1a6193"
       },
-      "source": "composite",
-      "source-layer": "7000burgroutes-cffynf",
+      "source": "routes-v18",
       "filter": [
         "match",
         [
@@ -655,8 +656,7 @@
       "metadata": {
         "mapbox:group": "43fc029a1fe950a0494e43bb4c1a6193"
       },
-      "source": "composite",
-      "source-layer": "7000burgroutes-cffynf",
+      "source": "routes-v18",
       "filter": [
         "match",
         [
