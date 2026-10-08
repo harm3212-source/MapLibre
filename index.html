@@ -185,6 +185,7 @@
 
   <script type="module">
     import * as maplibregl from "https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs";
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js";
 
     const KANKA_ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiMjdhZWUxZDFlMmY2NzY5NTgxOWQxNzVmMTViMTc1OTQ1NzczOWZiNTAwOGU2NGM4NWVkMjg4NGUxNjU0ZGExZjNjMmI1ZTQ2NDk1ZTQ5MTUiLCJpYXQiOjE3OTA2ODIwOTYuNjg2NzYsIm5iZiI6MTc5MDY4MjA5Ni42ODY3NjEsImV4cCI6MTgyMjIxODA5Ni42ODE0OTMsInN1YiI6IjIwMTY1MCIsInNjb3BlcyI6W119.VzFgAQZcD6U92h1uoLA70gxNZ_14RfHtVTkhe3X4cVxA-haNtGTGH3ULugqmje0EkRSptcJyNglIOlNiKe3qFnGakEp9evGOmnkWbmTYrsgjZEMHFKGfA9HtCKh07ITRZrToAYxK3_u6nm4JWZcK3uSKXNuXwr4C5VQ0OOTulUR20ZSbyvFMaAWH3J9XtFrV5wK1xYmMAqr3T_Wj4FVmk95xZrobz8-SlEOyELS_jdKrtdbvmWnNAZt5PH0Osixn2lSKy3YH7qr_fIRG7R4pdGJNtW14n_lJ5NgJpQ1jI9K7L117CNfpCUaWcGrVatz8m4_aEQwroPEb2pHOK6vZKyAp4zv-Rr5EZYF1Fe1MzpW49rwdWYl6eES5KsYEj0_eGPY9utKrHg73ETyGOkK5DqpYIuo9lpDV9dlZKdWzWbodUngp_rkjTjZCitA9qNgoaqyJOOV6sNlr2vUXS6SNH6jBJC_Hyxntq4uweFbUmcWkrg0eGBH87d7yUg4UX_XbFs4ssNw4jvzEL1LVgQ1pPlSZB1Uhlr5q7tULEVT5NrqTSjz5-NtnxJrgXl2TC0yrLgkObssW4VOB-kFo37eHC13dnhvvNvwxNiH9Ay67z5qzS4LVyh3GN6hAuJsT0dnmm0ShU-Vz5K2HiCAXjZkG0NvzFYQjFh1Tm9FlTR-Qm-w";
     const KANKA_CAMPAIGN_ID = "196997";
@@ -249,7 +250,8 @@
         minZoom: 1,
         maxZoom: 22,
         maxPitch: 60,
-        renderWorldCopies: false
+        renderWorldCopies: false,
+        canvasContextAttributes: { antialias: true }
       });
 
       map.addControl(new maplibregl.NavigationControl(), "top-right");
@@ -709,132 +711,278 @@
       }
 
 
-      function polygon(ctx, pts, fill) {
-        ctx.beginPath();
-        ctx.moveTo(pts[0][0], pts[0][1]);
-        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-        ctx.closePath();
-        ctx.fillStyle = fill;
-        ctx.fill();
-      }
+      // ---------------------------------------------------------------------
+      // REAL 3D FOREST CLUSTERS - Three.js custom layer
+      // ---------------------------------------------------------------------
+      // These are genuine Three.js meshes, not sprites. Geometry is deliberately
+      // stylised and exaggerated because realistic 20-30 m trees are invisible
+      // at Bigane's world-map scale.
+      const FOREST_3D_MIN_ZOOM = 4.4;
+      const FOREST_3D_FULL_ZOOM = 5.4;
+      const FOREST_CLUSTER_FILE = "./forest-clusters-3d.geojson";
 
-      function makeForestClusterImage(kind, variant) {
-        const size = 96;
-        const canvas = document.createElement("canvas");
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext("2d");
-        ctx.imageSmoothingEnabled = true;
-
-        const palettes = {
-          "tropical-rainforest": ["#254f34", "#367047", "#4d8b5c", "#72a66b"],
-          "tropical-seasonal": ["#4d6435", "#6d7e3d", "#879347", "#a8aa5b"],
-          "temperate-rainforest": ["#315341", "#47715a", "#618b6f", "#83a181"],
-          "temperate-deciduous": ["#47643a", "#667d48", "#819557", "#a0aa67"],
-          "taiga": ["#29463c", "#365b4b", "#4c705b", "#66826b"],
-          "deep-wood": ["#172d28", "#25433a", "#31564a", "#46675a"]
+      function mulberry32(seed) {
+        return function() {
+          let t = seed += 0x6D2B79F5;
+          t = Math.imul(t ^ t >>> 15, t | 1);
+          t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+          return ((t ^ t >>> 14) >>> 0) / 4294967296;
         };
-        const p = palettes[kind] || palettes["temperate-deciduous"];
-        const trunk = kind === "deep-wood" ? "#30271e" : "#4a3827";
-
-        const variants = [
-          [[23,62,18],[45,58,24],[67,63,19],[35,72,15],[58,73,17]],
-          [[20,69,16],[38,58,20],[58,59,23],[75,69,15],[49,74,17]],
-          [[26,61,20],[51,56,25],[73,64,17],[40,75,16],[63,76,14]]
-        ];
-        const trees = variants[variant % variants.length];
-
-        // Back-to-front for a compact cluster.
-        const ordered = [...trees].sort((a,b)=>a[1]-b[1]);
-        for (const [x,y,r] of ordered) {
-          // solid trunk
-          ctx.fillStyle = trunk;
-          ctx.fillRect(Math.round(x-r*0.10), Math.round(y+r*0.15), Math.max(2,Math.round(r*0.20)), Math.round(r*0.75));
-
-          if (kind === "taiga" || kind === "deep-wood") {
-            // stacked faceted cones
-            polygon(ctx, [[x,y-r*1.25],[x-r*0.72,y+r*0.42],[x+r*0.72,y+r*0.42]], p[1]);
-            polygon(ctx, [[x,y-r*1.25],[x,y+r*0.42],[x+r*0.72,y+r*0.42]], p[0]);
-            polygon(ctx, [[x,y-r*0.70],[x-r*0.88,y+r*0.72],[x+r*0.88,y+r*0.72]], p[2]);
-            polygon(ctx, [[x,y-r*0.70],[x,y+r*0.72],[x+r*0.88,y+r*0.72]], p[1]);
-          } else {
-            // low-poly broadleaf crown: hexagon split into facets
-            const top=[x,y-r*0.82], left=[x-r*0.82,y-r*0.05], bl=[x-r*0.55,y+r*0.62];
-            const bot=[x,y+r*0.78], br=[x+r*0.62,y+r*0.58], right=[x+r*0.86,y-r*0.02];
-            const c=[x,y];
-            polygon(ctx,[top,left,c],p[2]);
-            polygon(ctx,[left,bl,c],p[1]);
-            polygon(ctx,[bl,bot,c],p[1]);
-            polygon(ctx,[bot,br,c],p[0]);
-            polygon(ctx,[br,right,c],p[0]);
-            polygon(ctx,[right,top,c],p[3]);
-          }
-        }
-        return ctx.getImageData(0,0,size,size);
       }
 
-      async function installForestClusters() {
-        try {
-          const kinds = [
-            "tropical-rainforest", "tropical-seasonal", "temperate-rainforest",
-            "temperate-deciduous", "taiga", "deep-wood"
-          ];
-          for (const kind of kinds) {
-            for (let variant = 0; variant < 3; variant++) {
-              const id = `forest-${kind}-${variant}`;
-              if (!map.hasImage(id)) map.addImage(id, makeForestClusterImage(kind, variant), { pixelRatio: 2 });
-            }
-          }
+      function forestSizeForZoom(z) {
+        // Decorative/cartographic scale. Trees become less exaggerated as the
+        // camera approaches the ground.
+        if (z <= 4.5) return 13.0;
+        if (z <= 5.5) return 13.0 - (z - 4.5) * 3.0;
+        if (z <= 7.0) return 10.0 - (z - 5.5) * 2.2;
+        if (z <= 9.0) return 6.7 - (z - 7.0) * 1.35;
+        return 4.0;
+      }
 
-          if (!map.getSource("forest-clusters")) {
-            map.addSource("forest-clusters", {
-              type: "geojson",
-              data: "./forest-clusters.geojson"
+      function forestOpacityForZoom(z) {
+        if (z <= FOREST_3D_MIN_ZOOM) return 0;
+        if (z >= FOREST_3D_FULL_ZOOM) return 1;
+        return (z - FOREST_3D_MIN_ZOOM) / (FOREST_3D_FULL_ZOOM - FOREST_3D_MIN_ZOOM);
+      }
+
+      async function installThreeForestLayer() {
+        if (map.getLayer("bigane-3d-forest")) return;
+
+        const response = await fetch(FOREST_CLUSTER_FILE, { cache: "no-store" });
+        if (!response.ok) throw new Error(`3D forest data HTTP ${response.status}`);
+        const data = await response.json();
+        const clusters = data.features || [];
+        if (!clusters.length) return;
+
+        const forestLayer = {
+          id: "bigane-3d-forest",
+          type: "custom",
+          renderingMode: "3d",
+
+          onAdd(mapInstance, gl) {
+            this.map = mapInstance;
+            this.camera = new THREE.Camera();
+            this.scene = new THREE.Scene();
+            this.clusters = clusters;
+            this.lastZoomBucket = -1;
+
+            // Soft fantasy lighting. MeshStandardMaterial gives visibly faceted
+            // low-poly crowns while still reading clearly on the map.
+            this.scene.add(new THREE.HemisphereLight(0xeef6df, 0x31402d, 2.2));
+            const sun = new THREE.DirectionalLight(0xfff4d2, 2.6);
+            sun.position.set(-0.6, -0.8, 1.5).normalize();
+            this.scene.add(sun);
+
+            // Geometry uses Z as up. Three's cylinder/cone defaults to Y-up, so
+            // rotate once here and reuse the same geometry for all instances.
+            this.trunkGeometry = new THREE.CylinderGeometry(0.10, 0.16, 1.0, 5, 1, false);
+            this.trunkGeometry.rotateX(Math.PI / 2);
+            this.trunkGeometry.translate(0, 0, 0.5);
+
+            this.broadGeometry = new THREE.IcosahedronGeometry(0.68, 1);
+            this.broadGeometry.scale(1.0, 0.88, 0.92);
+            this.broadGeometry.translate(0, 0, 0.78);
+
+            this.coniferGeometry = new THREE.ConeGeometry(0.62, 1.65, 6, 2, false);
+            this.coniferGeometry.rotateX(Math.PI / 2);
+            this.coniferGeometry.translate(0, 0, 0.93);
+
+            this.tropicalGeometry = new THREE.IcosahedronGeometry(0.78, 1);
+            this.tropicalGeometry.scale(1.18, 1.02, 0.72);
+            this.tropicalGeometry.translate(0, 0, 0.82);
+
+            const makeMat = (color) => new THREE.MeshStandardMaterial({
+              color,
+              roughness: 1,
+              metalness: 0,
+              flatShading: true,
+              transparent: true,
+              opacity: 1,
+              depthWrite: true
             });
-          }
 
-          if (!map.getLayer("Forest clusters")) {
-            const layer = {
-              id: "Forest clusters",
-              type: "symbol",
-              source: "forest-clusters",
-              minzoom: 4.8,
-              layout: {
-                "icon-image": ["get", "icon"],
-                "icon-size": [
-                  "*", ["get", "scale"],
-                  ["interpolate", ["linear"], ["zoom"],
-                    4.8, 0.34,
-                    5.8, 0.48,
-                    7.0, 0.66,
-                    9.0, 0.88
-                  ]
-                ],
-                "icon-allow-overlap": false,
-                "icon-ignore-placement": false,
-                "icon-padding": 2,
-                "icon-pitch-alignment": "viewport",
-                "icon-rotation-alignment": "viewport"
-              },
-              paint: {
-                "icon-opacity": ["interpolate", ["linear"], ["zoom"], 4.8, 0, 5.2, 0.88, 6.0, 1]
+            this.materials = {
+              trunk: makeMat(0x6b4a32),
+              broadleaf: makeMat(0x527d48),
+              tropical: makeMat(0x3f7444),
+              conifer: makeMat(0x3c6044),
+              deep: makeMat(0x294738)
+            };
+
+            // Build deterministic trees around every cluster point. All crowns
+            // and trunks are rendered with InstancedMesh: a few draw calls rather
+            // than thousands of independent Mesh objects.
+            this.treeRecords = [];
+            for (let c = 0; c < clusters.length; c++) {
+              const f = clusters[c];
+              const [lng, lat] = f.geometry.coordinates;
+              const props = f.properties || {};
+              const rnd = mulberry32(Number(props.seed) || (c + 1));
+              const kind = props.kind || "broadleaf";
+              const clusterScale = Number(props.scale) || 1;
+              const count = 4 + Math.floor(rnd() * 5); // 4-8 trees per cluster
+
+              for (let i = 0; i < count; i++) {
+                const angle = rnd() * Math.PI * 2;
+                const radial = Math.pow(rnd(), 0.65) * 52;
+                const east = Math.cos(angle) * radial;
+                const north = Math.sin(angle) * radial;
+                const variation = 0.72 + rnd() * 0.58;
+                const rot = rnd() * Math.PI * 2;
+                this.treeRecords.push({
+                  lng, lat, east, north, rot,
+                  kind,
+                  scale: clusterScale * variation,
+                  elevation: null
+                });
+              }
+            }
+
+            const counts = { broadleaf: 0, tropical: 0, conifer: 0, deep: 0 };
+            for (const t of this.treeRecords) counts[t.kind] = (counts[t.kind] || 0) + 1;
+
+            this.trunks = new THREE.InstancedMesh(this.trunkGeometry, this.materials.trunk, this.treeRecords.length);
+            this.trunks.frustumCulled = false;
+            this.scene.add(this.trunks);
+
+            this.crowns = {};
+            const geomFor = {
+              broadleaf: this.broadGeometry,
+              tropical: this.tropicalGeometry,
+              conifer: this.coniferGeometry,
+              deep: this.coniferGeometry
+            };
+            for (const kind of ["broadleaf", "tropical", "conifer", "deep"]) {
+              const mesh = new THREE.InstancedMesh(geomFor[kind], this.materials[kind], counts[kind] || 1);
+              mesh.frustumCulled = false;
+              mesh.userData.nextInstance = 0;
+              this.crowns[kind] = mesh;
+              this.scene.add(mesh);
+            }
+
+            this.tempMatrix = new THREE.Matrix4();
+            this.tempPos = new THREE.Vector3();
+            this.tempQuat = new THREE.Quaternion();
+            this.tempScale = new THREE.Vector3();
+            this.tempEuler = new THREE.Euler(0, 0, 0, "XYZ");
+
+            this.renderer = new THREE.WebGLRenderer({
+              canvas: mapInstance.getCanvas(),
+              context: gl,
+              antialias: true
+            });
+            this.renderer.autoClear = false;
+
+            this.updateInstances(true);
+            this.onMoveEnd = () => this.updateInstances(false);
+            this.onZoom = () => {
+              const bucket = Math.floor(mapInstance.getZoom() * 4);
+              if (bucket !== this.lastZoomBucket) {
+                this.lastZoomBucket = bucket;
+                this.updateInstances(false);
               }
             };
-            if (map.getLayer("Town names")) map.addLayer(layer, "Town names");
-            else if (map.getLayer("Capitals")) map.addLayer(layer, "Capitals");
-            else map.addLayer(layer);
+            mapInstance.on("moveend", this.onMoveEnd);
+            mapInstance.on("zoom", this.onZoom);
+          },
+
+          updateInstances(forceElevation = false) {
+            if (!this.trunks) return;
+            const zoom = this.map.getZoom();
+            const decorative = forestSizeForZoom(zoom);
+            const visible = zoom >= FOREST_3D_MIN_ZOOM;
+
+            // reset per-kind index counters
+            const indices = { broadleaf: 0, tropical: 0, conifer: 0, deep: 0 };
+            const zero = new THREE.Vector3(0, 0, 0);
+
+            for (let i = 0; i < this.treeRecords.length; i++) {
+              const t = this.treeRecords[i];
+              if (forceElevation || t.elevation == null) {
+                const e = this.map.queryTerrainElevation([t.lng, t.lat]);
+                if (e != null && Number.isFinite(e)) t.elevation = e;
+              } else {
+                // Refresh elevations as DEM tiles enter the viewport.
+                const e = this.map.queryTerrainElevation([t.lng, t.lat]);
+                if (e != null && Number.isFinite(e)) t.elevation = e;
+              }
+              const elevation = Number.isFinite(t.elevation) ? t.elevation : 0;
+              const merc = maplibregl.MercatorCoordinate.fromLngLat([t.lng, t.lat], elevation);
+              const mpu = merc.meterInMercatorCoordinateUnits();
+
+              const localEast = t.east * decorative;
+              const localNorth = t.north * decorative;
+              const x = merc.x + localEast * mpu;
+              const y = merc.y - localNorth * mpu;
+              const z = merc.z;
+
+              const h = 32 * decorative * t.scale;
+              const crownScale = h * mpu;
+              const trunkScale = h * mpu;
+              const showScale = visible ? 1 : 0;
+
+              this.tempEuler.set(0, 0, t.rot);
+              this.tempQuat.setFromEuler(this.tempEuler);
+
+              this.tempPos.set(x, y, z);
+              this.tempScale.set(0.22 * trunkScale * showScale, 0.22 * trunkScale * showScale, 0.58 * trunkScale * showScale);
+              this.tempMatrix.compose(this.tempPos, this.tempQuat, this.tempScale);
+              this.trunks.setMatrixAt(i, this.tempMatrix);
+
+              const kind = this.crowns[t.kind] ? t.kind : "broadleaf";
+              const ci = indices[kind]++;
+              this.tempPos.set(x, y, z + 0.48 * h * mpu);
+              if (kind === "conifer" || kind === "deep") {
+                this.tempScale.set(0.46 * crownScale * showScale, 0.46 * crownScale * showScale, 0.78 * crownScale * showScale);
+              } else if (kind === "tropical") {
+                this.tempScale.set(0.72 * crownScale * showScale, 0.72 * crownScale * showScale, 0.58 * crownScale * showScale);
+              } else {
+                this.tempScale.set(0.62 * crownScale * showScale, 0.62 * crownScale * showScale, 0.62 * crownScale * showScale);
+              }
+              this.tempMatrix.compose(this.tempPos, this.tempQuat, this.tempScale);
+              this.crowns[kind].setMatrixAt(ci, this.tempMatrix);
+            }
+
+            this.trunks.instanceMatrix.needsUpdate = true;
+            for (const mesh of Object.values(this.crowns)) mesh.instanceMatrix.needsUpdate = true;
+            this.map.triggerRepaint();
+          },
+
+          render(gl, args) {
+            const opacity = forestOpacityForZoom(this.map.getZoom());
+            this.materials.trunk.opacity = opacity;
+            this.materials.broadleaf.opacity = opacity;
+            this.materials.tropical.opacity = opacity;
+            this.materials.conifer.opacity = opacity;
+            this.materials.deep.opacity = opacity;
+
+            const mainMatrix = args?.defaultProjectionData?.mainMatrix;
+            if (!mainMatrix) return;
+            this.camera.projectionMatrix = new THREE.Matrix4().fromArray(mainMatrix);
+            this.renderer.resetState();
+            this.renderer.render(this.scene, this.camera);
+            this.map.triggerRepaint();
+          },
+
+          onRemove() {
+            if (this.onMoveEnd) this.map.off("moveend", this.onMoveEnd);
+            if (this.onZoom) this.map.off("zoom", this.onZoom);
+            this.renderer?.dispose();
           }
-          console.info("Forest clusters geladen.");
-        } catch (error) {
-          console.warn("Forest clusters overgeslagen; kaart blijft werken:", error);
-        }
+        };
+
+        // Put trees below labels where possible, but above the biome/terrain map.
+        const beforeId = map.getLayer("Town names") ? "Town names" :
+                         map.getLayer("Capitals") ? "Capitals" : undefined;
+        map.addLayer(forestLayer, beforeId);
+        console.info(`3D forest layer installed: ${clusters.length} clusters.`);
       }
 
       map.on("load", () => {
         status.textContent = "Bigane-style + GitHub terrain werkt. Kanka laden...";
 
         installBiomeTextures().catch(error => console.warn("Biome textures overgeslagen:", error));
-        installForestClusters();
         installBiomeSoftBlend();
 
         setupLayerSwitcher();
@@ -878,6 +1026,10 @@
           }
         }
 
+
+        installThreeForestLayer().catch(error => {
+          console.warn("3D forest layer overgeslagen; kaart blijft werken:", error);
+        });
 
         for (const layerId of ["Town names", "Capitals", "clickable"]) {
           if (!map.getLayer(layerId)) continue;
