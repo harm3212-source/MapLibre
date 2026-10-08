@@ -736,8 +736,8 @@
       // tree grid over the currently visible part of the biome polygons. Only the
       // viewport plus a small buffer exists in the Three.js instance buffers.
       const FOREST_3D_MIN_ZOOM = 4.15;
-      const FOREST_MAX_VISIBLE_TREES = 12000;
-      const FOREST_MODEL_CAPACITY = 6000;
+      const FOREST_MAX_VISIBLE_TREES = 16000;
+      const FOREST_MODEL_CAPACITY = 7000;
       const FOREST_MODELS = [
         "https://gobkit.com/freebies/environment/TreeLow001.glb",
         "https://gobkit.com/freebies/environment/TreeLow002.glb",
@@ -772,29 +772,26 @@
         };
       }
 
-      function forestCellSeed(ix, iy, zoomBucket) {
+      // The tree world is now fixed. Zoom no longer changes tree positions or
+      // tree size, so existing trees never "swim" or jump when zooming.
+      const FOREST_TREE_HEIGHT_METERS = 9000;
+      const FOREST_BASE_CELL_WORLD = 1 / 8192; // ~4.9 km at the equator
+
+      function forestCellSeed(ix, iy) {
         let h = 2166136261 >>> 0;
         h = Math.imul(h ^ (ix | 0), 16777619);
         h = Math.imul(h ^ (iy | 0), 16777619);
-        h = Math.imul(h ^ (Math.round(zoomBucket * 10) | 0), 16777619);
         return h >>> 0;
       }
 
-      function forestHeightMetersForZoom(z) {
-        // About five times the original Gobkit symbol scale.
-        if (z <= 4.5) return 11000;
-        if (z <= 5.5) return 11000 - (z - 4.5) * 3250;
-        if (z <= 7.0) return 7750 - (z - 5.5) * 2000;
-        if (z <= 9.0) return 4750 - (z - 7.0) * 1250;
-        return 2250;
-      }
-
-      function forestCellPixelsForZoom(z) {
-        // Screen-space density target. Smaller spacing means denser forest.
-        if (z < 5.0) return 17;
-        if (z < 6.5) return 15;
-        if (z < 8.0) return 13;
-        return 12;
+      function forestStrideForZoom(z) {
+        // Existing tree positions stay identical. At lower zooms we simply render
+        // a globally aligned subset of the same fixed grid for performance.
+        // Higher zoom levels reveal extra trees between the existing ones.
+        if (z < 4.8) return 6;
+        if (z < 5.8) return 4;
+        if (z < 6.8) return 2;
+        return 1;
       }
 
       function forestBiomeDensity(name) {
@@ -970,12 +967,10 @@
               return;
             }
 
-            // LOD changes only every half zoom level, preventing the world grid from
-            // swimming continuously during wheel zooms.
-            const zoomBucket = Math.round(zoom * 2) / 2;
+            const stride = forestStrideForZoom(zoom);
             const bounds = this.map.getBounds();
             const coverageKey = [
-              zoomBucket,
+              stride,
               bounds.getWest().toFixed(2), bounds.getSouth().toFixed(2),
               bounds.getEast().toFixed(2), bounds.getNorth().toFixed(2)
             ].join("|");
@@ -984,28 +979,47 @@
             const biomeFeatures = this.getBiomeFeatures();
             if (!biomeFeatures.length) return;
 
-            const cellPixels = forestCellPixelsForZoom(zoomBucket);
-            const worldPixels = 512 * Math.pow(2, zoomBucket);
-            const cellWorld = cellPixels / worldPixels;
-            const padCells = 4;
+            // Fixed geographic grid. The active spacing can get coarser for low
+            // zooms, but all samples remain aligned to the same world coordinates.
+            const cellWorld = FOREST_BASE_CELL_WORLD;
+            const activeCellWorld = cellWorld * stride;
 
             const nw = maplibregl.MercatorCoordinate.fromLngLat([bounds.getWest(), bounds.getNorth()]);
             const se = maplibregl.MercatorCoordinate.fromLngLat([bounds.getEast(), bounds.getSouth()]);
-            const minX = Math.floor(nw.x / cellWorld) - padCells;
-            const maxX = Math.ceil(se.x / cellWorld) + padCells;
-            const minY = Math.floor(nw.y / cellWorld) - padCells;
-            const maxY = Math.ceil(se.y / cellWorld) + padCells;
 
-            const targetHeight = forestHeightMetersForZoom(zoom);
+            // Keep a large off-screen forest ring alive. The old fixed four-cell
+            // margin was only ~50-70 screen pixels and became visible while panning
+            // or pitching the map. This keeps roughly three quarters of an extra
+            // viewport around every edge, with a sensible minimum.
+            const visibleCellsX = Math.max(1, Math.ceil(Math.abs(se.x - nw.x) / activeCellWorld));
+            const visibleCellsY = Math.max(1, Math.ceil(Math.abs(se.y - nw.y) / activeCellWorld));
+            const padActiveX = Math.max(6, Math.ceil(visibleCellsX * 0.75));
+            const padActiveY = Math.max(6, Math.ceil(visibleCellsY * 0.75));
+            const padCellsX = padActiveX * stride;
+            const padCellsY = padActiveY * stride;
+
+            const rawMinX = Math.floor(nw.x / cellWorld) - padCellsX;
+            const rawMaxX = Math.ceil(se.x / cellWorld) + padCellsX;
+            const rawMinY = Math.floor(nw.y / cellWorld) - padCellsY;
+            const rawMaxY = Math.ceil(se.y / cellWorld) + padCellsY;
+
+            // Align the first sample globally. When stride changes, the old coarse
+            // samples remain a subset of the denser grid instead of moving.
+            const minX = Math.floor(rawMinX / stride) * stride;
+            const maxX = Math.ceil(rawMaxX / stride) * stride;
+            const minY = Math.floor(rawMinY / stride) * stride;
+            const maxY = Math.ceil(rawMaxY / stride) * stride;
+
+            const targetHeight = FOREST_TREE_HEIGHT_METERS;
             const used = new Array(this.prototypes.length).fill(0);
             let totalVisible = 0;
 
             outer:
-            for (let iy = minY; iy <= maxY; iy++) {
-              for (let ix = minX; ix <= maxX; ix++) {
+            for (let iy = minY; iy <= maxY; iy += stride) {
+              for (let ix = minX; ix <= maxX; ix += stride) {
                 if (totalVisible >= FOREST_MAX_VISIBLE_TREES) break outer;
 
-                const rnd = forestMulberry32(forestCellSeed(ix, iy, zoomBucket));
+                const rnd = forestMulberry32(forestCellSeed(ix, iy));
                 // Jitter within the world-grid cell so the coverage looks organic,
                 // while staying deterministic when the camera returns to this area.
                 const mx = (ix + 0.12 + rnd() * 0.76) * cellWorld;
