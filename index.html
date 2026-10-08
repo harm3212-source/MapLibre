@@ -730,33 +730,38 @@
 
 
       // ---------------------------------------------------------------------
-      // DENSE 3D FOREST - Quaternius Ultimate Stylized Nature (CC0)
+      // CONTINUOUS 3D FOREST COVER - lightweight Gobkit trees over forest biomes
       // ---------------------------------------------------------------------
-      // The biome map is continental-scale, so tree height is intentionally
-      // cartographic rather than realistic. Dense clusters create the visual
-      // impression of a continuous forest without drawing millions of trees.
+      // Instead of pre-made clusters, this layer creates a deterministic, jittered
+      // tree grid over the currently visible part of the biome polygons. Only the
+      // viewport plus a small buffer exists in the Three.js instance buffers.
       const FOREST_3D_MIN_ZOOM = 4.15;
-      const FOREST_CLUSTER_FILE = "./forest-clusters-3d.geojson";
-
-      // Quaternius Ultimate Stylized Nature, mirrored on GitHub and served
-      // through jsDelivr. The .gltf files load their companion .bin/textures
-      // relative to this same directory.
-      const QUATERNIUS_BASE =
-        "https://cdn.jsdelivr.net/gh/agentkaerf/FreeModels@main/" +
-        "Ultimate%20Stylized%20Nature%20-%20May%202022/glTF/";
-
+      const FOREST_MAX_VISIBLE_TREES = 12000;
+      const FOREST_MODEL_CAPACITY = 6000;
       const FOREST_MODELS = [
-        QUATERNIUS_BASE + "MapleTree_1.gltf",
-        QUATERNIUS_BASE + "MapleTree_2.gltf",
-        QUATERNIUS_BASE + "MapleTree_3.gltf",
-        QUATERNIUS_BASE + "MapleTree_4.gltf",
-        QUATERNIUS_BASE + "MapleTree_5.gltf",
-        QUATERNIUS_BASE + "BirchTree_1.gltf",
-        QUATERNIUS_BASE + "BirchTree_2.gltf",
-        QUATERNIUS_BASE + "BirchTree_3.gltf",
-        QUATERNIUS_BASE + "BirchTree_4.gltf",
-        QUATERNIUS_BASE + "BirchTree_5.gltf"
+        "https://gobkit.com/freebies/environment/TreeLow001.glb",
+        "https://gobkit.com/freebies/environment/TreeLow002.glb",
+        "https://gobkit.com/freebies/environment/TreeLow003.glb"
       ];
+
+      // 0 = no trees, 1 = almost every generated cell contains a tree.
+      // These values make actual forest biomes read as continuous forest cover,
+      // while open biomes remain open.
+      const FOREST_BIOME_DENSITY = {
+        "Tropical rainforest": 0.96,
+        "Tropical seasonal forest": 0.78,
+        "Temperate rainforest": 0.94,
+        "Temperate deciduous forest": 0.88,
+        "Taiga": 0.86,
+        "Deep Wood": 1.00,
+        "Savanna": 0.16,
+        "Wetland": 0.20,
+        "Grassland": 0.00,
+        "Tundra": 0.00,
+        "Glacier": 0.00,
+        "Hot desert": 0.00,
+        "Cold desert": 0.00
+      };
 
       function forestMulberry32(seed) {
         return function() {
@@ -767,9 +772,16 @@
         };
       }
 
+      function forestCellSeed(ix, iy, zoomBucket) {
+        let h = 2166136261 >>> 0;
+        h = Math.imul(h ^ (ix | 0), 16777619);
+        h = Math.imul(h ^ (iy | 0), 16777619);
+        h = Math.imul(h ^ (Math.round(zoomBucket * 10) | 0), 16777619);
+        return h >>> 0;
+      }
+
       function forestHeightMetersForZoom(z) {
-        // Deliberately exaggerated fantasy-map scale: about 5x the previous
-        // tree height so forests read clearly at continental zoom levels.
+        // About five times the original Gobkit symbol scale.
         if (z <= 4.5) return 11000;
         if (z <= 5.5) return 11000 - (z - 4.5) * 3250;
         if (z <= 7.0) return 7750 - (z - 5.5) * 2000;
@@ -777,12 +789,56 @@
         return 2250;
       }
 
-      function forestRadiusMetersForZoom(z) {
-        if (z <= 4.5) return 8000;
-        if (z <= 5.5) return 8000 - (z - 4.5) * 1800;
-        if (z <= 7.0) return 6200 - (z - 5.5) * 1200;
-        if (z <= 9.0) return 4400 - (z - 7.0) * 900;
-        return 2600;
+      function forestCellPixelsForZoom(z) {
+        // Screen-space density target. Smaller spacing means denser forest.
+        if (z < 5.0) return 17;
+        if (z < 6.5) return 15;
+        if (z < 8.0) return 13;
+        return 12;
+      }
+
+      function forestBiomeDensity(name) {
+        return FOREST_BIOME_DENSITY[name] ?? 0;
+      }
+
+      function forestFeatureBBox(feature) {
+        const geometry = feature?.geometry;
+        if (!geometry) return null;
+        let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+
+        const visitRing = ring => {
+          for (const p of ring || []) {
+            const lng = Number(p?.[0]);
+            const lat = Number(p?.[1]);
+            if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+            if (lng < minLng) minLng = lng;
+            if (lng > maxLng) maxLng = lng;
+            if (lat < minLat) minLat = lat;
+            if (lat > maxLat) maxLat = lat;
+          }
+        };
+
+        if (geometry.type === "Polygon") {
+          for (const ring of geometry.coordinates || []) visitRing(ring);
+        } else if (geometry.type === "MultiPolygon") {
+          for (const poly of geometry.coordinates || []) {
+            for (const ring of poly || []) visitRing(ring);
+          }
+        } else {
+          return null;
+        }
+
+        if (!Number.isFinite(minLng)) return null;
+        return { minLng, minLat, maxLng, maxLat };
+      }
+
+      function forestFeatureAtCoordinate(features, lng, lat) {
+        for (const entry of features) {
+          const b = entry.bbox;
+          if (lng < b.minLng || lng > b.maxLng || lat < b.minLat || lat > b.maxLat) continue;
+          if (featureContainsCoordinate(entry.feature, [lng, lat])) return entry;
+        }
+        return null;
       }
 
       async function loadForestPrototype(url) {
@@ -806,7 +862,7 @@
           geom.applyMatrix4(obj.matrixWorld);
           geom.translate(-cx, -bbox.min.y, -cz);
           geom.scale(1 / height, 1 / height, 1 / height);
-          // glTF is Y-up; the map's custom world uses Z-up.
+          // glTF is Y-up; the map custom world uses Z-up.
           geom.rotateX(Math.PI / 2);
           geom.computeBoundingSphere();
           const mats = Array.isArray(obj.material) ? obj.material.map(m => m.clone()) : obj.material.clone();
@@ -818,55 +874,9 @@
 
       async function installDenseThreeForestLayer() {
         if (map.getLayer("bigane-3d-forest")) return;
-
-        // Load Three only after the base map has finished loading.
         await ensureThreeJs();
 
-        const response = await fetch(FOREST_CLUSTER_FILE, { cache: "no-store" });
-        if (!response.ok) throw new Error(`3D forest data HTTP ${response.status}`);
-        const data = await response.json();
-        const clusters = data.features || [];
-        if (!clusters.length) return;
-
-        // Load real artist-made models first. If this fails, the map remains usable.
         const prototypes = await Promise.all(FOREST_MODELS.map(loadForestPrototype));
-
-        // Build deterministic tree records once. Elevation is queried per cluster,
-        // not per tree, which keeps thousands of instances affordable.
-        const recordsByModel = Array.from({ length: prototypes.length }, () => []);
-        for (let ci = 0; ci < clusters.length; ci++) {
-          const feature = clusters[ci];
-          const [lng, lat] = feature.geometry.coordinates;
-          const props = feature.properties || {};
-          const rnd = forestMulberry32(Number(props.seed) || ci + 1);
-          const count = Math.max(8, Number(props.count) || 24);
-          const clusterScale = Number(props.scale) || 1;
-          const biome = props.biome || "";
-
-          for (let i = 0; i < count; i++) {
-            const angle = rnd() * Math.PI * 2;
-            const radial01 = Math.pow(rnd(), 0.60);
-            let modelIndex;
-            // Slightly different height mix per biome while reusing the same
-            // artist-made model family.
-            if (biome === "Taiga" || biome === "Deep Wood") {
-              modelIndex = rnd() < 0.72 ? Math.floor(rnd() * 3) : 3 + Math.floor(rnd() * 3);
-            } else if (biome.includes("rainforest")) {
-              modelIndex = rnd() < 0.58 ? Math.floor(rnd() * 3) : 3 + Math.floor(rnd() * 3);
-            } else {
-              const r = rnd();
-              modelIndex = r < 0.34 ? Math.floor(rnd() * 3) : r < 0.76 ? 3 + Math.floor(rnd() * 3) : 6 + Math.floor(rnd() * 3);
-            }
-            recordsByModel[modelIndex].push({
-              lng, lat,
-              radial01,
-              angle,
-              rot: rnd() * Math.PI * 2,
-              scale: clusterScale * (0.72 + rnd() * 0.58),
-              clusterIndex: ci
-            });
-          }
-        }
 
         const forestLayer = {
           id: "bigane-3d-forest",
@@ -877,31 +887,28 @@
             this.map = mapInstance;
             this.camera = new THREE.Camera();
             this.scene = new THREE.Scene();
-            this.clusters = clusters;
             this.prototypes = prototypes;
-            this.recordsByModel = recordsByModel;
-            this.clusterElevations = new Array(clusters.length).fill(null);
             this.meshGroups = [];
             this.tempMatrix = new THREE.Matrix4();
             this.tempPos = new THREE.Vector3();
             this.tempQuat = new THREE.Quaternion();
             this.tempScale = new THREE.Vector3();
             this.tempEuler = new THREE.Euler(0, 0, 0, "XYZ");
-            this.lastZoomBucket = -1;
+            this.lastCoverageKey = "";
+            this.lastVisibleTreeCount = 0;
 
-            // Models keep their original materials; lighting makes their low-poly
-            // facets readable against the textured map.
-            this.scene.add(new THREE.HemisphereLight(0xf4f1dc, 0x344231, 2.25));
-            const sun = new THREE.DirectionalLight(0xfff0c8, 2.8);
+            this.scene.add(new THREE.HemisphereLight(0xf4f1dc, 0x344231, 2.15));
+            const sun = new THREE.DirectionalLight(0xfff0c8, 2.6);
             sun.position.set(-0.7, -0.6, 1.6).normalize();
             this.scene.add(sun);
 
             for (let mi = 0; mi < this.prototypes.length; mi++) {
-              const count = this.recordsByModel[mi].length;
               const meshes = [];
               for (const part of this.prototypes[mi]) {
-                const mesh = new THREE.InstancedMesh(part.geometry, part.material, Math.max(1, count));
+                const mesh = new THREE.InstancedMesh(part.geometry, part.material, FOREST_MODEL_CAPACITY);
+                // Culling is handled explicitly by only filling the visible coverage area.
                 mesh.frustumCulled = false;
+                mesh.count = 0;
                 mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
                 meshes.push(mesh);
                 this.scene.add(mesh);
@@ -916,58 +923,136 @@
             });
             this.renderer.autoClear = false;
 
-            this.updateInstances(true);
-            this.onMoveEnd = () => this.updateInstances(true);
-            this.onZoom = () => {
-              const bucket = Math.floor(mapInstance.getZoom() * 3);
-              if (bucket !== this.lastZoomBucket) {
-                this.lastZoomBucket = bucket;
-                this.updateInstances(false);
-              }
-            };
+            this.refreshCoverage(true);
+            this.onMoveEnd = () => this.refreshCoverage(false);
+            this.onZoomEnd = () => this.refreshCoverage(true);
+            this.onIdle = () => this.refreshCoverage(false);
             mapInstance.on("moveend", this.onMoveEnd);
-            mapInstance.on("zoom", this.onZoom);
+            mapInstance.on("zoomend", this.onZoomEnd);
+            mapInstance.on("idle", this.onIdle);
           },
 
-          updateInstances(refreshElevation = false) {
-            const zoom = this.map.getZoom();
-            const show = zoom >= FOREST_3D_MIN_ZOOM;
-            const targetHeight = forestHeightMetersForZoom(zoom);
-            const clusterRadius = forestRadiusMetersForZoom(zoom);
-
-            if (refreshElevation) {
-              for (let ci = 0; ci < this.clusters.length; ci++) {
-                const [lng, lat] = this.clusters[ci].geometry.coordinates;
-                const e = this.map.queryTerrainElevation([lng, lat]);
-                if (e != null && Number.isFinite(e)) this.clusterElevations[ci] = e;
-              }
+          getBiomeFeatures() {
+            const biomeLayer = this.map.getLayer("Biomes");
+            if (!biomeLayer?.source) return [];
+            const sourceLayer = biomeLayer["source-layer"] || biomeLayer.sourceLayer;
+            let raw = [];
+            try {
+              raw = this.map.querySourceFeatures(
+                biomeLayer.source,
+                sourceLayer ? { sourceLayer } : undefined
+              ) || [];
+            } catch (error) {
+              console.warn("Biome source features konden niet worden gelezen:", error);
+              return [];
             }
 
-            for (let mi = 0; mi < this.recordsByModel.length; mi++) {
-              const recs = this.recordsByModel[mi];
-              const group = this.meshGroups[mi];
-              for (let i = 0; i < recs.length; i++) {
-                const t = recs[i];
-                const elevation = Number.isFinite(this.clusterElevations[t.clusterIndex]) ? this.clusterElevations[t.clusterIndex] : 0;
-                const merc = maplibregl.MercatorCoordinate.fromLngLat([t.lng, t.lat], elevation);
-                const mpu = merc.meterInMercatorCoordinateUnits();
-                const radial = t.radial01 * clusterRadius;
-                const east = Math.cos(t.angle) * radial;
-                const north = Math.sin(t.angle) * radial;
-                const x = merc.x + east * mpu;
-                const y = merc.y - north * mpu;
-                const z = merc.z;
+            const usable = [];
+            for (const feature of raw) {
+              const biome = feature.properties?.Biome || "";
+              const density = forestBiomeDensity(biome);
+              if (density <= 0) continue;
+              const bbox = forestFeatureBBox(feature);
+              if (!bbox) continue;
+              usable.push({ feature, bbox, biome, density });
+            }
+            return usable;
+          },
 
-                const s = show ? targetHeight * t.scale * mpu : 0;
-                this.tempPos.set(x, y, z);
-                this.tempEuler.set(0, 0, t.rot);
+          refreshCoverage(force = false) {
+            const zoom = this.map.getZoom();
+            if (zoom < FOREST_3D_MIN_ZOOM) {
+              for (const group of this.meshGroups) {
+                for (const mesh of group) mesh.count = 0;
+              }
+              this.lastVisibleTreeCount = 0;
+              this.map.triggerRepaint();
+              return;
+            }
+
+            // LOD changes only every half zoom level, preventing the world grid from
+            // swimming continuously during wheel zooms.
+            const zoomBucket = Math.round(zoom * 2) / 2;
+            const bounds = this.map.getBounds();
+            const coverageKey = [
+              zoomBucket,
+              bounds.getWest().toFixed(2), bounds.getSouth().toFixed(2),
+              bounds.getEast().toFixed(2), bounds.getNorth().toFixed(2)
+            ].join("|");
+            if (!force && coverageKey === this.lastCoverageKey) return;
+
+            const biomeFeatures = this.getBiomeFeatures();
+            if (!biomeFeatures.length) return;
+
+            const cellPixels = forestCellPixelsForZoom(zoomBucket);
+            const worldPixels = 512 * Math.pow(2, zoomBucket);
+            const cellWorld = cellPixels / worldPixels;
+            const padCells = 4;
+
+            const nw = maplibregl.MercatorCoordinate.fromLngLat([bounds.getWest(), bounds.getNorth()]);
+            const se = maplibregl.MercatorCoordinate.fromLngLat([bounds.getEast(), bounds.getSouth()]);
+            const minX = Math.floor(nw.x / cellWorld) - padCells;
+            const maxX = Math.ceil(se.x / cellWorld) + padCells;
+            const minY = Math.floor(nw.y / cellWorld) - padCells;
+            const maxY = Math.ceil(se.y / cellWorld) + padCells;
+
+            const targetHeight = forestHeightMetersForZoom(zoom);
+            const used = new Array(this.prototypes.length).fill(0);
+            let totalVisible = 0;
+
+            outer:
+            for (let iy = minY; iy <= maxY; iy++) {
+              for (let ix = minX; ix <= maxX; ix++) {
+                if (totalVisible >= FOREST_MAX_VISIBLE_TREES) break outer;
+
+                const rnd = forestMulberry32(forestCellSeed(ix, iy, zoomBucket));
+                // Jitter within the world-grid cell so the coverage looks organic,
+                // while staying deterministic when the camera returns to this area.
+                const mx = (ix + 0.12 + rnd() * 0.76) * cellWorld;
+                const my = (iy + 0.12 + rnd() * 0.76) * cellWorld;
+                const ll = new maplibregl.MercatorCoordinate(mx, my, 0).toLngLat();
+                const lng = ll.lng;
+                const lat = ll.lat;
+
+                const biomeEntry = forestFeatureAtCoordinate(biomeFeatures, lng, lat);
+                if (!biomeEntry) continue;
+                if (rnd() > biomeEntry.density) continue;
+
+                // Spread trees across the three lightweight Gobkit low-poly models.
+                const modelIndex = Math.floor(rnd() * this.prototypes.length);
+                if (used[modelIndex] >= FOREST_MODEL_CAPACITY) continue;
+
+                const elevationRaw = this.map.queryTerrainElevation([lng, lat]);
+                const elevation = Number.isFinite(elevationRaw) ? elevationRaw : 0;
+                const merc = maplibregl.MercatorCoordinate.fromLngLat([lng, lat], elevation);
+                const mpu = merc.meterInMercatorCoordinateUnits();
+
+                const scaleJitter = 0.72 + rnd() * 0.58;
+                const s = targetHeight * scaleJitter * mpu;
+                this.tempPos.set(merc.x, merc.y, merc.z);
+                this.tempEuler.set(0, 0, rnd() * Math.PI * 2);
                 this.tempQuat.setFromEuler(this.tempEuler);
                 this.tempScale.set(s, s, s);
                 this.tempMatrix.compose(this.tempPos, this.tempQuat, this.tempScale);
-                for (const mesh of group) mesh.setMatrixAt(i, this.tempMatrix);
+
+                const slot = used[modelIndex]++;
+                for (const mesh of this.meshGroups[modelIndex]) {
+                  mesh.setMatrixAt(slot, this.tempMatrix);
+                }
+                totalVisible++;
               }
-              for (const mesh of group) mesh.instanceMatrix.needsUpdate = true;
             }
+
+            for (let mi = 0; mi < this.meshGroups.length; mi++) {
+              for (const mesh of this.meshGroups[mi]) {
+                mesh.count = used[mi];
+                mesh.instanceMatrix.needsUpdate = true;
+              }
+            }
+
+            this.lastCoverageKey = coverageKey;
+            this.lastVisibleTreeCount = totalVisible;
+            console.info(`3D forest coverage: ${totalVisible} visible trees over forest biomes.`);
             this.map.triggerRepaint();
           },
 
@@ -981,7 +1066,11 @@
 
           onRemove() {
             if (this.onMoveEnd) this.map.off("moveend", this.onMoveEnd);
-            if (this.onZoom) this.map.off("zoom", this.onZoom);
+            if (this.onZoomEnd) this.map.off("zoomend", this.onZoomEnd);
+            if (this.onIdle) this.map.off("idle", this.onIdle);
+            for (const group of this.meshGroups || []) {
+              for (const mesh of group) mesh.dispose?.();
+            }
             this.renderer?.dispose();
           }
         };
@@ -989,7 +1078,7 @@
         const beforeId = map.getLayer("Town names") ? "Town names" :
                          map.getLayer("Capitals") ? "Capitals" : undefined;
         map.addLayer(forestLayer, beforeId);
-        console.info(`Dense 3D forest installed: ${clusters.length} clusters, ${recordsByModel.reduce((a,b)=>a+b.length,0)} tree instances.`);
+        console.info("Continuous Gobkit biome forest layer installed.");
       }
 
 
