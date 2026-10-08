@@ -57,7 +57,7 @@
     },
     "routes-v18": {
       "type": "geojson",
-      "data": "./Merged_routes_v18_terrain_aware.geojson"
+      "data": "./Merged_routes_v18_terrain_aware_v2.geojson"
     }
   },
   "sprite": "https://api.mapbox.com/styles/v1/fitzchevalric/clmj7x4rt01oz01r4h0j07f13/af3n0lg65wanst1z5p4f92p8a/sprite?access_token=pk.eyJ1IjoiZml0emNoZXZhbHJpYyIsImEiOiJjazdzdXYzazUwazk0M2VtcnJ0N3BkZzY4In0.agcwn8WbpxmAVcXzzaXbsQ",
