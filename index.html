@@ -164,29 +164,11 @@
       margin: 0;
       cursor: pointer;
     }
-
-    .forest-debug {
-      position: absolute;
-      z-index: 20;
-      left: 10px;
-      top: 58px;
-      min-width: 280px;
-      max-width: 430px;
-      padding: 9px 11px;
-      border-radius: 8px;
-      background: rgba(24, 28, 24, .90);
-      color: #eef5e9;
-      font: 12px/1.35 Consolas, Monaco, monospace;
-      box-shadow: 0 2px 8px rgba(0,0,0,.24);
-      white-space: pre-line;
-      pointer-events: none;
-    }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <div id="status">Bigane + Kanka initialiseren...</div>
-  <div id="forest-debug" class="forest-debug">deck.gl forest: wachten op kaart...</div>
 
   <div class="layer-switcher" id="layer-switcher">
     <strong>Lagen</strong>
@@ -201,27 +183,8 @@
   </div>
 
 
-  <script src="https://unpkg.com/deck.gl@9.4.0/dist.min.js"></script>
-
   <script type="module">
     import * as maplibregl from "https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs";
-    // deck.gl uses the official standalone bundle above. MapLibre v6 must use
-    // MapLibreOverlay (not MapboxOverlay) so camera/terrain synchronization uses
-    // MapLibre public APIs. One bundle also keeps luma.gl to a single version.
-    let MapLibreOverlay = null;
-    let ColumnLayer = null;
-
-    async function ensureDeckGl() {
-      const deckGlobal = globalThis.deck;
-      if (!deckGlobal) {
-        throw new Error("deck.gl standalone bundle kon niet worden geladen");
-      }
-      MapLibreOverlay = deckGlobal.MapLibreOverlay;
-      ColumnLayer = deckGlobal.ColumnLayer;
-      if (!MapLibreOverlay || !ColumnLayer) {
-        throw new Error("deck.gl standalone bundle mist MapLibreOverlay of ColumnLayer");
-      }
-    }
 
     // Three.js is deliberately loaded lazily. A failed 3D dependency must never
     // prevent the base MapLibre map from starting.
@@ -245,32 +208,6 @@
     const KANKA_ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiMjdhZWUxZDFlMmY2NzY5NTgxOWQxNzVmMTViMTc1OTQ1NzczOWZiNTAwOGU2NGM4NWVkMjg4NGUxNjU0ZGExZjNjMmI1ZTQ2NDk1ZTQ5MTUiLCJpYXQiOjE3OTA2ODIwOTYuNjg2NzYsIm5iZiI6MTc5MDY4MjA5Ni42ODY3NjEsImV4cCI6MTgyMjIxODA5Ni42ODE0OTMsInN1YiI6IjIwMTY1MCIsInNjb3BlcyI6W119.VzFgAQZcD6U92h1uoLA70gxNZ_14RfHtVTkhe3X4cVxA-haNtGTGH3ULugqmje0EkRSptcJyNglIOlNiKe3qFnGakEp9evGOmnkWbmTYrsgjZEMHFKGfA9HtCKh07ITRZrToAYxK3_u6nm4JWZcK3uSKXNuXwr4C5VQ0OOTulUR20ZSbyvFMaAWH3J9XtFrV5wK1xYmMAqr3T_Wj4FVmk95xZrobz8-SlEOyELS_jdKrtdbvmWnNAZt5PH0Osixn2lSKy3YH7qr_fIRG7R4pdGJNtW14n_lJ5NgJpQ1jI9K7L117CNfpCUaWcGrVatz8m4_aEQwroPEb2pHOK6vZKyAp4zv-Rr5EZYF1Fe1MzpW49rwdWYl6eES5KsYEj0_eGPY9utKrHg73ETyGOkK5DqpYIuo9lpDV9dlZKdWzWbodUngp_rkjTjZCitA9qNgoaqyJOOV6sNlr2vUXS6SNH6jBJC_Hyxntq4uweFbUmcWkrg0eGBH87d7yUg4UX_XbFs4ssNw4jvzEL1LVgQ1pPlSZB1Uhlr5q7tULEVT5NrqTSjz5-NtnxJrgXl2TC0yrLgkObssW4VOB-kFo37eHC13dnhvvNvwxNiH9Ay67z5qzS4LVyh3GN6hAuJsT0dnmm0ShU-Vz5K2HiCAXjZkG0NvzFYQjFh1Tm9FlTR-Qm-w";
     const KANKA_CAMPAIGN_ID = "196997";
     const status = document.getElementById("status");
-    const forestDebug = document.getElementById("forest-debug");
-    const deckForestDiagnostics = {
-      sourceAll: 0,
-      sourceForest: 0,
-      renderedAll: 0,
-      renderedForest: 0,
-      used: "none",
-      patches: 0,
-      zoom: 0,
-      note: ""
-    };
-
-    function updateForestDebug() {
-      if (!forestDebug) return;
-      forestDebug.textContent = [
-        `deck.gl forest diagnose`,
-        `zoom: ${deckForestDiagnostics.zoom.toFixed(2)}`,
-        `source features: ${deckForestDiagnostics.sourceAll}`,
-        `source forest: ${deckForestDiagnostics.sourceForest}`,
-        `rendered features: ${deckForestDiagnostics.renderedAll}`,
-        `rendered forest: ${deckForestDiagnostics.renderedForest}`,
-        `gebruikt: ${deckForestDiagnostics.used}`,
-        `patches: ${deckForestDiagnostics.patches}`,
-        deckForestDiagnostics.note ? `note: ${deckForestDiagnostics.note}` : ""
-      ].filter(Boolean).join("\n");
-    }
 
     const escapeHtml = (value) => String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -794,362 +731,376 @@
 
 
       // ---------------------------------------------------------------------
-      // DECK.GL FOREST CANOPY - GPU-instanced low-poly forest masses
+      // GPU FOREST - MapLibre custom layer following terrain heightmap
+      // Based on MapLibre's official "custom layers that follow the terrain"
+      // pattern. Terrain elevation is sampled in the vertex shader, so no
+      // queryTerrainElevation() calls are needed per canopy instance.
       // ---------------------------------------------------------------------
-      // This deliberately does NOT draw individual trees. At Bigane's map scale
-      // each polygon represents a mass of tree crowns. deck.gl batches the
-      // columns on the GPU and MapLibre remains responsible for the terrain/map.
-      const DECK_FOREST_MIN_ZOOM = 4.05;
-      const DECK_FOREST_SOURCE = "composite";
-      const DECK_FOREST_SOURCE_LAYER = "BiomesBigane2-7auf3g";
-      const DECK_FOREST_GRID_METERS = 16000;
-      const DECK_FOREST_WORLD_UNITS = DECK_FOREST_GRID_METERS / 40075016.68557849;
-      const DECK_FOREST_PAD = 0.18;
-      const DECK_FOREST_MAX_PATCHES = 8000;
-      const deckForestCellCache = new Map();
-      let deckForestOverlay = null;
-      let deckForestUpdateTimer = null;
-
-      const DECK_FOREST_BIOMES = new Set([
-        "Tropical rainforest",
-        "Tropical seasonal forest",
-        "Temperate rainforest",
-        "Temperate deciduous forest",
-        "Taiga",
-        "Deep Wood",
-        "Wetland",
-        "Savanna"
+      const FOREST_GPU_MIN_ZOOM = 4.15;
+      const FOREST_GPU_MAX_INSTANCES = 12000;
+      const FOREST_GPU_GRID_METERS = 18000;
+      const FOREST_GPU_GRID_UNITS = FOREST_GPU_GRID_METERS / 40075016.68557849;
+      const FOREST_GPU_HEIGHTMAP_SIZE = 1024;
+      const FOREST_GPU_PAD = 0.45;
+      const FOREST_GPU_SOURCE = 'composite';
+      const FOREST_GPU_SOURCE_LAYER = 'BiomesBigane2-7auf3g';
+      const FOREST_GPU_BIOMES = new Set([
+        'Tropical rainforest',
+        'Tropical seasonal forest',
+        'Temperate rainforest',
+        'Temperate deciduous forest',
+        'Taiga',
+        'Deep Wood',
+        'Wetland',
+        'Savanna'
       ]);
 
-      const DECK_FOREST_SHAPES = [
-        [[ 0.94, 0.03], [ 0.53, 0.79], [-0.13, 0.96], [-0.78, 0.54], [-0.91,-0.10], [-0.47,-0.82], [ 0.24,-0.92], [ 0.79,-0.48]],
-        [[ 0.97, 0.14], [ 0.69, 0.70], [ 0.10, 0.91], [-0.63, 0.76], [-0.95, 0.16], [-0.72,-0.48], [-0.09,-0.97], [ 0.63,-0.70]],
-        [[ 0.89,-0.06], [ 0.64, 0.58], [ 0.27, 0.96], [-0.45, 0.84], [-0.92, 0.37], [-0.83,-0.36], [-0.31,-0.88], [ 0.46,-0.83]],
-        [[ 0.95, 0.18], [ 0.42, 0.91], [-0.32, 0.84], [-0.89, 0.35], [-0.79,-0.42], [-0.18,-0.96], [ 0.54,-0.79], [ 0.91,-0.34]]
-      ];
-
-      function forestHashInt(x, y, salt = 0) {
-        let h = Math.imul((x | 0) ^ (0x9e3779b9 + salt * 1013), 0x85ebca6b);
-        h ^= Math.imul((y | 0) ^ (0xc2b2ae35 - salt * 1619), 0x27d4eb2f);
-        h ^= h >>> 15;
-        h = Math.imul(h, 0x85ebca6b);
-        h ^= h >>> 13;
-        return h >>> 0;
-      }
-
-      function forestHash01(x, y, salt = 0) {
-        return forestHashInt(x, y, salt) / 4294967295;
-      }
-
-      function deckForestMercatorY(lat) {
-        const clamped = Math.max(-85.05112878, Math.min(85.05112878, lat));
-        const rad = clamped * Math.PI / 180;
-        return (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) * 0.5;
-      }
-
-      function deckForestLatFromY(y) {
-        const n = Math.PI * (1 - 2 * y);
-        return Math.atan(Math.sinh(n)) * 180 / Math.PI;
-      }
-
-      function deckForestLngFromX(x) {
-        return x * 360 - 180;
-      }
-
-      function deckForestDensity(biome) {
+      function forestGpuDensity(biome) {
         switch (biome) {
-          case "Deep Wood": return 1.00;
-          case "Temperate rainforest": return 0.96;
-          case "Tropical rainforest": return 0.96;
-          case "Taiga": return 0.90;
-          case "Temperate deciduous forest": return 0.88;
-          case "Tropical seasonal forest": return 0.76;
-          case "Wetland": return 0.36;
-          case "Savanna": return 0.18;
+          case 'Deep Wood': return 1.0;
+          case 'Temperate rainforest': return 0.96;
+          case 'Tropical rainforest': return 0.94;
+          case 'Taiga': return 0.92;
+          case 'Temperate deciduous forest': return 0.88;
+          case 'Tropical seasonal forest': return 0.76;
+          case 'Wetland': return 0.40;
+          case 'Savanna': return 0.22;
           default: return 0;
         }
       }
 
-      function deckForestBaseColor(biome) {
-        switch (biome) {
-          case "Deep Wood": return [45, 76, 43];
-          case "Tropical rainforest": return [48, 91, 47];
-          case "Temperate rainforest": return [58, 96, 53];
-          case "Taiga": return [56, 82, 54];
-          case "Temperate deciduous forest": return [74, 105, 55];
-          case "Tropical seasonal forest": return [73, 111, 56];
-          case "Wetland": return [77, 103, 61];
-          case "Savanna": return [96, 117, 62];
-          default: return [68, 99, 55];
-        }
+      function forestGpuHash(x, y, salt = 0) {
+        let h = Math.imul((x | 0) ^ (salt * 374761393), 0x45d9f3b);
+        h ^= Math.imul((y | 0) ^ (salt * 668265263), 0x27d4eb2d);
+        h ^= h >>> 16;
+        h = Math.imul(h, 0x45d9f3b);
+        h ^= h >>> 16;
+        return (h >>> 0) / 4294967295;
       }
 
-      function deckForestHeight(biome, ix, iy) {
-        const r = forestHash01(ix, iy, 17);
-        const base = biome === "Deep Wood" ? 470
-          : biome.includes("rainforest") ? 430
-          : biome === "Taiga" ? 390
-          : biome === "Wetland" ? 260
-          : biome === "Savanna" ? 220
-          : 340;
-        return base * (0.78 + r * 0.44);
+      function forestGpuMercY(lat) {
+        const r = Math.max(-85.05112878, Math.min(85.05112878, lat)) * Math.PI / 180;
+        return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) * 0.5;
       }
 
-      function deckForestFilterFeatures(features) {
-        return (features || []).filter(feature => {
-          const biome = feature?.properties?.Biome || "";
-          const type = feature?.geometry?.type;
-          return DECK_FOREST_BIOMES.has(biome) && (type === "Polygon" || type === "MultiPolygon");
-        });
+      function forestGpuLng(x) { return x * 360 - 180; }
+      function forestGpuLat(y) {
+        const n = Math.PI * (1 - 2 * y);
+        return Math.atan(Math.sinh(n)) * 180 / Math.PI;
       }
 
-      function deckForestGetLoadedBiomeFeatures() {
-        deckForestDiagnostics.sourceAll = 0;
-        deckForestDiagnostics.sourceForest = 0;
-        deckForestDiagnostics.renderedAll = 0;
-        deckForestDiagnostics.renderedForest = 0;
-        deckForestDiagnostics.used = "none";
-        deckForestDiagnostics.note = "";
+      function forestGpuFeatureBounds(feature) {
+        let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+        const walk = value => {
+          if (!Array.isArray(value)) return;
+          if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
+            west = Math.min(west, value[0]);
+            east = Math.max(east, value[0]);
+            south = Math.min(south, value[1]);
+            north = Math.max(north, value[1]);
+          } else {
+            for (const child of value) walk(child);
+          }
+        };
+        walk(feature?.geometry?.coordinates);
+        return {west, east, south, north};
+      }
 
-        let sourceFeatures = [];
+      function forestGpuCollectFeatures() {
+        let raw = [];
         try {
-          const biomeLayerSpec = map.getLayer("Biomes");
-          const biomeSource = biomeLayerSpec?.source || DECK_FOREST_SOURCE;
-          const biomeSourceLayer = biomeLayerSpec?.["source-layer"] || DECK_FOREST_SOURCE_LAYER;
-          sourceFeatures = map.querySourceFeatures(biomeSource, {
-            sourceLayer: biomeSourceLayer
-          }) || [];
-          deckForestDiagnostics.sourceAll = sourceFeatures.length;
+          raw = map.querySourceFeatures(FOREST_GPU_SOURCE, {sourceLayer: FOREST_GPU_SOURCE_LAYER}) || [];
         } catch (error) {
-          deckForestDiagnostics.note = `source query fout: ${error?.message || error}`;
-          console.warn("deck.gl forest: biome source query failed", error);
+          console.warn('Forest source query failed:', error);
+        }
+        if (!raw.length && map.getLayer('Biomes')) {
+          try { raw = map.queryRenderedFeatures({layers: ['Biomes']}) || []; }
+          catch (error) { console.warn('Forest rendered query failed:', error); }
         }
 
-        const sourceForest = deckForestFilterFeatures(sourceFeatures);
-        deckForestDiagnostics.sourceForest = sourceForest.length;
-        if (sourceForest.length) {
-          deckForestDiagnostics.used = "querySourceFeatures";
-          updateForestDebug();
-          return sourceForest;
+        const out = [];
+        const seen = new Set();
+        for (const feature of raw) {
+          const biome = feature?.properties?.Biome || '';
+          if (!FOREST_GPU_BIOMES.has(biome)) continue;
+          const geom = feature?.geometry;
+          if (!geom || (geom.type !== 'Polygon' && geom.type !== 'MultiPolygon')) continue;
+          const b = forestGpuFeatureBounds(feature);
+          if (!Number.isFinite(b.west)) continue;
+          const first = geom.type === 'Polygon' ? geom.coordinates?.[0]?.[0] : geom.coordinates?.[0]?.[0]?.[0];
+          const key = `${biome}|${first?.[0]?.toFixed?.(4) || ''}|${first?.[1]?.toFixed?.(4) || ''}|${b.west.toFixed(3)}|${b.south.toFixed(3)}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({feature, biome, bounds: b});
         }
+        return out;
+      }
 
-        // Important: fallback if the source query returned no *usable forest*
-        // features, not merely when the source result was completely empty.
-        if (map.getLayer("Biomes")) {
-          try {
-            const canvas = map.getCanvas();
-            const rendered = map.queryRenderedFeatures(
-              [[0, 0], [canvas.clientWidth, canvas.clientHeight]],
-              { layers: ["Biomes"] }
-            ) || [];
-            deckForestDiagnostics.renderedAll = rendered.length;
-            const renderedForest = deckForestFilterFeatures(rendered);
-            deckForestDiagnostics.renderedForest = renderedForest.length;
-            if (renderedForest.length) {
-              deckForestDiagnostics.used = "queryRenderedFeatures";
-              updateForestDebug();
-              return renderedForest;
-            }
-          } catch (error) {
-            deckForestDiagnostics.note = `rendered query fout: ${error?.message || error}`;
-            console.warn("deck.gl forest: rendered biome fallback failed", error);
+      function forestGpuBiomeAt(features, lng, lat) {
+        for (const item of features) {
+          const b = item.bounds;
+          if (lng < b.west || lng > b.east || lat < b.south || lat > b.north) continue;
+          if (featureContainsCoordinate(item.feature, [lng, lat])) return item.biome;
+        }
+        return '';
+      }
+
+      function forestGpuCreateProgram(gl, vertexSource, fragmentSource) {
+        const compile = (type, source) => {
+          const shader = gl.createShader(type);
+          gl.shaderSource(shader, `#version 300 es
+precision highp float;
+${source}`);
+          gl.compileShader(shader);
+          if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            throw new Error(gl.getShaderInfoLog(shader) || 'Shader compile error');
           }
-        } else {
-          deckForestDiagnostics.note = "laag 'Biomes' bestaat niet";
+          return shader;
+        };
+        const program = gl.createProgram();
+        gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+        gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+          throw new Error(gl.getProgramInfoLog(program) || 'Shader link error');
         }
-
-        updateForestDebug();
-        return [];
+        return program;
       }
 
-      function deckForestBiomeAt(features, lng, lat) {
-        const point = [lng, lat];
-        for (const feature of features) {
-          if (featureContainsCoordinate(feature, point)) return feature.properties?.Biome || "";
+      function forestGpuCanopyGeometry() {
+        // 6-sided, low-poly crown: bottom ring, shoulder ring and top point.
+        // Geometry is deliberately tiny; thousands of instances are rendered in one call.
+        const seg = 6;
+        const bottomR = 0.88;
+        const shoulderR = 1.0;
+        const verts = [];
+        const pushTri = (a,b,c) => verts.push(...a,...b,...c);
+        const ring = (r,z,i) => {
+          const a = i / seg * Math.PI * 2;
+          return [Math.cos(a)*r, Math.sin(a)*r, z];
+        };
+        for (let i=0;i<seg;i++) {
+          const j=(i+1)%seg;
+          const b0=ring(bottomR,0.0,i), b1=ring(bottomR,0.0,j);
+          const s0=ring(shoulderR,0.46,i), s1=ring(shoulderR,0.46,j);
+          pushTri(b0,b1,s1); pushTri(b0,s1,s0);
+          pushTri(s0,s1,[0,0,1.0]);
         }
-        return "";
+        return new Float32Array(verts);
       }
 
-      function buildDeckForestData() {
-        const zoom = map.getZoom();
-        deckForestDiagnostics.zoom = zoom;
-        if (zoom < DECK_FOREST_MIN_ZOOM) {
-          deckForestDiagnostics.patches = 0;
-          deckForestDiagnostics.note = `zoom onder minimum ${DECK_FOREST_MIN_ZOOM}`;
-          updateForestDebug();
-          return [];
-        }
+      function installDenseThreeForestLayer() {
+        if (map.getLayer('bigane-3d-forest')) return;
 
-        const features = deckForestGetLoadedBiomeFeatures();
-        if (!features.length) {
-          deckForestDiagnostics.patches = 0;
-          if (!deckForestDiagnostics.note) deckForestDiagnostics.note = "geen bruikbare bos-polygonen gevonden";
-          updateForestDebug();
-          return [];
-        }
+        const forestLayer = {
+          id: 'bigane-3d-forest',
+          type: 'custom',
+          renderingMode: '3d',
 
-        const b = map.getBounds();
-        const lngSpan = b.getEast() - b.getWest();
-        const latSpan = b.getNorth() - b.getSouth();
-        const west = b.getWest() - lngSpan * DECK_FOREST_PAD;
-        const east = b.getEast() + lngSpan * DECK_FOREST_PAD;
-        const south = b.getSouth() - latSpan * DECK_FOREST_PAD;
-        const north = b.getNorth() + latSpan * DECK_FOREST_PAD;
+          onAdd(mapInstance, gl) {
+            this.map = mapInstance;
+            this.count = 0;
+            this.needsRebuild = true;
+            this.heightBounds = new Float32Array([0,0,1,1]);
 
-        const x0 = (west + 180) / 360;
-        const x1 = (east + 180) / 360;
-        const y0 = deckForestMercatorY(north);
-        const y1 = deckForestMercatorY(south);
-        const ix0 = Math.floor(x0 / DECK_FOREST_WORLD_UNITS) - 1;
-        const ix1 = Math.ceil(x1 / DECK_FOREST_WORLD_UNITS) + 1;
-        const iy0 = Math.floor(y0 / DECK_FOREST_WORLD_UNITS) - 1;
-        const iy1 = Math.ceil(y1 / DECK_FOREST_WORLD_UNITS) + 1;
+            this.program = forestGpuCreateProgram(gl, `
+              uniform mat4 u_matrix;
+              uniform vec4 u_bounds;
+              uniform sampler2D u_heightMap;
+              in vec3 a_local;
+              in vec2 a_position;
+              in float a_mpu;
+              in float a_radius;
+              in float a_height;
+              in float a_seed;
+              out float v_light;
+              out float v_seed;
 
-        const result = [];
-        for (let ix = ix0; ix <= ix1; ix++) {
-          for (let iy = iy0; iy <= iy1; iy++) {
-            if (result.length >= DECK_FOREST_MAX_PATCHES) return result;
+              void main() {
+                vec2 worldXY = a_position + a_local.xy * a_radius * a_mpu;
+                vec2 uv = (worldXY - u_bounds.xy) / (u_bounds.zw - u_bounds.xy);
+                uv = clamp(uv, vec2(0.0), vec2(1.0));
+                float elevation = texture(u_heightMap, vec2(uv.x, 1.0 - uv.y)).r;
+                float zMeters = elevation + a_local.z * a_height;
+                gl_Position = u_matrix * vec4(worldXY, zMeters * a_mpu, 1.0);
+                v_light = 0.72 + a_local.z * 0.24 + a_local.x * 0.045 - a_local.y * 0.035;
+                v_seed = a_seed;
+              }
+            `, `
+              in float v_light;
+              in float v_seed;
+              out vec4 fragColor;
+              void main() {
+                vec3 dark = vec3(0.17, 0.29, 0.13);
+                vec3 light = vec3(0.34, 0.48, 0.24);
+                float variation = fract(v_seed * 13.731);
+                vec3 base = mix(dark, light, 0.35 + variation * 0.45);
+                fragColor = vec4(base * v_light, 0.98);
+              }
+            `);
 
-            const jitterX = (forestHash01(ix, iy, 1) - 0.5) * DECK_FOREST_WORLD_UNITS * 0.72;
-            const jitterY = (forestHash01(ix, iy, 2) - 0.5) * DECK_FOREST_WORLD_UNITS * 0.72;
-            const mx = ix * DECK_FOREST_WORLD_UNITS + DECK_FOREST_WORLD_UNITS * 0.5 + jitterX;
-            const my = iy * DECK_FOREST_WORLD_UNITS + DECK_FOREST_WORLD_UNITS * 0.5 + jitterY;
-            if (mx < x0 || mx > x1 || my < y0 || my > y1) continue;
+            const canopy = forestGpuCanopyGeometry();
+            this.vertexCount = canopy.length / 3;
+            this.canopyBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.canopyBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, canopy, gl.STATIC_DRAW);
 
-            const lng = deckForestLngFromX(mx);
-            const lat = deckForestLatFromY(my);
-            const key = `${ix}:${iy}`;
-            let cached = deckForestCellCache.get(key);
+            // Instance layout: x, y, mpu, radiusMeters, heightMeters, seed
+            this.instanceBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, FOREST_GPU_MAX_INSTANCES * 6 * 4, gl.DYNAMIC_DRAW);
 
-            if (!cached) {
-              const biome = deckForestBiomeAt(features, lng, lat);
-              if (!biome) continue;
-              const density = deckForestDensity(biome);
-              if (forestHash01(ix, iy, 5) > density) continue;
-              const elevation = map.queryTerrainElevation([lng, lat]);
-              cached = {
-                biome,
-                elevation: Number.isFinite(elevation) ? elevation : 0,
-                variant: forestHashInt(ix, iy, 7) % 4
-              };
-              deckForestCellCache.set(key, cached);
-            }
+            gl.getExtension('EXT_color_buffer_float');
+            this.heightMap = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
+            gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, FOREST_GPU_HEIGHTMAP_SIZE, FOREST_GPU_HEIGHTMAP_SIZE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-            const baseColor = deckForestBaseColor(cached.biome);
-            const shade = 0.82 + forestHash01(ix, iy, 9) * 0.30;
-            const color = [
-              Math.min(255, Math.round(baseColor[0] * shade)),
-              Math.min(255, Math.round(baseColor[1] * shade)),
-              Math.min(255, Math.round(baseColor[2] * shade)),
-              220
-            ];
-
-            result.push({
-              position: [lng, lat, cached.elevation - 70],
-              biome: cached.biome,
-              variant: cached.variant,
-              height: deckForestHeight(cached.biome, ix, iy),
-              color
-            });
-          }
-        }
-        return result;
-      }
-
-      function makeDeckForestLayers(data) {
-        const beforeId = map.getLayer("Town names") ? "Town names" :
-                         map.getLayer("Capitals") ? "Capitals" : undefined;
-        const radii = [8500, 10000, 11500, 13000];
-        const angles = [0, 14, 31, 49];
-
-        return radii.map((radius, variant) => new ColumnLayer({
-          id: `bigane-deck-forest-${variant}`,
-          data: data.filter(d => d.variant === variant),
-          beforeId,
-          diskResolution: DECK_FOREST_SHAPES[variant].length,
-          vertices: DECK_FOREST_SHAPES[variant],
-          radius,
-          angle: angles[variant],
-          radiusUnits: "meters",
-          extruded: true,
-          filled: true,
-          wireframe: false,
-          flatShading: true,
-          elevationScale: 1,
-          getPosition: d => d.position,
-          getElevation: d => d.height,
-          getFillColor: d => d.color,
-          pickable: false,
-          material: {
-            ambient: 0.72,
-            diffuse: 0.48,
-            shininess: 2,
-            specularColor: [30, 38, 25]
+            this.onMoveEnd = () => { this.needsRebuild = true; this.rebuildInstances(gl); };
+            this.onIdle = () => {
+              if (this.needsRebuild || this.count === 0) this.rebuildInstances(gl);
+            };
+            mapInstance.on('moveend', this.onMoveEnd);
+            mapInstance.on('idle', this.onIdle);
+            this.rebuildInstances(gl);
           },
-          updateTriggers: {
-            getPosition: data.length,
-            getElevation: data.length,
-            getFillColor: data.length
+
+          rebuildInstances(gl) {
+            if (!this.map || this.map.getZoom() < FOREST_GPU_MIN_ZOOM) {
+              this.count = 0;
+              this.needsRebuild = false;
+              this.map?.triggerRepaint();
+              return;
+            }
+
+            const features = forestGpuCollectFeatures();
+            if (!features.length) {
+              this.count = 0;
+              this.needsRebuild = true;
+              this.map.triggerRepaint();
+              return;
+            }
+
+            const b = this.map.getBounds();
+            const lngSpan = b.getEast() - b.getWest();
+            const latSpan = b.getNorth() - b.getSouth();
+            const west = b.getWest() - lngSpan * FOREST_GPU_PAD;
+            const east = b.getEast() + lngSpan * FOREST_GPU_PAD;
+            const south = b.getSouth() - latSpan * FOREST_GPU_PAD;
+            const north = b.getNorth() + latSpan * FOREST_GPU_PAD;
+            const x0=(west+180)/360, x1=(east+180)/360;
+            const y0=forestGpuMercY(north), y1=forestGpuMercY(south);
+
+            // Heightmap covers the same padded area, with a little extra for crown radii.
+            const extra = FOREST_GPU_GRID_UNITS * 1.6;
+            this.heightBounds[0] = x0 - extra;
+            this.heightBounds[1] = y0 - extra;
+            this.heightBounds[2] = x1 + extra;
+            this.heightBounds[3] = y1 + extra;
+
+            const ix0=Math.floor(x0/FOREST_GPU_GRID_UNITS)-1;
+            const ix1=Math.ceil(x1/FOREST_GPU_GRID_UNITS)+1;
+            const iy0=Math.floor(y0/FOREST_GPU_GRID_UNITS)-1;
+            const iy1=Math.ceil(y1/FOREST_GPU_GRID_UNITS)+1;
+            const data=[];
+
+            outer: for (let ix=ix0; ix<=ix1; ix++) {
+              for (let iy=iy0; iy<=iy1; iy++) {
+                const jx=(forestGpuHash(ix,iy,1)-0.5)*FOREST_GPU_GRID_UNITS*0.68;
+                const jy=(forestGpuHash(ix,iy,2)-0.5)*FOREST_GPU_GRID_UNITS*0.68;
+                const mx=ix*FOREST_GPU_GRID_UNITS+jx;
+                const my=iy*FOREST_GPU_GRID_UNITS+jy;
+                if (mx<x0 || mx>x1 || my<y0 || my>y1) continue;
+                const lng=forestGpuLng(mx), lat=forestGpuLat(my);
+                const biome=forestGpuBiomeAt(features,lng,lat);
+                if (!biome) continue;
+                const density=forestGpuDensity(biome);
+                if (forestGpuHash(ix,iy,3)>density) continue;
+
+                const m = maplibregl.MercatorCoordinate.fromLngLat([lng,lat]);
+                const rRand=forestGpuHash(ix,iy,4);
+                const hRand=forestGpuHash(ix,iy,5);
+                const biomeScale = biome==='Deep Wood' ? 1.12 : biome.includes('rainforest') ? 1.08 : biome==='Savanna' ? 0.78 : 1.0;
+                const radius=FOREST_GPU_GRID_METERS*(0.58+rRand*0.42)*biomeScale;
+                const height=520*(0.72+hRand*0.58)*biomeScale;
+                const seed=forestGpuHash(ix,iy,6);
+                data.push(m.x,m.y,m.meterInMercatorCoordinateUnits(),radius,height,seed);
+                if (data.length/6 >= FOREST_GPU_MAX_INSTANCES) break outer;
+              }
+            }
+
+            this.count=data.length/6;
+            gl.bindBuffer(gl.ARRAY_BUFFER,this.instanceBuffer);
+            gl.bufferSubData(gl.ARRAY_BUFFER,0,new Float32Array(data));
+            this.needsRebuild=false;
+            console.info(`GPU terrain forest: ${this.count} canopy instances, ${features.length} forest biome features.`);
+            this.map.triggerRepaint();
+          },
+
+          prerender(gl, options) {
+            if (!this.count) return;
+            options.renderTerrainHeightMap?.({
+              texture: this.heightMap,
+              width: FOREST_GPU_HEIGHTMAP_SIZE,
+              height: FOREST_GPU_HEIGHTMAP_SIZE,
+              bounds: this.heightBounds
+            });
+          },
+
+          render(gl, options) {
+            if (!this.count || this.map.getZoom() < FOREST_GPU_MIN_ZOOM) return;
+            gl.useProgram(this.program);
+            gl.uniformMatrix4fv(gl.getUniformLocation(this.program,'u_matrix'),false,options.defaultProjectionData.mainMatrix);
+            gl.uniform4fv(gl.getUniformLocation(this.program,'u_bounds'),this.heightBounds);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D,this.heightMap);
+            gl.uniform1i(gl.getUniformLocation(this.program,'u_heightMap'),0);
+
+            const localLoc=gl.getAttribLocation(this.program,'a_local');
+            gl.bindBuffer(gl.ARRAY_BUFFER,this.canopyBuffer);
+            gl.enableVertexAttribArray(localLoc);
+            gl.vertexAttribPointer(localLoc,3,gl.FLOAT,false,0,0);
+            gl.vertexAttribDivisor(localLoc,0);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER,this.instanceBuffer);
+            const stride=6*4;
+            const attrs=[
+              ['a_position',2,0],
+              ['a_mpu',1,2*4],
+              ['a_radius',1,3*4],
+              ['a_height',1,4*4],
+              ['a_seed',1,5*4]
+            ];
+            for (const [name,size,offset] of attrs) {
+              const loc=gl.getAttribLocation(this.program,name);
+              gl.enableVertexAttribArray(loc);
+              gl.vertexAttribPointer(loc,size,gl.FLOAT,false,stride,offset);
+              gl.vertexAttribDivisor(loc,1);
+            }
+
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthMask(true);
+            gl.disable(gl.CULL_FACE);
+            gl.drawArraysInstanced(gl.TRIANGLES,0,this.vertexCount,this.count);
+          },
+
+          onRemove(mapInstance, gl) {
+            mapInstance.off('moveend',this.onMoveEnd);
+            mapInstance.off('idle',this.onIdle);
+            if (this.canopyBuffer) gl.deleteBuffer(this.canopyBuffer);
+            if (this.instanceBuffer) gl.deleteBuffer(this.instanceBuffer);
+            if (this.heightMap) gl.deleteTexture(this.heightMap);
+            if (this.program) gl.deleteProgram(this.program);
           }
-        }));
-      }
+        };
 
-      function refreshDeckForest() {
-        if (!deckForestOverlay) return;
-        const data = buildDeckForestData();
-        deckForestDiagnostics.patches = data.length;
-        if (data.length && deckForestDiagnostics.note.startsWith("geen bruikbare")) deckForestDiagnostics.note = "";
-        updateForestDebug();
-        deckForestOverlay.setProps({ layers: makeDeckForestLayers(data) });
-        console.info(`deck.gl forest canopy active: ${data.length} patches`);
-        if (!data.length) console.warn("deck.gl forest: 0 patches; no forest biome features matched the current loaded area.");
-      }
-
-      function scheduleDeckForestRefresh() {
-        clearTimeout(deckForestUpdateTimer);
-        deckForestUpdateTimer = setTimeout(refreshDeckForest, 90);
-      }
-
-      async function installDenseThreeForestLayer() {
-        if (deckForestOverlay) return;
-
-        deckForestDiagnostics.note = "deck.gl standalone bundle controleren...";
-        deckForestDiagnostics.zoom = map.getZoom();
-        updateForestDebug();
-
-        await ensureDeckGl();
-
-        deckForestDiagnostics.note = "deck.gl bundle ok; overlay installeren...";
-        deckForestDiagnostics.zoom = map.getZoom();
-        updateForestDebug();
-
-        deckForestOverlay = new MapLibreOverlay({
-          interleaved: true,
-          layers: []
-        });
-        map.addControl(deckForestOverlay);
-
-        map.on("moveend", scheduleDeckForestRefresh);
-        map.on("zoomend", scheduleDeckForestRefresh);
-        map.on("pitchend", scheduleDeckForestRefresh);
-        map.on("rotateend", scheduleDeckForestRefresh);
-
-        deckForestDiagnostics.note = "overlay actief; wachten op eerste forest-query...";
-        updateForestDebug();
-
-        // Do not rely only on a future idle event: run once immediately after
-        // the current stack, then again on idle when vector tiles are settled.
-        setTimeout(() => refreshDeckForest().catch(error => {
-          deckForestDiagnostics.note = `refresh fout: ${error?.message || error}`;
-          updateForestDebug();
-          console.warn("deck.gl forest initial refresh failed:", error);
-        }), 0);
-        map.once("idle", () => refreshDeckForest().catch(error => {
-          deckForestDiagnostics.note = `idle refresh fout: ${error?.message || error}`;
-          updateForestDebug();
-          console.warn("deck.gl forest idle refresh failed:", error);
-        }));
-        console.info("deck.gl forest canopy overlay installed.");
+        const beforeId = map.getLayer('Town names') ? 'Town names' :
+                         map.getLayer('Capitals') ? 'Capitals' : undefined;
+        map.addLayer(forestLayer,beforeId);
+        console.info('GPU terrain-following forest layer installed.');
       }
 
 
@@ -1180,6 +1131,12 @@
           exaggeration: 1.5
         });
 
+        try {
+          installDenseThreeForestLayer();
+        } catch (error) {
+          console.warn('GPU boslaag overgeslagen; kaart blijft werken:', error);
+        }
+
         // Hillshade from the same DEM.
         if (!map.getLayer("bigane-hillshade")) {
           const hillshadeLayer = {
@@ -1199,15 +1156,6 @@
             map.addLayer(hillshadeLayer);
           }
         }
-
-        // Install deck.gl only after terrain + hillshade are in place, so a
-        // forest-layer failure can never prevent the base terrain rendering.
-        installDenseThreeForestLayer().catch(error => {
-          deckForestDiagnostics.zoom = map.getZoom();
-          deckForestDiagnostics.note = `INSTALLATIEFOUT: ${error?.message || error}`;
-          updateForestDebug();
-          console.warn("deck.gl boslaag overgeslagen; kaart blijft werken:", error);
-        });
 
 
         for (const layerId of ["Town names", "Capitals", "clickable"]) {
