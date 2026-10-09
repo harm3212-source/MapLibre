@@ -841,8 +841,18 @@
           }) || [];
         } catch (error) {
           console.warn("deck.gl forest: biome source query failed", error);
-          return [];
         }
+
+        // Fallback: query the actual rendered biome layer. This is more reliable
+        // immediately after startup on some MapLibre/vector-tile combinations.
+        if (!features.length && map.getLayer("Biomes")) {
+          try {
+            features = map.queryRenderedFeatures({ layers: ["Biomes"] }) || [];
+          } catch (error) {
+            console.warn("deck.gl forest: rendered biome fallback failed", error);
+          }
+        }
+
         return features.filter(feature => {
           const biome = feature?.properties?.Biome || "";
           const type = feature?.geometry?.type;
@@ -977,6 +987,7 @@
         const data = buildDeckForestData();
         deckForestOverlay.setProps({ layers: makeDeckForestLayers(data) });
         console.info(`deck.gl forest canopy active: ${data.length} patches`);
+        if (!data.length) console.warn("deck.gl forest: 0 patches; no forest biome features matched the current loaded area.");
       }
 
       function scheduleDeckForestRefresh() {
@@ -984,7 +995,7 @@
         deckForestUpdateTimer = setTimeout(refreshDeckForest, 90);
       }
 
-      function installDenseThreeForestLayer() {
+      async function installDenseThreeForestLayer() {
         if (!window.deck) throw new Error("deck.gl bundle kon niet laden");
         if (deckForestOverlay) return;
 
@@ -1030,10 +1041,6 @@
           exaggeration: 1.5
         });
 
-        installDenseThreeForestLayer().catch(error => {
-          console.warn("3D boslaag overgeslagen; kaart blijft werken:", error);
-        });
-
         // Hillshade from the same DEM.
         if (!map.getLayer("bigane-hillshade")) {
           const hillshadeLayer = {
@@ -1053,6 +1060,12 @@
             map.addLayer(hillshadeLayer);
           }
         }
+
+        // Install deck.gl only after terrain + hillshade are in place, so a
+        // forest-layer failure can never prevent the base terrain rendering.
+        installDenseThreeForestLayer().catch(error => {
+          console.warn("deck.gl boslaag overgeslagen; kaart blijft werken:", error);
+        });
 
 
         for (const layerId of ["Town names", "Capitals", "clickable"]) {
