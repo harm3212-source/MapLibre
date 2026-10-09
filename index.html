@@ -216,7 +216,11 @@
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
 
-    const normalizeLocationName = (name) => String(name || "").trim().toLocaleLowerCase();
+    const normalizeLocationName = (name) => String(name || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLocaleLowerCase();
 
     function showError(prefix, error) {
       const message = error?.message || String(error || "Onbekende fout");
@@ -737,14 +741,31 @@
       // Widths are deliberately cartographic so the landmarks remain readable
       // at Bigane's continental map scale.
       const LANDMARKS_3D = [
-        { name: "Stonefront", model: "./Stonefront_v2_Textured.glb", widthMeters: 36000, rotationDeg: 0 },
-        { name: "Ehlehuak", model: "./Ehlehuak_v2_MapReady.glb", widthMeters: 43000, rotationDeg: 0 },
-        { name: "Khuktul", model: "./Khuktul_v1_MapReady.glb", widthMeters: 36000, rotationDeg: 0, aliases: ["Kuktul"] },
-        { name: "Ambrezzo", model: "./Ambrezzo_v2_MapReady.glb", widthMeters: 36000, rotationDeg: 0 },
-        { name: "Yumizen", model: "./Yumizen_v1_MapReady.glb", widthMeters: 35000, rotationDeg: 0 },
-        { name: "Seawatch", model: "./Keelfort_v2_Compact_MapReady.glb", widthMeters: 36000, rotationDeg: 0 },
-        { name: "Old Hill", model: "./Ruined_Hill_Settlement_v1_MapReady.glb", widthMeters: 29000, rotationDeg: 0 }
+        // eastMeters: + = east, - = west. northMeters: + = north, - = south.
+        // These offsets anchor the *city model* rather than blindly centering its
+        // full bounding box on the map point. Harbour models need this because
+        // docks/quays are intentionally very asymmetrical.
+        { name: "Stonefront", model: "./Stonefront_v2_Textured.glb", widthMeters: 36000, rotationDeg: 0, eastMeters: 0, northMeters: 0 },
+        { name: "Ehlehuak", model: "./Ehlehuak_v2_MapReady.glb", widthMeters: 43000, rotationDeg: 0, eastMeters: 0, northMeters: 0, aliases: ["Ehuleak", "Ehléhuak", "Ehlehuak", "Ehuleák", "Ehleuak", "Ehleak"] },
+        { name: "Khuktul", model: "./Khuktul_v1_MapReady.glb", widthMeters: 18000, rotationDeg: -90, eastMeters: 5000, northMeters: 21000, aliases: ["Kuktul"] },
+        { name: "Ambrezzo", model: "./Ambrezzo_v2_MapReady.glb", widthMeters: 36000, rotationDeg: 180, eastMeters: -4500, northMeters: -3000 },
+        { name: "Yumizen", model: "./Yumizen_v1_MapReady.glb", widthMeters: 35000, rotationDeg: -32, eastMeters: 0, northMeters: 2500 },
+        { name: "Seawatch", model: "./Keelfort_v2_Compact_MapReady.glb", widthMeters: 24000, rotationDeg: 180, eastMeters: 14500, northMeters: 3500 },
+        { name: "Old Hill", model: "./Ruined_Hill_Settlement_v1_MapReady.glb", widthMeters: 29000, rotationDeg: 0, eastMeters: 0, northMeters: 0 }
       ];
+
+      function landmarkNameMatches(candidate, config) {
+        const name = normalizeLocationName(candidate);
+        const wantedNames = [config.name, ...(config.aliases || [])].map(normalizeLocationName);
+        if (wantedNames.includes(name)) return true;
+        // Very small fuzzy fallback for minor map/editor spelling drift.
+        const compact = (v) => String(v || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]/g, '');
+        const c = compact(candidate);
+        return wantedNames.some(w => {
+          const ww = compact(w);
+          return ww && (c === ww || c.includes(ww) || ww.includes(c));
+        });
+      }
 
       function findLandmarkCoordinates(config) {
         const wantedNames = [config.name, ...(config.aliases || [])].map(normalizeLocationName);
@@ -759,7 +780,7 @@
             const features = map.querySourceFeatures(source, { sourceLayer });
             for (const feature of features || []) {
               const name = feature?.properties?.Burg || feature?.properties?.name || feature?.properties?.Name;
-              if (!wantedNames.includes(normalizeLocationName(name))) continue;
+              if (!landmarkNameMatches(name, config)) continue;
               if (feature.geometry?.type === "Point" && Array.isArray(feature.geometry.coordinates)) {
                 return feature.geometry.coordinates.slice(0, 2);
               }
@@ -773,7 +794,7 @@
           const features = map.queryRenderedFeatures({ layers: layerIds });
           for (const feature of features || []) {
             const name = feature?.properties?.Burg || feature?.properties?.name || feature?.properties?.Name;
-            if (!wantedNames.includes(normalizeLocationName(name))) continue;
+            if (!landmarkNameMatches(name, config)) continue;
             if (feature.geometry?.type === "Point" && Array.isArray(feature.geometry.coordinates)) {
               return feature.geometry.coordinates.slice(0, 2);
             }
@@ -843,8 +864,20 @@
                 return;
               }
 
-              const elevation = this.map.queryTerrainElevation(this.coordinates) ?? 0;
-              const merc = maplibregl.MercatorCoordinate.fromLngLat(this.coordinates, elevation);
+              // Shift the model in real map metres before asking for terrain
+              // elevation. This lets a harbour sit on the coast while the city
+              // label can remain at the historical/visual city centre.
+              const baseMerc = maplibregl.MercatorCoordinate.fromLngLat(this.coordinates, 0);
+              const baseMpu = baseMerc.meterInMercatorCoordinateUnits();
+              const shiftedMerc = new maplibregl.MercatorCoordinate(
+                baseMerc.x + (config.eastMeters || 0) * baseMpu,
+                baseMerc.y - (config.northMeters || 0) * baseMpu,
+                0
+              );
+              const shiftedLngLat = shiftedMerc.toLngLat();
+              const shiftedCoordinates = [shiftedLngLat.lng, shiftedLngLat.lat];
+              const elevation = this.map.queryTerrainElevation(shiftedCoordinates) ?? 0;
+              const merc = maplibregl.MercatorCoordinate.fromLngLat(shiftedCoordinates, elevation);
               const mpu = merc.meterInMercatorCoordinateUnits();
               const scale = (config.widthMeters / this.horizontalSize) * mpu;
 
