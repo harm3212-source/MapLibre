@@ -201,13 +201,14 @@
   </div>
 
 
-  <script src="https://unpkg.com/deck.gl@9.1.14/dist.min.js"></script>
+  <script src="https://unpkg.com/deck.gl@9.4.0/dist.min.js"></script>
 
   <script type="module">
     import * as maplibregl from "https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs";
-    // deck.gl uses the official standalone bundle above. Keeping core, layers
-    // and map integration in one bundle avoids loading multiple luma.gl copies.
-    let MapboxOverlay = null;
+    // deck.gl uses the official standalone bundle above. MapLibre v6 must use
+    // MapLibreOverlay (not MapboxOverlay) so camera/terrain synchronization uses
+    // MapLibre public APIs. One bundle also keeps luma.gl to a single version.
+    let MapLibreOverlay = null;
     let ColumnLayer = null;
 
     async function ensureDeckGl() {
@@ -215,10 +216,10 @@
       if (!deckGlobal) {
         throw new Error("deck.gl standalone bundle kon niet worden geladen");
       }
-      MapboxOverlay = deckGlobal.MapboxOverlay;
+      MapLibreOverlay = deckGlobal.MapLibreOverlay;
       ColumnLayer = deckGlobal.ColumnLayer;
-      if (!MapboxOverlay || !ColumnLayer) {
-        throw new Error("deck.gl standalone bundle mist MapboxOverlay of ColumnLayer");
+      if (!MapLibreOverlay || !ColumnLayer) {
+        throw new Error("deck.gl standalone bundle mist MapLibreOverlay of ColumnLayer");
       }
     }
 
@@ -1122,7 +1123,7 @@
         deckForestDiagnostics.zoom = map.getZoom();
         updateForestDebug();
 
-        deckForestOverlay = new MapboxOverlay({
+        deckForestOverlay = new MapLibreOverlay({
           interleaved: true,
           layers: []
         });
