@@ -190,19 +190,16 @@
     // prevent the base MapLibre map from starting.
     let THREE = null;
     let GLTFLoader = null;
-    let mergeGeometries = null;
     let threeLoadPromise = null;
 
     async function ensureThreeJs() {
-      if (THREE && GLTFLoader && mergeGeometries) return;
+      if (THREE && GLTFLoader) return;
       if (!threeLoadPromise) {
         threeLoadPromise = (async () => {
           const threeModule = await import("https://esm.sh/three@0.169.0");
           const loaderModule = await import("https://esm.sh/three@0.169.0/examples/jsm/loaders/GLTFLoader.js");
-          const geometryUtils = await import("https://esm.sh/three@0.169.0/examples/jsm/utils/BufferGeometryUtils.js");
           THREE = threeModule;
           GLTFLoader = loaderModule.GLTFLoader;
-          mergeGeometries = geometryUtils.mergeGeometries;
         })();
       }
       await threeLoadPromise;
@@ -732,46 +729,30 @@
 
 
 
-      // ---------------------------------------------------------------------
-      // CACHED TILED FOREST + IMPOSTOR LOD
-      // ---------------------------------------------------------------------
-      // The world is divided into fixed Mercator tiles. A tile is classified
-      // and generated once, then cached. Camera movement only changes which
-      // cached tiles feed the instance buffers. Near = real Gobkit trees;
-      // middle/far = crossed-plane impostors; beyond that = biome texture.
-      const FOREST_3D_MIN_ZOOM = 4.15;
-      const FOREST_TREE_HEIGHT_METERS = 9000;
-      const FOREST_TILE_WORLD = 1 / 512;
-      const FOREST_REAL_CELL_WORLD = 1 / 8192;
-      const FOREST_IMPOSTOR_CELL_WORLD = 1 / 2048;
-      const FOREST_REAL_CAP = 12000;
-      const FOREST_REAL_MODEL_CAPACITY = 4500;
-      const FOREST_IMPOSTOR_CAP = 42000;
-      const FOREST_REAL_VIEWPORT_RADIUS = 0.82;
-      const FOREST_IMPOSTOR_VIEWPORT_RADIUS = 2.85;
-      const FOREST_CACHE_MAX_TILES = 9000;
 
-      const FOREST_MODELS = [
-        "https://gobkit.com/freebies/environment/TreeLow001.glb",
-        "https://gobkit.com/freebies/environment/TreeLow002.glb",
-        "https://gobkit.com/freebies/environment/TreeLow003.glb"
-      ];
-
-      const FOREST_BIOME_DENSITY = {
-        "Tropical rainforest": 0.80,
-        "Tropical seasonal forest": 0.60,
-        "Temperate rainforest": 0.82,
-        "Temperate deciduous forest": 0.72,
-        "Taiga": 0.72,
-        "Deep Wood": 0.90,
-        "Savanna": 0.11,
-        "Wetland": 0.13,
-        "Grassland": 0.00,
-        "Tundra": 0.00,
-        "Glacier": 0.00,
-        "Hot desert": 0.00,
-        "Cold desert": 0.00
-      };
+      // ---------------------------------------------------------------------
+      // LOW-POLY FOREST CANOPY
+      // ---------------------------------------------------------------------
+      // Instead of drawing thousands of separate trees, render the forest as
+      // overlapping low-poly canopy patches that read as one continuous forest
+      // mass at map scale. This matches the fantasy-cartography look better
+      // and is dramatically cheaper than continent-wide tree instances.
+      const FOREST_3D_MIN_ZOOM = 4.05;
+      const FOREST_CANOPY_QUERY_PAD_VIEWPORTS = 0.85;
+      const FOREST_CANOPY_MAX_PATCHES = 12000;
+      const FOREST_CANOPY_GRID_METERS = 3200;
+      const FOREST_CANOPY_MPU_EQ = 1 / 40075016.68557849;
+      const FOREST_CANOPY_GRID_UNITS = FOREST_CANOPY_GRID_METERS * FOREST_CANOPY_MPU_EQ;
+      const FOREST_CANOPY_BIOMES = new Set([
+        "Tropical rainforest",
+        "Tropical seasonal forest",
+        "Temperate rainforest",
+        "Temperate deciduous forest",
+        "Taiga",
+        "Deep Wood",
+        "Wetland",
+        "Savanna"
+      ]);
 
       function forestMulberry32(seed) {
         return function() {
@@ -782,137 +763,176 @@
         };
       }
 
-      function forestCellSeed(ix, iy, salt = 0) {
-        let h = (2166136261 ^ salt) >>> 0;
-        h = Math.imul(h ^ (ix | 0), 16777619);
-        h = Math.imul(h ^ (iy | 0), 16777619);
-        return h >>> 0;
+      function forestHash2(x, y) {
+        let h = Math.imul((x | 0) ^ 0x9E3779B9, 0x85EBCA6B);
+        h ^= Math.imul((y | 0) ^ 0xC2B2AE35, 0x27D4EB2F);
+        h ^= h >>> 15;
+        h = Math.imul(h, 0x85EBCA6B);
+        h ^= h >>> 13;
+        return (h >>> 0);
       }
 
-      function forestBiomeDensity(name) {
-        return FOREST_BIOME_DENSITY[name] ?? 0;
+      function forestHash01(x, y, salt = 0) {
+        const h = forestHash2((x | 0) + salt * 374761393, (y | 0) - salt * 668265263);
+        return h / 4294967295;
       }
 
-      function forestFeatureBBox(feature) {
-        const geometry = feature?.geometry;
-        if (!geometry) return null;
-        let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
-        const visitRing = ring => {
-          for (const p of ring || []) {
-            const lng = Number(p?.[0]);
-            const lat = Number(p?.[1]);
-            if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
-            minLng = Math.min(minLng, lng); maxLng = Math.max(maxLng, lng);
-            minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
-          }
-        };
-        if (geometry.type === "Polygon") {
-          for (const ring of geometry.coordinates || []) visitRing(ring);
-        } else if (geometry.type === "MultiPolygon") {
-          for (const poly of geometry.coordinates || []) for (const ring of poly || []) visitRing(ring);
-        } else return null;
-        return Number.isFinite(minLng) ? { minLng, minLat, maxLng, maxLat } : null;
+      function mercatorYFromLat(lat) {
+        const rad = Math.max(-85.05112878, Math.min(85.05112878, lat)) * Math.PI / 180;
+        return (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) * 0.5;
       }
 
-      function forestFeatureAtCoordinate(features, lng, lat) {
-        for (const entry of features) {
-          const b = entry.bbox;
-          if (lng < b.minLng || lng > b.maxLng || lat < b.minLat || lat > b.maxLat) continue;
-          if (featureContainsCoordinate(entry.feature, [lng, lat])) return entry;
+      function latFromMercatorY(y) {
+        const n = Math.PI * (1 - 2 * y);
+        return Math.atan(Math.sinh(n)) * 180 / Math.PI;
+      }
+
+      function lngFromMercatorX(x) {
+        return x * 360 - 180;
+      }
+
+      function forestBiomeDensity(biome) {
+        switch (biome) {
+          case "Deep Wood": return 1.00;
+          case "Temperate rainforest": return 0.96;
+          case "Tropical rainforest": return 0.94;
+          case "Taiga": return 0.90;
+          case "Temperate deciduous forest": return 0.84;
+          case "Tropical seasonal forest": return 0.72;
+          case "Wetland": return 0.44;
+          case "Savanna": return 0.20;
+          default: return 0;
         }
-        return null;
       }
 
-      async function loadForestPrototype(url) {
-        await ensureThreeJs();
-        const loader = new GLTFLoader();
-        const gltf = await loader.loadAsync(url);
-        const root = gltf.scene;
-        root.updateMatrixWorld(true);
-        const bbox = new THREE.Box3().setFromObject(root);
-        const size = new THREE.Vector3();
-        bbox.getSize(size);
-        const height = Math.max(size.y, 0.0001);
-        const cx = (bbox.min.x + bbox.max.x) * 0.5;
-        const cz = (bbox.min.z + bbox.max.z) * 0.5;
-        const parts = [];
-        root.traverse(obj => {
-          if (!obj.isMesh || !obj.geometry) return;
-          const geom = obj.geometry.clone();
-          geom.applyMatrix4(obj.matrixWorld);
-          geom.translate(-cx, -bbox.min.y, -cz);
-          geom.scale(1 / height, 1 / height, 1 / height);
-          geom.rotateX(Math.PI / 2);
-          geom.computeBoundingSphere();
-          const mats = Array.isArray(obj.material) ? obj.material.map(m => m.clone()) : obj.material.clone();
-          parts.push({ geometry: geom, material: mats });
-        });
-        if (!parts.length) throw new Error(`Geen meshes gevonden in ${url}`);
-        return parts;
+      function forestCanopyHeightMetersForZoom(z) {
+        if (z <= 4.5) return 720;
+        if (z <= 5.5) return 720 - (z - 4.5) * 110;
+        if (z <= 7.0) return 610 - (z - 5.5) * 80;
+        if (z <= 9.0) return 490 - (z - 7.0) * 55;
+        return 380;
       }
 
-      function makeForestImpostorTexture() {
-        const canvas = document.createElement("canvas");
-        canvas.width = 128;
-        canvas.height = 128;
-        const ctx = canvas.getContext("2d");
-        ctx.clearRect(0, 0, 128, 128);
-        ctx.fillStyle = "rgba(45,91,51,1)";
-        ctx.beginPath();
-        ctx.moveTo(64, 4);
-        ctx.bezierCurveTo(36, 17, 24, 40, 31, 57);
-        ctx.bezierCurveTo(12, 67, 13, 91, 39, 99);
-        ctx.bezierCurveTo(47, 111, 80, 112, 89, 99);
-        ctx.bezierCurveTo(116, 91, 116, 67, 96, 57);
-        ctx.bezierCurveTo(104, 39, 91, 16, 64, 4);
-        ctx.closePath();
-        ctx.fill();
-        ctx.fillStyle = "rgba(53,105,58,0.96)";
-        ctx.beginPath();
-        ctx.ellipse(49, 54, 24, 34, -0.35, 0, Math.PI * 2);
-        ctx.ellipse(79, 53, 25, 35, 0.35, 0, Math.PI * 2);
-        ctx.ellipse(64, 73, 33, 25, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = "rgba(75,58,38,0.95)";
-        ctx.fillRect(59, 88, 10, 36);
-        const texture = new THREE.CanvasTexture(canvas);
-        texture.needsUpdate = true;
-        texture.colorSpace = THREE.SRGBColorSpace;
-        return texture;
+      function forestCanopyStrideForZoom(z) {
+        if (z < 4.7) return 3;
+        if (z < 5.8) return 2;
+        return 1;
       }
 
-      function makeCrossImpostorGeometry() {
-        const positions = new Float32Array([
-          -0.48, 0, 0,   0.48, 0, 0,   0.48, 0, 1,  -0.48, 0, 1,
-           0, -0.48, 0,  0, 0.48, 0,   0, 0.48, 1,   0, -0.48, 1
-        ]);
-        const uvs = new Float32Array([
-          0,0, 1,0, 1,1, 0,1,
-          0,0, 1,0, 1,1, 0,1
-        ]);
-        const indices = [0,1,2, 0,2,3, 4,5,6, 4,6,7];
-        const g = new THREE.BufferGeometry();
-        g.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-        g.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
-        g.setIndex(indices);
-        g.computeBoundingSphere();
-        return g;
+      function createForestCanopyPrototype(seed = 1) {
+        const rnd = forestMulberry32(seed * 9973 + 17);
+        const segments = 7 + Math.floor(rnd() * 3);
+        const topCenter = [];
+        const topRing = [];
+        const bottomCenter = [];
+        const bottomRing = [];
+
+        // top center
+        topCenter.push(0, 0, 1.00);
+        // bottom center
+        bottomCenter.push(0, 0, 0.10 + rnd() * 0.08);
+
+        const positions = [];
+        positions.push(...topCenter);
+
+        for (let i = 0; i < segments; i++) {
+          const a = (i / segments) * Math.PI * 2;
+          const radius = 0.72 + rnd() * 0.35;
+          const x = Math.cos(a) * radius;
+          const y = Math.sin(a) * radius;
+          const z = 0.34 + rnd() * 0.22;
+          topRing.push([x, y, z]);
+          positions.push(x, y, z);
+        }
+
+        positions.push(...bottomCenter);
+        const bottomCenterIndex = segments + 1;
+
+        for (let i = 0; i < segments; i++) {
+          const a = (i / segments) * Math.PI * 2;
+          const radius = 0.65 + rnd() * 0.28;
+          const x = Math.cos(a) * radius;
+          const y = Math.sin(a) * radius;
+          const z = 0.06 + rnd() * 0.08;
+          bottomRing.push([x, y, z]);
+          positions.push(x, y, z);
+        }
+
+        const indices = [];
+        // top fan
+        for (let i = 0; i < segments; i++) {
+          const a = 1 + i;
+          const b = 1 + ((i + 1) % segments);
+          indices.push(0, a, b);
+        }
+        // bottom fan
+        const bottomRingStart = bottomCenterIndex + 1;
+        for (let i = 0; i < segments; i++) {
+          const a = bottomRingStart + i;
+          const b = bottomRingStart + ((i + 1) % segments);
+          indices.push(bottomCenterIndex, b, a);
+        }
+        // side walls
+        for (let i = 0; i < segments; i++) {
+          const ta = 1 + i;
+          const tb = 1 + ((i + 1) % segments);
+          const ba = bottomRingStart + i;
+          const bb = bottomRingStart + ((i + 1) % segments);
+          indices.push(ta, ba, tb);
+          indices.push(tb, ba, bb);
+        }
+
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+        geom.setIndex(indices);
+        geom.computeVertexNormals();
+        geom.computeBoundingSphere();
+        return geom;
+      }
+
+      function getVisibleBiomeFeatures(mapInstance) {
+        if (!mapInstance.getLayer("Biomes")) return [];
+        const canvas = mapInstance.getCanvas();
+        const padX = canvas.width * FOREST_CANOPY_QUERY_PAD_VIEWPORTS;
+        const padY = canvas.height * FOREST_CANOPY_QUERY_PAD_VIEWPORTS;
+        let features = [];
+        try {
+          features = mapInstance.queryRenderedFeatures(
+            [[-padX, -padY], [canvas.width + padX, canvas.height + padY]],
+            { layers: ["Biomes"] }
+          ) || [];
+        } catch (error) {
+          console.warn("Biome query fallback:", error);
+          features = mapInstance.queryRenderedFeatures({ layers: ["Biomes"] }) || [];
+        }
+
+        const unique = [];
+        const seen = new Set();
+        for (const feature of features) {
+          const biome = feature?.properties?.Biome || "";
+          if (!FOREST_CANOPY_BIOMES.has(biome)) continue;
+          const geom = feature?.geometry;
+          if (!geom || (geom.type !== "Polygon" && geom.type !== "MultiPolygon")) continue;
+          const key = `${biome}|${geom.type}|${JSON.stringify(geom.coordinates?.[0]?.[0] || geom.coordinates?.[0]?.[0]?.[0] || [])}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          unique.push(feature);
+        }
+        return unique;
+      }
+
+      function forestBiomeAtPoint(features, lng, lat) {
+        const pt = [lng, lat];
+        for (const feature of features) {
+          if (featureContainsCoordinate(feature, pt)) return feature.properties?.Biome || "";
+        }
+        return "";
       }
 
       async function installDenseThreeForestLayer() {
         if (map.getLayer("bigane-3d-forest")) return;
-        await ensureThreeJs();
 
-        const prototypes = await Promise.all(FOREST_MODELS.map(loadForestPrototype));
-        const impostorGeometry = makeCrossImpostorGeometry();
-        const impostorMaterial = new THREE.MeshBasicMaterial({
-          map: makeForestImpostorTexture(),
-          transparent: true,
-          alphaTest: 0.34,
-          depthWrite: true,
-          side: THREE.DoubleSide,
-          toneMapped: false
-        });
+        await ensureThreeJs();
 
         const forestLayer = {
           id: "bigane-3d-forest",
@@ -923,250 +943,174 @@
             this.map = mapInstance;
             this.camera = new THREE.Camera();
             this.scene = new THREE.Scene();
-            this.prototypes = prototypes;
-            this.meshGroups = [];
-            this.tileCache = new Map();
-            this.elevationCache = new Map();
-            this.biomeFeatures = [];
-            this.lastActiveKey = "";
+            this.meshes = [];
             this.tempMatrix = new THREE.Matrix4();
             this.tempPos = new THREE.Vector3();
             this.tempQuat = new THREE.Quaternion();
             this.tempScale = new THREE.Vector3();
             this.tempEuler = new THREE.Euler(0, 0, 0, "XYZ");
+            this.lastZoomBucket = -1;
 
-            this.scene.add(new THREE.HemisphereLight(0xf4f1dc, 0x344231, 1.8));
-            const sun = new THREE.DirectionalLight(0xfff0c8, 2.2);
-            sun.position.set(-0.7, -0.6, 1.6).normalize();
+            this.scene.add(new THREE.HemisphereLight(0xf7f4df, 0x314126, 1.95));
+            const sun = new THREE.DirectionalLight(0xfff0cb, 1.75);
+            sun.position.set(-0.5, -0.6, 1.4).normalize();
             this.scene.add(sun);
 
-            for (let mi = 0; mi < this.prototypes.length; mi++) {
-              const meshes = [];
-              for (const part of this.prototypes[mi]) {
-                const mesh = new THREE.InstancedMesh(part.geometry, part.material, FOREST_REAL_MODEL_CAPACITY);
-                mesh.frustumCulled = false;
-                mesh.count = 0;
-                mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-                meshes.push(mesh);
-                this.scene.add(mesh);
-              }
-              this.meshGroups.push(meshes);
+            this.prototypeGeometries = [1, 2, 3, 4, 5].map(createForestCanopyPrototype);
+            this.prototypeColors = [
+              new THREE.Color(0x3f5f37),
+              new THREE.Color(0x46663d),
+              new THREE.Color(0x587545),
+              new THREE.Color(0x3b5b34),
+              new THREE.Color(0x678151)
+            ];
+
+            const perMeshCapacity = Math.ceil(FOREST_CANOPY_MAX_PATCHES / this.prototypeGeometries.length) + 700;
+            for (let i = 0; i < this.prototypeGeometries.length; i++) {
+              const material = new THREE.MeshLambertMaterial({
+                color: 0xffffff,
+                flatShading: true,
+                transparent: true,
+                opacity: 0.97,
+                depthWrite: true
+              });
+              const mesh = new THREE.InstancedMesh(this.prototypeGeometries[i], material, perMeshCapacity);
+              mesh.frustumCulled = false;
+              mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+              this.scene.add(mesh);
+              this.meshes.push(mesh);
             }
 
-            this.impostorMesh = new THREE.InstancedMesh(impostorGeometry, impostorMaterial, FOREST_IMPOSTOR_CAP);
-            this.impostorMesh.frustumCulled = false;
-            this.impostorMesh.count = 0;
-            this.impostorMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-            this.scene.add(this.impostorMesh);
-
-            this.renderer = new THREE.WebGLRenderer({ canvas: mapInstance.getCanvas(), context: gl, antialias: true });
+            this.renderer = new THREE.WebGLRenderer({
+              canvas: mapInstance.getCanvas(),
+              context: gl,
+              antialias: true
+            });
             this.renderer.autoClear = false;
 
-            this.refreshBiomeFeatures();
-            this.refreshForest(true);
-            this.onMoveEnd = () => this.refreshForest(false);
-            this.onZoomEnd = () => this.refreshForest(true);
-            this.onSourceData = e => {
-              if (e?.isSourceLoaded) this.refreshBiomeFeatures();
+            this.rebuild();
+            this.onMoveEnd = () => this.rebuild();
+            this.onZoom = () => {
+              const bucket = Math.floor(mapInstance.getZoom() * 2);
+              if (bucket !== this.lastZoomBucket) {
+                this.lastZoomBucket = bucket;
+                this.rebuild();
+              }
             };
             mapInstance.on("moveend", this.onMoveEnd);
-            mapInstance.on("zoomend", this.onZoomEnd);
-            mapInstance.on("sourcedata", this.onSourceData);
+            mapInstance.on("zoomend", this.onZoom);
           },
 
-          refreshBiomeFeatures() {
-            const biomeLayer = this.map.getLayer("Biomes");
-            if (!biomeLayer?.source) return;
-            const sourceLayer = biomeLayer["source-layer"] || biomeLayer.sourceLayer;
-            let raw = [];
-            try {
-              raw = this.map.querySourceFeatures(biomeLayer.source, sourceLayer ? { sourceLayer } : undefined) || [];
-            } catch (_) { return; }
-            const usable = [];
-            for (const feature of raw) {
-              const biome = feature.properties?.Biome || "";
-              const density = forestBiomeDensity(biome);
-              if (density <= 0) continue;
-              const bbox = forestFeatureBBox(feature);
-              if (!bbox) continue;
-              usable.push({ feature, bbox, biome, density });
-            }
-            if (usable.length) this.biomeFeatures = usable;
-          },
-
-          tileKey(tx, ty) { return `${tx}:${ty}`; },
-
-          ensureTile(tx, ty) {
-            const key = this.tileKey(tx, ty);
-            const hit = this.tileCache.get(key);
-            if (hit) { hit.lastUsed = performance.now(); return hit; }
-
-            const x0 = tx * FOREST_TILE_WORLD;
-            const y0 = ty * FOREST_TILE_WORLD;
-            const centerX = x0 + FOREST_TILE_WORLD * 0.5;
-            const centerY = y0 + FOREST_TILE_WORLD * 0.5;
-            const ll = new maplibregl.MercatorCoordinate(centerX, centerY, 0).toLngLat();
-            const biomeEntry = forestFeatureAtCoordinate(this.biomeFeatures, ll.lng, ll.lat);
-            const tile = { tx, ty, key, density: biomeEntry?.density || 0, biome: biomeEntry?.biome || "", real: [], impostors: [], lastUsed: performance.now() };
-
-            if (tile.density > 0) {
-              const realCells = Math.round(FOREST_TILE_WORLD / FOREST_REAL_CELL_WORLD);
-              for (let cy = 0; cy < realCells; cy++) {
-                for (let cx = 0; cx < realCells; cx++) {
-                  const gx = tx * realCells + cx;
-                  const gy = ty * realCells + cy;
-                  const rnd = forestMulberry32(forestCellSeed(gx, gy, 17));
-                  if (rnd() > tile.density) continue;
-                  tile.real.push({
-                    x: x0 + (cx + 0.12 + rnd() * 0.76) * FOREST_REAL_CELL_WORLD,
-                    y: y0 + (cy + 0.12 + rnd() * 0.76) * FOREST_REAL_CELL_WORLD,
-                    model: Math.floor(rnd() * prototypes.length),
-                    rot: rnd() * Math.PI * 2,
-                    scale: 0.78 + rnd() * 0.42,
-                    elev: null
-                  });
-                }
-              }
-
-              const impCells = Math.round(FOREST_TILE_WORLD / FOREST_IMPOSTOR_CELL_WORLD);
-              for (let cy = 0; cy < impCells; cy++) {
-                for (let cx = 0; cx < impCells; cx++) {
-                  const gx = tx * impCells + cx;
-                  const gy = ty * impCells + cy;
-                  const rnd = forestMulberry32(forestCellSeed(gx, gy, 911));
-                  const keep = Math.min(1, tile.density * 0.72);
-                  if (rnd() > keep) continue;
-                  tile.impostors.push({
-                    x: x0 + (cx + 0.15 + rnd() * 0.70) * FOREST_IMPOSTOR_CELL_WORLD,
-                    y: y0 + (cy + 0.15 + rnd() * 0.70) * FOREST_IMPOSTOR_CELL_WORLD,
-                    rot: rnd() * Math.PI * 2,
-                    scale: 1.15 + rnd() * 0.35
-                  });
-                }
-              }
-            }
-
-            this.tileCache.set(key, tile);
-            if (this.tileCache.size > FOREST_CACHE_MAX_TILES) {
-              const oldest = [...this.tileCache.values()].sort((a,b) => a.lastUsed - b.lastUsed).slice(0, Math.floor(FOREST_CACHE_MAX_TILES * 0.18));
-              for (const t of oldest) this.tileCache.delete(t.key);
-            }
-            return tile;
-          },
-
-          getTreeElevation(point) {
-            if (point.elev != null) return point.elev;
-            const ll = new maplibregl.MercatorCoordinate(point.x, point.y, 0).toLngLat();
-            const raw = this.map.queryTerrainElevation([ll.lng, ll.lat]);
-            point.elev = Number.isFinite(raw) ? raw : 0;
-            return point.elev;
-          },
-
-          tileRanges(radius) {
-            const bounds = this.map.getBounds();
-            const center = this.map.getCenter();
-            const nw = maplibregl.MercatorCoordinate.fromLngLat([bounds.getWest(), bounds.getNorth()]);
-            const se = maplibregl.MercatorCoordinate.fromLngLat([bounds.getEast(), bounds.getSouth()]);
-            const c = maplibregl.MercatorCoordinate.fromLngLat([center.lng, center.lat]);
-            const halfW = Math.max(Math.abs(se.x - nw.x) * 0.5, 1e-8);
-            const halfH = Math.max(Math.abs(se.y - nw.y) * 0.5, 1e-8);
-            return {
-              c, halfW, halfH,
-              minX: Math.floor((c.x - halfW * radius) / FOREST_TILE_WORLD),
-              maxX: Math.ceil((c.x + halfW * radius) / FOREST_TILE_WORLD),
-              minY: Math.floor((c.y - halfH * radius) / FOREST_TILE_WORLD),
-              maxY: Math.ceil((c.y + halfH * radius) / FOREST_TILE_WORLD)
-            };
-          },
-
-          refreshForest(force = false) {
+          rebuild() {
             const zoom = this.map.getZoom();
             if (zoom < FOREST_3D_MIN_ZOOM) {
-              for (const group of this.meshGroups) for (const mesh of group) mesh.count = 0;
-              this.impostorMesh.count = 0;
+              for (const mesh of this.meshes) {
+                mesh.count = 0;
+                mesh.instanceMatrix.needsUpdate = true;
+              }
               this.map.triggerRepaint();
               return;
             }
-            if (!this.biomeFeatures.length) this.refreshBiomeFeatures();
-            if (!this.biomeFeatures.length) return;
 
-            const outer = this.tileRanges(FOREST_IMPOSTOR_VIEWPORT_RADIUS);
-            const inner = this.tileRanges(FOREST_REAL_VIEWPORT_RADIUS);
-            const activeKey = `${outer.minX},${outer.maxX},${outer.minY},${outer.maxY}|${inner.minX},${inner.maxX},${inner.minY},${inner.maxY}|${Math.floor(zoom*2)}`;
-            if (!force && activeKey === this.lastActiveKey) return;
-
-            const used = new Array(this.prototypes.length).fill(0);
-            let realCount = 0;
-            let impCount = 0;
-
-            // Real tiles: only the close rectangle. These points get terrain height lazily.
-            realLoop:
-            for (let ty = inner.minY; ty <= inner.maxY; ty++) {
-              for (let tx = inner.minX; tx <= inner.maxX; tx++) {
-                const tile = this.ensureTile(tx, ty);
-                if (!tile.density) continue;
-                for (const p of tile.real) {
-                  if (realCount >= FOREST_REAL_CAP) break realLoop;
-                  const mi = p.model;
-                  if (used[mi] >= FOREST_REAL_MODEL_CAPACITY) continue;
-                  const elevation = this.getTreeElevation(p);
-                  const ll = new maplibregl.MercatorCoordinate(p.x, p.y, 0).toLngLat();
-                  const merc = maplibregl.MercatorCoordinate.fromLngLat([ll.lng, ll.lat], elevation);
-                  const mpu = merc.meterInMercatorCoordinateUnits();
-                  const s = FOREST_TREE_HEIGHT_METERS * p.scale * mpu;
-                  this.tempPos.set(merc.x, merc.y, merc.z);
-                  this.tempEuler.set(0, 0, p.rot);
-                  this.tempQuat.setFromEuler(this.tempEuler);
-                  this.tempScale.set(s, s, s);
-                  this.tempMatrix.compose(this.tempPos, this.tempQuat, this.tempScale);
-                  const slot = used[mi]++;
-                  for (const mesh of this.meshGroups[mi]) mesh.setMatrixAt(slot, this.tempMatrix);
-                  realCount++;
-                }
-              }
-            }
-
-            // Impostor tiles: wide ring. Use one terrain sample per tile, not per tree.
-            impLoop:
-            for (let ty = outer.minY; ty <= outer.maxY; ty++) {
-              for (let tx = outer.minX; tx <= outer.maxX; tx++) {
-                const inReal = tx >= inner.minX && tx <= inner.maxX && ty >= inner.minY && ty <= inner.maxY;
-                if (inReal) continue;
-                const tile = this.ensureTile(tx, ty);
-                if (!tile.density || !tile.impostors.length) continue;
-                const tcx = (tx + 0.5) * FOREST_TILE_WORLD;
-                const tcy = (ty + 0.5) * FOREST_TILE_WORLD;
-                const tll = new maplibregl.MercatorCoordinate(tcx, tcy, 0).toLngLat();
-                if (tile.tileElev == null) {
-                  const raw = this.map.queryTerrainElevation([tll.lng, tll.lat]);
-                  tile.tileElev = Number.isFinite(raw) ? raw : 0;
-                }
-                for (const p of tile.impostors) {
-                  if (impCount >= FOREST_IMPOSTOR_CAP) break impLoop;
-                  const ll = new maplibregl.MercatorCoordinate(p.x, p.y, 0).toLngLat();
-                  const merc = maplibregl.MercatorCoordinate.fromLngLat([ll.lng, ll.lat], tile.tileElev);
-                  const mpu = merc.meterInMercatorCoordinateUnits();
-                  const s = FOREST_TREE_HEIGHT_METERS * 1.20 * p.scale * mpu;
-                  this.tempPos.set(merc.x, merc.y, merc.z);
-                  this.tempEuler.set(0, 0, p.rot);
-                  this.tempQuat.setFromEuler(this.tempEuler);
-                  this.tempScale.set(s, s, s);
-                  this.tempMatrix.compose(this.tempPos, this.tempQuat, this.tempScale);
-                  this.impostorMesh.setMatrixAt(impCount++, this.tempMatrix);
-                }
-              }
-            }
-
-            for (let mi = 0; mi < this.meshGroups.length; mi++) {
-              for (const mesh of this.meshGroups[mi]) {
-                mesh.count = used[mi];
+            const features = getVisibleBiomeFeatures(this.map);
+            if (!features.length) {
+              for (const mesh of this.meshes) {
+                mesh.count = 0;
                 mesh.instanceMatrix.needsUpdate = true;
               }
+              this.map.triggerRepaint();
+              return;
             }
-            this.impostorMesh.count = impCount;
-            this.impostorMesh.instanceMatrix.needsUpdate = true;
-            this.lastActiveKey = activeKey;
-            console.info(`Cached forest: ${realCount} real trees + ${impCount} impostors; ${this.tileCache.size} cached tiles.`);
+
+            const bounds = this.map.getBounds();
+            const lngSpan = bounds.getEast() - bounds.getWest();
+            const latSpan = bounds.getNorth() - bounds.getSouth();
+            const padLng = lngSpan * FOREST_CANOPY_QUERY_PAD_VIEWPORTS;
+            const padLat = latSpan * FOREST_CANOPY_QUERY_PAD_VIEWPORTS;
+            const west = bounds.getWest() - padLng;
+            const east = bounds.getEast() + padLng;
+            const south = bounds.getSouth() - padLat;
+            const north = bounds.getNorth() + padLat;
+
+            const xMin = (west + 180) / 360;
+            const xMax = (east + 180) / 360;
+            const yMin = mercatorYFromLat(north);
+            const yMax = mercatorYFromLat(south);
+
+            const stride = forestCanopyStrideForZoom(zoom);
+            const targetHeight = forestCanopyHeightMetersForZoom(zoom);
+            const counts = new Array(this.meshes.length).fill(0);
+            const maxPerMesh = this.meshes[0].count;
+
+            const ix0 = Math.floor(xMin / FOREST_CANOPY_GRID_UNITS) - 1;
+            const ix1 = Math.ceil(xMax / FOREST_CANOPY_GRID_UNITS) + 1;
+            const iy0 = Math.floor(yMin / FOREST_CANOPY_GRID_UNITS) - 1;
+            const iy1 = Math.ceil(yMax / FOREST_CANOPY_GRID_UNITS) + 1;
+
+            outer: for (let ix = ix0; ix <= ix1; ix++) {
+              for (let iy = iy0; iy <= iy1; iy++) {
+                if (((ix + iy) % stride) !== 0) continue;
+                if (forestHash01(ix, iy, 3) > 0.97) continue;
+
+                const jitterX = (forestHash01(ix, iy, 11) - 0.5) * FOREST_CANOPY_GRID_UNITS * 0.74;
+                const jitterY = (forestHash01(ix, iy, 12) - 0.5) * FOREST_CANOPY_GRID_UNITS * 0.74;
+                const mx = (ix * FOREST_CANOPY_GRID_UNITS) + jitterX;
+                const my = (iy * FOREST_CANOPY_GRID_UNITS) + jitterY;
+                if (mx < xMin || mx > xMax || my < yMin || my > yMax) continue;
+
+                const lng = lngFromMercatorX(mx);
+                const lat = latFromMercatorY(my);
+                const biome = forestBiomeAtPoint(features, lng, lat);
+                if (!biome) continue;
+
+                const density = forestBiomeDensity(biome);
+                if (density <= 0) continue;
+                if (forestHash01(ix, iy, 7) > density) continue;
+
+                const prototypeIndex = Math.floor(forestHash01(ix, iy, 21) * this.meshes.length) % this.meshes.length;
+                if (counts[prototypeIndex] >= maxPerMesh) continue;
+                if (counts.reduce((a, b) => a + b, 0) >= FOREST_CANOPY_MAX_PATCHES) break outer;
+
+                const elevation = this.map.queryTerrainElevation([lng, lat]) || 0;
+                const merc = maplibregl.MercatorCoordinate.fromLngLat([lng, lat], elevation + targetHeight * 0.10);
+                const mpu = merc.meterInMercatorCoordinateUnits();
+                const biomeFactor = biome === "Deep Wood" ? 1.16
+                  : biome === "Taiga" ? 1.08
+                  : biome.includes("rainforest") ? 1.12
+                  : biome === "Wetland" ? 0.86
+                  : biome === "Savanna" ? 0.78
+                  : 1.0;
+
+                const sxMeters = targetHeight * (4.6 + forestHash01(ix, iy, 31) * 5.0) * biomeFactor;
+                const syMeters = targetHeight * (3.6 + forestHash01(ix, iy, 32) * 4.4) * biomeFactor;
+                const szMeters = targetHeight * (0.82 + forestHash01(ix, iy, 33) * 0.64) * biomeFactor;
+                const rot = forestHash01(ix, iy, 41) * Math.PI * 2;
+                const idx = counts[prototypeIndex];
+
+                this.tempPos.set(merc.x, merc.y, merc.z);
+                this.tempEuler.set(0, 0, rot);
+                this.tempQuat.setFromEuler(this.tempEuler);
+                this.tempScale.set(sxMeters * mpu, syMeters * mpu, szMeters * mpu);
+                this.tempMatrix.compose(this.tempPos, this.tempQuat, this.tempScale);
+                const mesh = this.meshes[prototypeIndex];
+                mesh.setMatrixAt(idx, this.tempMatrix);
+
+                const color = this.prototypeColors[prototypeIndex].clone();
+                const lightness = -0.10 + forestHash01(ix, iy, 51) * 0.18;
+                const saturation = 0.90 + forestHash01(ix, iy, 52) * 0.22;
+                color.offsetHSL(0, saturation - 1, lightness);
+                mesh.setColorAt(idx, color);
+
+                counts[prototypeIndex]++;
+              }
+            }
+
+            for (let i = 0; i < this.meshes.length; i++) {
+              this.meshes[i].count = counts[i];
+              this.meshes[i].instanceMatrix.needsUpdate = true;
+              if (this.meshes[i].instanceColor) this.meshes[i].instanceColor.needsUpdate = true;
+            }
+            console.info(`Forest canopy patches active: ${counts.reduce((a,b)=>a+b,0)}`);
             this.map.triggerRepaint();
           },
 
@@ -1180,8 +1124,7 @@
 
           onRemove() {
             if (this.onMoveEnd) this.map.off("moveend", this.onMoveEnd);
-            if (this.onZoomEnd) this.map.off("zoomend", this.onZoomEnd);
-            if (this.onSourceData) this.map.off("sourcedata", this.onSourceData);
+            if (this.onZoom) this.map.off("zoomend", this.onZoom);
             this.renderer?.dispose();
           }
         };
@@ -1189,7 +1132,7 @@
         const beforeId = map.getLayer("Town names") ? "Town names" :
                          map.getLayer("Capitals") ? "Capitals" : undefined;
         map.addLayer(forestLayer, beforeId);
-        console.info("Cached tiled forest layer installed.");
+        console.info("Low-poly forest canopy layer installed.");
       }
 
 
