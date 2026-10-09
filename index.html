@@ -756,8 +756,8 @@
         { name: "Morbus", model: "./Frostfort_v1.glb", widthMeters: 10700, rotationDeg: 0, eastMeters: 22000, northMeters: 0 },
         { name: "Matronass", model: "./Matronass_v2_BreachedWalls.glb", widthMeters: 42000, rotationDeg: -90, eastMeters: 0, northMeters: 0, elevationOffsetMeters: 1200 },
         { name: "Padin", model: "./Padin_v1_Optimized_Limestone(1).glb", widthMeters: 40000, rotationDeg: 0, eastMeters: 0, northMeters: 0 },
-        { name: "Tillfort", model: "./Tillfort_v3_StonefrontStyle_MapReady.glb", widthMeters: 40000, rotationDeg: 0, eastMeters: 0, northMeters: 0 },
-        { name: "Khypir Tul", model: "./Dwarven_Lighthouse_v2_FixedRoof.glb", widthMeters: 22000, rotationDeg: 0, eastMeters: 0, northMeters: 0, aliases: ["Khypir Tul", "Khypir-Tul", "Khypirtul"] }
+        { name: "Tillfort", model: "./Tillfort_v3_StonefrontStyle_MapReady_FixedDomes.glb", widthMeters: 40000, rotationDeg: 0, eastMeters: 0, northMeters: 0, aliases: ["Till Fort", "Tilfort"] },
+        { name: "Khypir Tul", model: "./Dwarven_Lighthouse_v2_FixedRoof.glb", widthMeters: 22000, rotationDeg: 180, eastMeters: 0, northMeters: 0, aliases: ["Khypir Tul", "Khypir-Tul", "Khypirtul"] }
       ];
 
       function landmarkNameMatches(candidate, config) {
@@ -785,9 +785,11 @@
           try {
             const features = map.querySourceFeatures(source, { sourceLayer });
             for (const feature of features || []) {
-              const name = feature?.properties?.Burg || feature?.properties?.name || feature?.properties?.Name;
-              if (!landmarkNameMatches(name, config)) continue;
+              const props = feature?.properties || {};
+              const candidates = [props.Burg, props.name, props.Name, ...Object.values(props).filter(v => typeof v === "string")];
+              if (!candidates.some(value => landmarkNameMatches(value, config))) continue;
               if (feature.geometry?.type === "Point" && Array.isArray(feature.geometry.coordinates)) {
+                console.info(`${config.name} matched map feature:`, props);
                 return feature.geometry.coordinates.slice(0, 2);
               }
             }
@@ -799,9 +801,11 @@
         try {
           const features = map.queryRenderedFeatures({ layers: layerIds });
           for (const feature of features || []) {
-            const name = feature?.properties?.Burg || feature?.properties?.name || feature?.properties?.Name;
-            if (!landmarkNameMatches(name, config)) continue;
+            const props = feature?.properties || {};
+            const candidates = [props.Burg, props.name, props.Name, ...Object.values(props).filter(v => typeof v === "string")];
+            if (!candidates.some(value => landmarkNameMatches(value, config))) continue;
             if (feature.geometry?.type === "Point" && Array.isArray(feature.geometry.coordinates)) {
+              console.info(`${config.name} matched rendered feature:`, props);
               return feature.geometry.coordinates.slice(0, 2);
             }
           }
