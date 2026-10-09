@@ -737,8 +737,8 @@
       // Zoom only controls how many fixed grid cells are sampled; existing trees
       // never move. Only viewport tiles plus a buffer are written to GPU buffers.
       const FOREST_3D_MIN_ZOOM = 4.15;
-      const FOREST_MAX_VISIBLE_TREES = 30000;
-      const FOREST_MODEL_CAPACITY = 12000;
+      const FOREST_MAX_VISIBLE_TREES = 200000;
+      const FOREST_MODEL_CAPACITY = 75000;
       const FOREST_TILE_CELLS = 32;
       const FOREST_TREE_HEIGHT_METERS = 9000;
 
@@ -994,12 +994,12 @@
             const se = maplibregl.MercatorCoordinate.fromLngLat([bounds.getEast(), bounds.getSouth()]);
             const centerMerc = maplibregl.MercatorCoordinate.fromLngLat([center.lng, center.lat]);
 
-            // A very wide preload ring: 1.25 extra viewports on every edge.
+            // Extra-wide preload ring: 2 extra viewports on every edge.
             // This keeps forest present far beyond the visible frame while panning/pitching.
             const viewW = Math.abs(se.x - nw.x);
             const viewH = Math.abs(se.y - nw.y);
-            const padWorldX = Math.max(viewW * 1.25, cellWorld * FOREST_TILE_CELLS * 2);
-            const padWorldY = Math.max(viewH * 1.25, cellWorld * FOREST_TILE_CELLS * 2);
+            const padWorldX = Math.max(viewW * 2.0, cellWorld * FOREST_TILE_CELLS * 2);
+            const padWorldY = Math.max(viewH * 2.0, cellWorld * FOREST_TILE_CELLS * 2);
 
             const minCellX = Math.floor((nw.x - padWorldX) / cellWorld);
             const maxCellX = Math.ceil((se.x + padWorldX) / cellWorld);
