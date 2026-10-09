@@ -203,8 +203,29 @@
 
   <script type="module">
     import * as maplibregl from "https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs";
-    import { MapboxOverlay } from "https://esm.sh/@deck.gl/mapbox@9.1.14";
-    import { ColumnLayer } from "https://esm.sh/@deck.gl/layers@9.1.14";
+    // deck.gl is deliberately loaded lazily. If deck.gl fails to load, the
+    // base MapLibre map, terrain, Kanka and labels must keep working.
+    let MapboxOverlay = null;
+    let ColumnLayer = null;
+    let deckLoadPromise = null;
+
+    async function ensureDeckGl() {
+      if (MapboxOverlay && ColumnLayer) return;
+      if (!deckLoadPromise) {
+        deckLoadPromise = (async () => {
+          const [mapboxModule, layersModule] = await Promise.all([
+            import("https://esm.sh/@deck.gl/mapbox@9.1.14?bundle"),
+            import("https://esm.sh/@deck.gl/layers@9.1.14?bundle")
+          ]);
+          MapboxOverlay = mapboxModule.MapboxOverlay;
+          ColumnLayer = layersModule.ColumnLayer;
+          if (!MapboxOverlay || !ColumnLayer) {
+            throw new Error("deck.gl modules loaded but required exports are missing");
+          }
+        })();
+      }
+      await deckLoadPromise;
+    }
 
     // Three.js is deliberately loaded lazily. A failed 3D dependency must never
     // prevent the base MapLibre map from starting.
@@ -1092,6 +1113,12 @@
 
       async function installDenseThreeForestLayer() {
         if (deckForestOverlay) return;
+
+        deckForestDiagnostics.note = "deck.gl dynamisch laden...";
+        deckForestDiagnostics.zoom = map.getZoom();
+        updateForestDebug();
+
+        await ensureDeckGl();
 
         deckForestDiagnostics.note = "deck.gl modules geladen; overlay installeren...";
         deckForestDiagnostics.zoom = map.getZoom();
