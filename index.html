@@ -201,9 +201,10 @@
   </div>
 
 
-  <script src="https://unpkg.com/deck.gl@^9.0.0/dist.min.js"></script>
   <script type="module">
     import * as maplibregl from "https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs";
+    import { MapboxOverlay } from "https://esm.sh/@deck.gl/mapbox@9.1.14";
+    import { ColumnLayer } from "https://esm.sh/@deck.gl/layers@9.1.14";
 
     // Three.js is deliberately loaded lazily. A failed 3D dependency must never
     // prevent the base MapLibre map from starting.
@@ -1036,13 +1037,12 @@
       }
 
       function makeDeckForestLayers(data) {
-        if (!window.deck) return [];
         const beforeId = map.getLayer("Town names") ? "Town names" :
                          map.getLayer("Capitals") ? "Capitals" : undefined;
         const radii = [24500, 30500, 36500, 42500];
         const angles = [0, 18, 37, 55];
 
-        return radii.map((radius, variant) => new deck.ColumnLayer({
+        return radii.map((radius, variant) => new ColumnLayer({
           id: `bigane-deck-forest-${variant}`,
           data: data.filter(d => d.variant === variant),
           beforeId,
@@ -1091,10 +1091,13 @@
       }
 
       async function installDenseThreeForestLayer() {
-        if (!window.deck) throw new Error("deck.gl bundle kon niet laden");
         if (deckForestOverlay) return;
 
-        deckForestOverlay = new deck.MapboxOverlay({
+        deckForestDiagnostics.note = "deck.gl modules geladen; overlay installeren...";
+        deckForestDiagnostics.zoom = map.getZoom();
+        updateForestDebug();
+
+        deckForestOverlay = new MapboxOverlay({
           interleaved: true,
           layers: []
         });
@@ -1104,7 +1107,22 @@
         map.on("zoomend", scheduleDeckForestRefresh);
         map.on("pitchend", scheduleDeckForestRefresh);
         map.on("rotateend", scheduleDeckForestRefresh);
-        map.once("idle", refreshDeckForest);
+
+        deckForestDiagnostics.note = "overlay actief; wachten op eerste forest-query...";
+        updateForestDebug();
+
+        // Do not rely only on a future idle event: run once immediately after
+        // the current stack, then again on idle when vector tiles are settled.
+        setTimeout(() => refreshDeckForest().catch(error => {
+          deckForestDiagnostics.note = `refresh fout: ${error?.message || error}`;
+          updateForestDebug();
+          console.warn("deck.gl forest initial refresh failed:", error);
+        }), 0);
+        map.once("idle", () => refreshDeckForest().catch(error => {
+          deckForestDiagnostics.note = `idle refresh fout: ${error?.message || error}`;
+          updateForestDebug();
+          console.warn("deck.gl forest idle refresh failed:", error);
+        }));
         console.info("deck.gl forest canopy overlay installed.");
       }
 
@@ -1159,6 +1177,9 @@
         // Install deck.gl only after terrain + hillshade are in place, so a
         // forest-layer failure can never prevent the base terrain rendering.
         installDenseThreeForestLayer().catch(error => {
+          deckForestDiagnostics.zoom = map.getZoom();
+          deckForestDiagnostics.note = `INSTALLATIEFOUT: ${error?.message || error}`;
+          updateForestDebug();
           console.warn("deck.gl boslaag overgeslagen; kaart blijft werken:", error);
         });
 
