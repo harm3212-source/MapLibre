@@ -737,14 +737,14 @@
       // Zoom only controls how many fixed grid cells are sampled; existing trees
       // never move. Only viewport tiles plus a buffer are written to GPU buffers.
       const FOREST_3D_MIN_ZOOM = 4.15;
-      const FOREST_MAX_VISIBLE_TREES = 36000;
-      const FOREST_MODEL_CAPACITY = 14000;
+      const FOREST_MAX_VISIBLE_TREES = 30000;
+      const FOREST_MODEL_CAPACITY = 12000;
       const FOREST_TILE_CELLS = 32;
       const FOREST_TREE_HEIGHT_METERS = 9000;
 
-      // ~2.45 km at the equator. This is four times denser in each area than the
-      // previous 1/8192 world grid before zoom-stride is applied.
-      const FOREST_BASE_CELL_WORLD = 1 / 16384;
+      // ~3.26 km at the equator: still dense enough to read as continuous forest,
+      // but noticeably more open than the previous ~2.45 km grid.
+      const FOREST_BASE_CELL_WORLD = 1 / 12288;
 
       const FOREST_MODELS = [
         "https://gobkit.com/freebies/environment/TreeLow001.glb",
@@ -753,14 +753,14 @@
       ];
 
       const FOREST_BIOME_DENSITY = {
-        "Tropical rainforest": 1.00,
-        "Tropical seasonal forest": 0.88,
-        "Temperate rainforest": 1.00,
-        "Temperate deciduous forest": 0.96,
-        "Taiga": 0.94,
-        "Deep Wood": 1.00,
-        "Savanna": 0.22,
-        "Wetland": 0.28,
+        "Tropical rainforest": 0.90,
+        "Tropical seasonal forest": 0.72,
+        "Temperate rainforest": 0.90,
+        "Temperate deciduous forest": 0.82,
+        "Taiga": 0.82,
+        "Deep Wood": 0.96,
+        "Savanna": 0.16,
+        "Wetland": 0.20,
         "Grassland": 0.00,
         "Tundra": 0.00,
         "Glacier": 0.00,
@@ -994,11 +994,12 @@
             const se = maplibregl.MercatorCoordinate.fromLngLat([bounds.getEast(), bounds.getSouth()]);
             const centerMerc = maplibregl.MercatorCoordinate.fromLngLat([center.lng, center.lat]);
 
-            // Half a viewport extra on each edge, then snap to whole forest tiles.
+            // A very wide preload ring: 1.25 extra viewports on every edge.
+            // This keeps forest present far beyond the visible frame while panning/pitching.
             const viewW = Math.abs(se.x - nw.x);
             const viewH = Math.abs(se.y - nw.y);
-            const padWorldX = Math.max(viewW * 0.50, cellWorld * FOREST_TILE_CELLS);
-            const padWorldY = Math.max(viewH * 0.50, cellWorld * FOREST_TILE_CELLS);
+            const padWorldX = Math.max(viewW * 1.25, cellWorld * FOREST_TILE_CELLS * 2);
+            const padWorldY = Math.max(viewH * 1.25, cellWorld * FOREST_TILE_CELLS * 2);
 
             const minCellX = Math.floor((nw.x - padWorldX) / cellWorld);
             const maxCellX = Math.ceil((se.x + padWorldX) / cellWorld);
