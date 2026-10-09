@@ -201,30 +201,25 @@
   </div>
 
 
+  <script src="https://unpkg.com/deck.gl@9.1.14/dist.min.js"></script>
+
   <script type="module">
     import * as maplibregl from "https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs";
-    // deck.gl is deliberately loaded lazily. If deck.gl fails to load, the
-    // base MapLibre map, terrain, Kanka and labels must keep working.
+    // deck.gl uses the official standalone bundle above. Keeping core, layers
+    // and map integration in one bundle avoids loading multiple luma.gl copies.
     let MapboxOverlay = null;
     let ColumnLayer = null;
-    let deckLoadPromise = null;
 
     async function ensureDeckGl() {
-      if (MapboxOverlay && ColumnLayer) return;
-      if (!deckLoadPromise) {
-        deckLoadPromise = (async () => {
-          const [mapboxModule, layersModule] = await Promise.all([
-            import("https://esm.sh/@deck.gl/mapbox@9.1.14?bundle"),
-            import("https://esm.sh/@deck.gl/layers@9.1.14?bundle")
-          ]);
-          MapboxOverlay = mapboxModule.MapboxOverlay;
-          ColumnLayer = layersModule.ColumnLayer;
-          if (!MapboxOverlay || !ColumnLayer) {
-            throw new Error("deck.gl modules loaded but required exports are missing");
-          }
-        })();
+      const deckGlobal = globalThis.deck;
+      if (!deckGlobal) {
+        throw new Error("deck.gl standalone bundle kon niet worden geladen");
       }
-      await deckLoadPromise;
+      MapboxOverlay = deckGlobal.MapboxOverlay;
+      ColumnLayer = deckGlobal.ColumnLayer;
+      if (!MapboxOverlay || !ColumnLayer) {
+        throw new Error("deck.gl standalone bundle mist MapboxOverlay of ColumnLayer");
+      }
     }
 
     // Three.js is deliberately loaded lazily. A failed 3D dependency must never
@@ -917,8 +912,11 @@
 
         let sourceFeatures = [];
         try {
-          sourceFeatures = map.querySourceFeatures(DECK_FOREST_SOURCE, {
-            sourceLayer: DECK_FOREST_SOURCE_LAYER
+          const biomeLayerSpec = map.getLayer("Biomes");
+          const biomeSource = biomeLayerSpec?.source || DECK_FOREST_SOURCE;
+          const biomeSourceLayer = biomeLayerSpec?.["source-layer"] || DECK_FOREST_SOURCE_LAYER;
+          sourceFeatures = map.querySourceFeatures(biomeSource, {
+            sourceLayer: biomeSourceLayer
           }) || [];
           deckForestDiagnostics.sourceAll = sourceFeatures.length;
         } catch (error) {
@@ -1114,13 +1112,13 @@
       async function installDenseThreeForestLayer() {
         if (deckForestOverlay) return;
 
-        deckForestDiagnostics.note = "deck.gl dynamisch laden...";
+        deckForestDiagnostics.note = "deck.gl standalone bundle controleren...";
         deckForestDiagnostics.zoom = map.getZoom();
         updateForestDebug();
 
         await ensureDeckGl();
 
-        deckForestDiagnostics.note = "deck.gl modules geladen; overlay installeren...";
+        deckForestDiagnostics.note = "deck.gl bundle ok; overlay installeren...";
         deckForestDiagnostics.zoom = map.getZoom();
         updateForestDebug();
 
