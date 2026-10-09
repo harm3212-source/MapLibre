@@ -757,11 +757,11 @@
 
       function forestGpuDensity(biome) {
         switch (biome) {
-          case 'Deep Wood': return 0.92;
-          case 'Temperate rainforest': return 0.87;
-          case 'Tropical rainforest': return 0.85;
-          case 'Taiga': return 0.82;
-          case 'Temperate deciduous forest': return 0.76;
+          case 'Deep Wood': return 0.96;
+          case 'Temperate rainforest': return 0.92;
+          case 'Tropical rainforest': return 0.90;
+          case 'Taiga': return 0.86;
+          case 'Temperate deciduous forest': return 0.82;
           case 'Tropical seasonal forest': return 0.62;
           case 'Wetland': return 0.30;
           case 'Savanna': return 0.14;
@@ -868,31 +868,51 @@ ${source}`);
       }
 
       function forestGpuCanopyGeometry() {
-        // Rounder, puffier low-poly crown. It is still cheap, but reads more like
-        // clustered treetops and less like a flat leaf.
+        // True low-poly rounded crown: an icosphere-like blob built from latitude rings.
+        // The lower half is slightly flattened so crowns sit into the terrain rather than
+        // reading as floating spheres.
         const seg = 8;
+        const rings = [
+          { z: 0.02, r: 0.46, twist: 0.00 },
+          { z: 0.24, r: 0.78, twist: 0.50 },
+          { z: 0.52, r: 1.00, twist: 0.00 },
+          { z: 0.79, r: 0.76, twist: 0.50 }
+        ];
+        const bottom = [0, 0, -0.06];
+        const top = [0, 0, 1.02];
         const verts = [];
-        const pushTri = (a,b,c) => verts.push(...a,...b,...c);
-        const ring = (r,z,i,twist=0.0) => {
-          const a = ((i + twist) / seg) * Math.PI * 2;
-          return [Math.cos(a) * r, Math.sin(a) * r, z];
+        const pt = (ring, i) => {
+          const a = ((i + ring.twist) / seg) * Math.PI * 2;
+          return [Math.cos(a) * ring.r, Math.sin(a) * ring.r, ring.z];
         };
-        const centerBottom = [0,0,-0.08];
-        const centerTop = [0,0,1.08];
-        for (let i=0;i<seg;i++) {
-          const j=(i+1)%seg;
-          const b0=ring(0.56,0.02,i,0.00), b1=ring(0.56,0.02,j,0.00);
-          const m0=ring(0.92,0.34,i,0.50), m1=ring(0.92,0.34,j,0.50);
-          const u0=ring(0.70,0.73,i,0.00), u1=ring(0.70,0.73,j,0.00);
-          // lower skirt, slightly buried into terrain
-          pushTri(centerBottom,b1,b0);
-          // lower to middle
-          pushTri(b0,b1,m1); pushTri(b0,m1,m0);
-          // middle to upper
-          pushTri(m0,m1,u1); pushTri(m0,u1,u0);
-          // cap to top
-          pushTri(u0,u1,centerTop);
+        const tri = (a,b,c) => verts.push(...a,...b,...c);
+
+        // bottom cap
+        for (let i = 0; i < seg; i++) {
+          const j = (i + 1) % seg;
+          tri(bottom, pt(rings[0], j), pt(rings[0], i));
         }
+
+        // ring bands
+        for (let r = 0; r < rings.length - 1; r++) {
+          for (let i = 0; i < seg; i++) {
+            const j = (i + 1) % seg;
+            const a = pt(rings[r], i);
+            const b = pt(rings[r], j);
+            const c = pt(rings[r + 1], i);
+            const d = pt(rings[r + 1], j);
+            tri(a,b,d);
+            tri(a,d,c);
+          }
+        }
+
+        // top cap
+        const last = rings[rings.length - 1];
+        for (let i = 0; i < seg; i++) {
+          const j = (i + 1) % seg;
+          tri(pt(last, i), pt(last, j), top);
+        }
+
         return new Float32Array(verts);
       }
 
@@ -1038,8 +1058,8 @@ ${source}`);
                 const rRand=forestGpuHash(ix,iy,4);
                 const hRand=forestGpuHash(ix,iy,5);
                 const biomeScale = biome==='Deep Wood' ? 1.06 : biome.includes('rainforest') ? 1.03 : biome==='Savanna' ? 0.72 : 0.96;
-                const radius=FOREST_GPU_GRID_METERS*(0.28+rRand*0.18)*biomeScale;
-                const height=430*(0.82+hRand*0.44)*biomeScale;
+                const radius=FOREST_GPU_GRID_METERS*(0.20+rRand*0.14)*biomeScale;
+                const height=620*(0.82+hRand*0.40)*biomeScale;
                 const seed=forestGpuHash(ix,iy,6);
                 data.push(m.x,m.y,m.meterInMercatorCoordinateUnits(),radius,height,seed);
                 if (data.length/6 >= FOREST_GPU_MAX_INSTANCES) break outer;
