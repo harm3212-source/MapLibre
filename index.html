@@ -737,8 +737,8 @@
       // queryTerrainElevation() calls are needed per canopy instance.
       // ---------------------------------------------------------------------
       const FOREST_GPU_MIN_ZOOM = 4.15;
-      const FOREST_GPU_MAX_INSTANCES = 12000;
-      const FOREST_GPU_GRID_METERS = 18000;
+      const FOREST_GPU_MAX_INSTANCES = 10000;
+      const FOREST_GPU_GRID_METERS = 18000; // spacing stays broad; crowns themselves are smaller and rounder now
       const FOREST_GPU_GRID_UNITS = FOREST_GPU_GRID_METERS / 40075016.68557849;
       const FOREST_GPU_HEIGHTMAP_SIZE = 1024;
       const FOREST_GPU_PAD = 0.45;
@@ -757,14 +757,14 @@
 
       function forestGpuDensity(biome) {
         switch (biome) {
-          case 'Deep Wood': return 1.0;
-          case 'Temperate rainforest': return 0.96;
-          case 'Tropical rainforest': return 0.94;
-          case 'Taiga': return 0.92;
-          case 'Temperate deciduous forest': return 0.88;
-          case 'Tropical seasonal forest': return 0.76;
-          case 'Wetland': return 0.40;
-          case 'Savanna': return 0.22;
+          case 'Deep Wood': return 0.92;
+          case 'Temperate rainforest': return 0.87;
+          case 'Tropical rainforest': return 0.85;
+          case 'Taiga': return 0.82;
+          case 'Temperate deciduous forest': return 0.76;
+          case 'Tropical seasonal forest': return 0.62;
+          case 'Wetland': return 0.30;
+          case 'Savanna': return 0.14;
           default: return 0;
         }
       }
@@ -868,23 +868,30 @@ ${source}`);
       }
 
       function forestGpuCanopyGeometry() {
-        // 6-sided, low-poly crown: bottom ring, shoulder ring and top point.
-        // Geometry is deliberately tiny; thousands of instances are rendered in one call.
-        const seg = 6;
-        const bottomR = 0.88;
-        const shoulderR = 1.0;
+        // Rounder, puffier low-poly crown. It is still cheap, but reads more like
+        // clustered treetops and less like a flat leaf.
+        const seg = 8;
         const verts = [];
         const pushTri = (a,b,c) => verts.push(...a,...b,...c);
-        const ring = (r,z,i) => {
-          const a = i / seg * Math.PI * 2;
-          return [Math.cos(a)*r, Math.sin(a)*r, z];
+        const ring = (r,z,i,twist=0.0) => {
+          const a = ((i + twist) / seg) * Math.PI * 2;
+          return [Math.cos(a) * r, Math.sin(a) * r, z];
         };
+        const centerBottom = [0,0,-0.08];
+        const centerTop = [0,0,1.08];
         for (let i=0;i<seg;i++) {
           const j=(i+1)%seg;
-          const b0=ring(bottomR,0.0,i), b1=ring(bottomR,0.0,j);
-          const s0=ring(shoulderR,0.46,i), s1=ring(shoulderR,0.46,j);
-          pushTri(b0,b1,s1); pushTri(b0,s1,s0);
-          pushTri(s0,s1,[0,0,1.0]);
+          const b0=ring(0.56,0.02,i,0.00), b1=ring(0.56,0.02,j,0.00);
+          const m0=ring(0.92,0.34,i,0.50), m1=ring(0.92,0.34,j,0.50);
+          const u0=ring(0.70,0.73,i,0.00), u1=ring(0.70,0.73,j,0.00);
+          // lower skirt, slightly buried into terrain
+          pushTri(centerBottom,b1,b0);
+          // lower to middle
+          pushTri(b0,b1,m1); pushTri(b0,m1,m0);
+          // middle to upper
+          pushTri(m0,m1,u1); pushTri(m0,u1,u0);
+          // cap to top
+          pushTri(u0,u1,centerTop);
         }
         return new Float32Array(verts);
       }
@@ -915,27 +922,34 @@ ${source}`);
               in float a_seed;
               out float v_light;
               out float v_seed;
+              out float v_topness;
 
               void main() {
                 vec2 worldXY = a_position + a_local.xy * a_radius * a_mpu;
                 vec2 uv = (worldXY - u_bounds.xy) / (u_bounds.zw - u_bounds.xy);
                 uv = clamp(uv, vec2(0.0), vec2(1.0));
                 float elevation = texture(u_heightMap, vec2(uv.x, 1.0 - uv.y)).r;
-                float zMeters = elevation + a_local.z * a_height;
+                float zMeters = elevation - a_height * 0.16 + a_local.z * a_height;
                 gl_Position = u_matrix * vec4(worldXY, zMeters * a_mpu, 1.0);
-                v_light = 0.72 + a_local.z * 0.24 + a_local.x * 0.045 - a_local.y * 0.035;
+                v_light = 0.76 + a_local.z * 0.18 + a_local.x * 0.028 - a_local.y * 0.022;
                 v_seed = a_seed;
+                v_topness = clamp(a_local.z, 0.0, 1.0);
               }
             `, `
               in float v_light;
               in float v_seed;
+              in float v_topness;
               out vec4 fragColor;
               void main() {
-                vec3 dark = vec3(0.17, 0.29, 0.13);
-                vec3 light = vec3(0.34, 0.48, 0.24);
-                float variation = fract(v_seed * 13.731);
-                vec3 base = mix(dark, light, 0.35 + variation * 0.45);
-                fragColor = vec4(base * v_light, 0.98);
+                float variation = fract(v_seed * 19.371);
+                vec3 baseA = vec3(0.20, 0.33, 0.15);
+                vec3 baseB = vec3(0.29, 0.43, 0.21);
+                vec3 baseC = vec3(0.36, 0.50, 0.27);
+                vec3 base = mix(mix(baseA, baseB, variation), baseC, v_topness * 0.42);
+                float warm = fract(v_seed * 7.113);
+                base.r += (warm - 0.5) * 0.03;
+                base.g += (warm - 0.5) * 0.02;
+                fragColor = vec4(base * v_light, 0.95);
               }
             `);
 
@@ -1023,9 +1037,9 @@ ${source}`);
                 const m = maplibregl.MercatorCoordinate.fromLngLat([lng,lat]);
                 const rRand=forestGpuHash(ix,iy,4);
                 const hRand=forestGpuHash(ix,iy,5);
-                const biomeScale = biome==='Deep Wood' ? 1.12 : biome.includes('rainforest') ? 1.08 : biome==='Savanna' ? 0.78 : 1.0;
-                const radius=FOREST_GPU_GRID_METERS*(0.58+rRand*0.42)*biomeScale;
-                const height=520*(0.72+hRand*0.58)*biomeScale;
+                const biomeScale = biome==='Deep Wood' ? 1.06 : biome.includes('rainforest') ? 1.03 : biome==='Savanna' ? 0.72 : 0.96;
+                const radius=FOREST_GPU_GRID_METERS*(0.28+rRand*0.18)*biomeScale;
+                const height=430*(0.82+hRand*0.44)*biomeScale;
                 const seed=forestGpuHash(ix,iy,6);
                 data.push(m.x,m.y,m.meterInMercatorCoordinateUnits(),radius,height,seed);
                 if (data.length/6 >= FOREST_GPU_MAX_INSTANCES) break outer;
