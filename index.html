@@ -767,9 +767,14 @@
         // Very small fuzzy fallback for minor map/editor spelling drift.
         const compact = (v) => String(v || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]/g, '');
         const c = compact(candidate);
+        // Empty/missing feature properties must never count as a match.
+        // (String.includes('') is true, which previously made every landmark
+        // match the first map feature and sent all 3D models to one wrong place.)
+        if (!c) return false;
         return wantedNames.some(w => {
           const ww = compact(w);
-          return ww && (c === ww || c.includes(ww) || ww.includes(c));
+          if (!ww) return false;
+          return c === ww || c.includes(ww) || ww.includes(c);
         });
       }
 
