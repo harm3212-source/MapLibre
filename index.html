@@ -802,10 +802,10 @@
       const DECK_FOREST_MIN_ZOOM = 4.05;
       const DECK_FOREST_SOURCE = "composite";
       const DECK_FOREST_SOURCE_LAYER = "BiomesBigane2-7auf3g";
-      const DECK_FOREST_GRID_METERS = 30000;
+      const DECK_FOREST_GRID_METERS = 16000;
       const DECK_FOREST_WORLD_UNITS = DECK_FOREST_GRID_METERS / 40075016.68557849;
-      const DECK_FOREST_PAD = 0.28;
-      const DECK_FOREST_MAX_PATCHES = 5200;
+      const DECK_FOREST_PAD = 0.18;
+      const DECK_FOREST_MAX_PATCHES = 8000;
       const deckForestCellCache = new Map();
       let deckForestOverlay = null;
       let deckForestUpdateTimer = null;
@@ -886,13 +886,13 @@
 
       function deckForestHeight(biome, ix, iy) {
         const r = forestHash01(ix, iy, 17);
-        const base = biome === "Deep Wood" ? 950
-          : biome.includes("rainforest") ? 860
-          : biome === "Taiga" ? 780
-          : biome === "Wetland" ? 520
-          : biome === "Savanna" ? 430
-          : 700;
-        return base * (0.72 + r * 0.62);
+        const base = biome === "Deep Wood" ? 470
+          : biome.includes("rainforest") ? 430
+          : biome === "Taiga" ? 390
+          : biome === "Wetland" ? 260
+          : biome === "Savanna" ? 220
+          : 340;
+        return base * (0.78 + r * 0.44);
       }
 
       function deckForestFilterFeatures(features) {
@@ -1041,11 +1041,11 @@
               Math.min(255, Math.round(baseColor[0] * shade)),
               Math.min(255, Math.round(baseColor[1] * shade)),
               Math.min(255, Math.round(baseColor[2] * shade)),
-              232
+              220
             ];
 
             result.push({
-              position: [lng, lat, cached.elevation + 18],
+              position: [lng, lat, cached.elevation - 70],
               biome: cached.biome,
               variant: cached.variant,
               height: deckForestHeight(cached.biome, ix, iy),
@@ -1059,8 +1059,8 @@
       function makeDeckForestLayers(data) {
         const beforeId = map.getLayer("Town names") ? "Town names" :
                          map.getLayer("Capitals") ? "Capitals" : undefined;
-        const radii = [24500, 30500, 36500, 42500];
-        const angles = [0, 18, 37, 55];
+        const radii = [8500, 10000, 11500, 13000];
+        const angles = [0, 14, 31, 49];
 
         return radii.map((radius, variant) => new ColumnLayer({
           id: `bigane-deck-forest-${variant}`,
@@ -1081,9 +1081,9 @@
           getFillColor: d => d.color,
           pickable: false,
           material: {
-            ambient: 0.62,
-            diffuse: 0.62,
-            shininess: 8,
+            ambient: 0.72,
+            diffuse: 0.48,
+            shininess: 2,
             specularColor: [30, 38, 25]
           },
           updateTriggers: {
