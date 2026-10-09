@@ -190,16 +190,19 @@
     // prevent the base MapLibre map from starting.
     let THREE = null;
     let GLTFLoader = null;
+    let mergeGeometries = null;
     let threeLoadPromise = null;
 
     async function ensureThreeJs() {
-      if (THREE && GLTFLoader) return;
+      if (THREE && GLTFLoader && mergeGeometries) return;
       if (!threeLoadPromise) {
         threeLoadPromise = (async () => {
           const threeModule = await import("https://esm.sh/three@0.169.0");
           const loaderModule = await import("https://esm.sh/three@0.169.0/examples/jsm/loaders/GLTFLoader.js");
+          const geometryUtils = await import("https://esm.sh/three@0.169.0/examples/jsm/utils/BufferGeometryUtils.js");
           THREE = threeModule;
           GLTFLoader = loaderModule.GLTFLoader;
+          mergeGeometries = geometryUtils.mergeGeometries;
         })();
       }
       await threeLoadPromise;
@@ -730,21 +733,29 @@
 
 
       // ---------------------------------------------------------------------
-      // DENSE TILED 3D FOREST COVER - lightweight Gobkit trees over biomes
+      // HYBRID 3D FOREST COVER
       // ---------------------------------------------------------------------
-      // The forest is a fixed world grid divided into fixed forest tiles. Tree
-      // positions, rotation and scale are deterministic and never depend on zoom.
-      // Zoom only controls how many fixed grid cells are sampled; existing trees
-      // never move. Only viewport tiles plus a buffer are written to GPU buffers.
+      // Zone A: real Gobkit trees close to the camera.
+      // Zone B: cheap merged canopy clumps across a much wider ring.
+      // Zone C: biome texture only. This avoids a hard geometry cutoff while
+      // keeping the world visually forested at continental scale.
       const FOREST_3D_MIN_ZOOM = 4.15;
-      const FOREST_MAX_VISIBLE_TREES = 200000;
-      const FOREST_MODEL_CAPACITY = 75000;
-      const FOREST_TILE_CELLS = 32;
       const FOREST_TREE_HEIGHT_METERS = 9000;
+      const FOREST_REAL_TREE_CAP = 22000;
+      const FOREST_REAL_MODEL_CAPACITY = 9000;
+      const FOREST_CLUMP_CAP = 18000;
+      const FOREST_TILE_CELLS = 32;
 
-      // ~3.26 km at the equator: still dense enough to read as continuous forest,
-      // but noticeably more open than the previous ~2.45 km grid.
-      const FOREST_BASE_CELL_WORLD = 1 / 12288;
+      // Fixed world grids: nothing moves when zoom changes.
+      // Individual trees use the finer grid; clumps use a much coarser grid.
+      const FOREST_TREE_CELL_WORLD = 1 / 12288;
+      const FOREST_CLUMP_CELL_WORLD = 1 / 4096;
+
+      // Distances are measured in current viewport radii from the map center.
+      // Clumps overlap the tree zone slightly so the transition is not a hard ring.
+      const FOREST_REAL_RADIUS = 1.00;
+      const FOREST_CLUMP_INNER_RADIUS = 0.72;
+      const FOREST_CLUMP_OUTER_RADIUS = 3.25;
 
       const FOREST_MODELS = [
         "https://gobkit.com/freebies/environment/TreeLow001.glb",
@@ -753,14 +764,14 @@
       ];
 
       const FOREST_BIOME_DENSITY = {
-        "Tropical rainforest": 0.90,
-        "Tropical seasonal forest": 0.72,
-        "Temperate rainforest": 0.90,
-        "Temperate deciduous forest": 0.82,
-        "Taiga": 0.82,
-        "Deep Wood": 0.96,
-        "Savanna": 0.16,
-        "Wetland": 0.20,
+        "Tropical rainforest": 0.86,
+        "Tropical seasonal forest": 0.66,
+        "Temperate rainforest": 0.86,
+        "Temperate deciduous forest": 0.76,
+        "Taiga": 0.76,
+        "Deep Wood": 0.94,
+        "Savanna": 0.13,
+        "Wetland": 0.16,
         "Grassland": 0.00,
         "Tundra": 0.00,
         "Glacier": 0.00,
@@ -777,19 +788,11 @@
         };
       }
 
-      function forestCellSeed(ix, iy) {
-        let h = 2166136261 >>> 0;
+      function forestCellSeed(ix, iy, salt = 0) {
+        let h = (2166136261 ^ salt) >>> 0;
         h = Math.imul(h ^ (ix | 0), 16777619);
         h = Math.imul(h ^ (iy | 0), 16777619);
         return h >>> 0;
-      }
-
-      function forestStrideForZoom(z) {
-        // Fixed hierarchy: lower zoom uses a globally aligned subset of the same
-        // forest. Existing trees remain in exactly the same place as zoom changes.
-        if (z < 4.8) return 3;
-        if (z < 5.8) return 2;
-        return 1;
       }
 
       function forestBiomeDensity(name) {
@@ -866,11 +869,39 @@
         return parts;
       }
 
+      function makeForestClumpGeometry() {
+        // One clump visually represents a small patch of crowns, but is rendered
+        // as a single instanced mesh. Five-sided cones keep triangle count tiny.
+        const crowns = [
+          [-0.50, -0.18, 0.00, 0.62, 0.86],
+          [ 0.00, -0.34, 0.02, 0.72, 1.00],
+          [ 0.53, -0.12, 0.00, 0.58, 0.82],
+          [-0.27,  0.38, 0.00, 0.66, 0.92],
+          [ 0.34,  0.37, 0.01, 0.70, 0.96],
+          [ 0.02,  0.10, 0.03, 0.82, 1.12]
+        ];
+        const geoms = [];
+        for (const [x, y, z, radius, height] of crowns) {
+          const g = new THREE.ConeGeometry(radius, height, 5, 1, false);
+          // ConeGeometry is Y-up; rotate so Z is vertical in MapLibre custom world.
+          g.rotateX(Math.PI / 2);
+          g.translate(x, y, z + height * 0.48);
+          geoms.push(g);
+        }
+        const merged = mergeGeometries(geoms, false);
+        for (const g of geoms) g.dispose();
+        merged.computeVertexNormals();
+        merged.computeBoundingSphere();
+        return merged;
+      }
+
       async function installDenseThreeForestLayer() {
         if (map.getLayer("bigane-3d-forest")) return;
         await ensureThreeJs();
 
         const prototypes = await Promise.all(FOREST_MODELS.map(loadForestPrototype));
+        const clumpGeometry = makeForestClumpGeometry();
+        const clumpMaterial = new THREE.MeshLambertMaterial({ color: 0x315d35 });
 
         const forestLayer = {
           id: "bigane-3d-forest",
@@ -889,18 +920,17 @@
             this.tempScale = new THREE.Vector3();
             this.tempEuler = new THREE.Euler(0, 0, 0, "XYZ");
             this.lastCoverageKey = "";
-            this.lastVisibleTreeCount = 0;
             this.elevationCache = new Map();
 
-            this.scene.add(new THREE.HemisphereLight(0xf4f1dc, 0x344231, 2.15));
-            const sun = new THREE.DirectionalLight(0xfff0c8, 2.6);
+            this.scene.add(new THREE.HemisphereLight(0xf4f1dc, 0x344231, 2.10));
+            const sun = new THREE.DirectionalLight(0xfff0c8, 2.5);
             sun.position.set(-0.7, -0.6, 1.6).normalize();
             this.scene.add(sun);
 
             for (let mi = 0; mi < this.prototypes.length; mi++) {
               const meshes = [];
               for (const part of this.prototypes[mi]) {
-                const mesh = new THREE.InstancedMesh(part.geometry, part.material, FOREST_MODEL_CAPACITY);
+                const mesh = new THREE.InstancedMesh(part.geometry, part.material, FOREST_REAL_MODEL_CAPACITY);
                 mesh.frustumCulled = false;
                 mesh.count = 0;
                 mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -909,6 +939,12 @@
               }
               this.meshGroups.push(meshes);
             }
+
+            this.clumpMesh = new THREE.InstancedMesh(clumpGeometry, clumpMaterial, FOREST_CLUMP_CAP);
+            this.clumpMesh.frustumCulled = false;
+            this.clumpMesh.count = 0;
+            this.clumpMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            this.scene.add(this.clumpMesh);
 
             this.renderer = new THREE.WebGLRenderer({
               canvas: mapInstance.getCanvas(),
@@ -920,10 +956,8 @@
             this.refreshCoverage(true);
             this.onMoveEnd = () => this.refreshCoverage(false);
             this.onZoomEnd = () => this.refreshCoverage(true);
-            this.onIdle = () => this.refreshCoverage(false);
             mapInstance.on("moveend", this.onMoveEnd);
             mapInstance.on("zoomend", this.onZoomEnd);
-            mapInstance.on("idle", this.onIdle);
           },
 
           getBiomeFeatures() {
@@ -953,34 +987,35 @@
             return usable;
           },
 
-          getElevation(ix, iy, lng, lat) {
-            const key = `${ix}:${iy}`;
+          getElevation(ix, iy, lng, lat, salt = "t") {
+            const key = `${salt}:${ix}:${iy}`;
             const cached = this.elevationCache.get(key);
             if (cached !== undefined) return cached;
             const raw = this.map.queryTerrainElevation([lng, lat]);
             const elevation = Number.isFinite(raw) ? raw : 0;
             this.elevationCache.set(key, elevation);
-            // Avoid unlimited cache growth after very long browsing sessions.
-            if (this.elevationCache.size > 120000) this.elevationCache.clear();
+            if (this.elevationCache.size > 90000) this.elevationCache.clear();
             return elevation;
+          },
+
+          viewportDistance(mx, my, centerMerc, halfW, halfH) {
+            const nx = Math.abs(mx - centerMerc.x) / Math.max(halfW, 1e-9);
+            const ny = Math.abs(my - centerMerc.y) / Math.max(halfH, 1e-9);
+            return Math.max(nx, ny);
           },
 
           refreshCoverage(force = false) {
             const zoom = this.map.getZoom();
             if (zoom < FOREST_3D_MIN_ZOOM) {
-              for (const group of this.meshGroups) {
-                for (const mesh of group) mesh.count = 0;
-              }
-              this.lastVisibleTreeCount = 0;
+              for (const group of this.meshGroups) for (const mesh of group) mesh.count = 0;
+              this.clumpMesh.count = 0;
               this.map.triggerRepaint();
               return;
             }
 
-            const stride = forestStrideForZoom(zoom);
             const bounds = this.map.getBounds();
             const center = this.map.getCenter();
             const coverageKey = [
-              stride,
               bounds.getWest().toFixed(2), bounds.getSouth().toFixed(2),
               bounds.getEast().toFixed(2), bounds.getNorth().toFixed(2)
             ].join("|");
@@ -989,93 +1024,110 @@
             const biomeFeatures = this.getBiomeFeatures();
             if (!biomeFeatures.length) return;
 
-            const cellWorld = FOREST_BASE_CELL_WORLD;
             const nw = maplibregl.MercatorCoordinate.fromLngLat([bounds.getWest(), bounds.getNorth()]);
             const se = maplibregl.MercatorCoordinate.fromLngLat([bounds.getEast(), bounds.getSouth()]);
             const centerMerc = maplibregl.MercatorCoordinate.fromLngLat([center.lng, center.lat]);
-
-            // Extra-wide preload ring: 2 extra viewports on every edge.
-            // This keeps forest present far beyond the visible frame while panning/pitching.
-            const viewW = Math.abs(se.x - nw.x);
-            const viewH = Math.abs(se.y - nw.y);
-            const padWorldX = Math.max(viewW * 2.0, cellWorld * FOREST_TILE_CELLS * 2);
-            const padWorldY = Math.max(viewH * 2.0, cellWorld * FOREST_TILE_CELLS * 2);
-
-            const minCellX = Math.floor((nw.x - padWorldX) / cellWorld);
-            const maxCellX = Math.ceil((se.x + padWorldX) / cellWorld);
-            const minCellY = Math.floor((nw.y - padWorldY) / cellWorld);
-            const maxCellY = Math.ceil((se.y + padWorldY) / cellWorld);
-
-            const minTileX = Math.floor(minCellX / FOREST_TILE_CELLS);
-            const maxTileX = Math.floor(maxCellX / FOREST_TILE_CELLS);
-            const minTileY = Math.floor(minCellY / FOREST_TILE_CELLS);
-            const maxTileY = Math.floor(maxCellY / FOREST_TILE_CELLS);
-
-            // Process tiles from the camera outward. If the global tree cap is hit,
-            // nearby forest remains fully dense and only the far buffer thins out.
-            const tiles = [];
-            for (let ty = minTileY; ty <= maxTileY; ty++) {
-              for (let tx = minTileX; tx <= maxTileX; tx++) {
-                const cx = (tx * FOREST_TILE_CELLS + FOREST_TILE_CELLS * 0.5) * cellWorld;
-                const cy = (ty * FOREST_TILE_CELLS + FOREST_TILE_CELLS * 0.5) * cellWorld;
-                const dx = cx - centerMerc.x;
-                const dy = cy - centerMerc.y;
-                tiles.push({ tx, ty, dist2: dx * dx + dy * dy });
-              }
-            }
-            tiles.sort((a, b) => a.dist2 - b.dist2);
+            const halfW = Math.max(Math.abs(se.x - nw.x) * 0.5, 1e-8);
+            const halfH = Math.max(Math.abs(se.y - nw.y) * 0.5, 1e-8);
 
             const used = new Array(this.prototypes.length).fill(0);
-            let totalVisible = 0;
+            let realCount = 0;
+            let clumpCount = 0;
 
-            tileLoop:
-            for (const tile of tiles) {
-              const tileStartX = tile.tx * FOREST_TILE_CELLS;
-              const tileStartY = tile.ty * FOREST_TILE_CELLS;
-              const tileEndX = tileStartX + FOREST_TILE_CELLS - 1;
-              const tileEndY = tileStartY + FOREST_TILE_CELLS - 1;
+            // -------------------------------------------------------------
+            // Zone A - real trees only around the visible viewport.
+            // -------------------------------------------------------------
+            const treeCell = FOREST_TREE_CELL_WORLD;
+            const treeMinX = Math.floor((centerMerc.x - halfW * FOREST_REAL_RADIUS) / treeCell);
+            const treeMaxX = Math.ceil((centerMerc.x + halfW * FOREST_REAL_RADIUS) / treeCell);
+            const treeMinY = Math.floor((centerMerc.y - halfH * FOREST_REAL_RADIUS) / treeCell);
+            const treeMaxY = Math.ceil((centerMerc.y + halfH * FOREST_REAL_RADIUS) / treeCell);
 
-              const firstX = Math.ceil(tileStartX / stride) * stride;
-              const firstY = Math.ceil(tileStartY / stride) * stride;
+            treeLoop:
+            for (let iy = treeMinY; iy <= treeMaxY; iy++) {
+              for (let ix = treeMinX; ix <= treeMaxX; ix++) {
+                if (realCount >= FOREST_REAL_TREE_CAP) break treeLoop;
+                const rnd = forestMulberry32(forestCellSeed(ix, iy, 17));
+                const mx = (ix + 0.10 + rnd() * 0.80) * treeCell;
+                const my = (iy + 0.10 + rnd() * 0.80) * treeCell;
+                const d = this.viewportDistance(mx, my, centerMerc, halfW, halfH);
+                if (d > FOREST_REAL_RADIUS) continue;
 
-              for (let iy = firstY; iy <= tileEndY; iy += stride) {
-                if (iy < minCellY || iy > maxCellY) continue;
-                for (let ix = firstX; ix <= tileEndX; ix += stride) {
-                  if (ix < minCellX || ix > maxCellX) continue;
-                  if (totalVisible >= FOREST_MAX_VISIBLE_TREES) break tileLoop;
+                const ll = new maplibregl.MercatorCoordinate(mx, my, 0).toLngLat();
+                const biomeEntry = forestFeatureAtCoordinate(biomeFeatures, ll.lng, ll.lat);
+                if (!biomeEntry || rnd() > biomeEntry.density) continue;
 
-                  const rnd = forestMulberry32(forestCellSeed(ix, iy));
-                  const mx = (ix + 0.10 + rnd() * 0.80) * cellWorld;
-                  const my = (iy + 0.10 + rnd() * 0.80) * cellWorld;
-                  const ll = new maplibregl.MercatorCoordinate(mx, my, 0).toLngLat();
-                  const lng = ll.lng;
-                  const lat = ll.lat;
+                // Thin the outer quarter of the real-tree zone so clumps can take over smoothly.
+                const edgeKeep = d <= 0.72 ? 1 : Math.max(0, (FOREST_REAL_RADIUS - d) / (FOREST_REAL_RADIUS - 0.72));
+                if (rnd() > edgeKeep) continue;
 
-                  const biomeEntry = forestFeatureAtCoordinate(biomeFeatures, lng, lat);
-                  if (!biomeEntry) continue;
-                  if (rnd() > biomeEntry.density) continue;
+                const modelIndex = Math.floor(rnd() * this.prototypes.length);
+                if (used[modelIndex] >= FOREST_REAL_MODEL_CAPACITY) continue;
 
-                  const modelIndex = Math.floor(rnd() * this.prototypes.length);
-                  if (used[modelIndex] >= FOREST_MODEL_CAPACITY) continue;
+                const elevation = this.getElevation(ix, iy, ll.lng, ll.lat, "t");
+                const merc = maplibregl.MercatorCoordinate.fromLngLat([ll.lng, ll.lat], elevation);
+                const mpu = merc.meterInMercatorCoordinateUnits();
+                const s = FOREST_TREE_HEIGHT_METERS * (0.76 + rnd() * 0.48) * mpu;
 
-                  const elevation = this.getElevation(ix, iy, lng, lat);
-                  const merc = maplibregl.MercatorCoordinate.fromLngLat([lng, lat], elevation);
-                  const mpu = merc.meterInMercatorCoordinateUnits();
+                this.tempPos.set(merc.x, merc.y, merc.z);
+                this.tempEuler.set(0, 0, rnd() * Math.PI * 2);
+                this.tempQuat.setFromEuler(this.tempEuler);
+                this.tempScale.set(s, s, s);
+                this.tempMatrix.compose(this.tempPos, this.tempQuat, this.tempScale);
 
-                  const scaleJitter = 0.76 + rnd() * 0.48;
-                  const s = FOREST_TREE_HEIGHT_METERS * scaleJitter * mpu;
-                  this.tempPos.set(merc.x, merc.y, merc.z);
-                  this.tempEuler.set(0, 0, rnd() * Math.PI * 2);
-                  this.tempQuat.setFromEuler(this.tempEuler);
-                  this.tempScale.set(s, s, s);
-                  this.tempMatrix.compose(this.tempPos, this.tempQuat, this.tempScale);
+                const slot = used[modelIndex]++;
+                for (const mesh of this.meshGroups[modelIndex]) mesh.setMatrixAt(slot, this.tempMatrix);
+                realCount++;
+              }
+            }
 
-                  const slot = used[modelIndex]++;
-                  for (const mesh of this.meshGroups[modelIndex]) {
-                    mesh.setMatrixAt(slot, this.tempMatrix);
-                  }
-                  totalVisible++;
-                }
+            // -------------------------------------------------------------
+            // Zone B - very cheap canopy clumps across a huge viewport ring.
+            // -------------------------------------------------------------
+            const clumpCell = FOREST_CLUMP_CELL_WORLD;
+            const clumpMinX = Math.floor((centerMerc.x - halfW * FOREST_CLUMP_OUTER_RADIUS) / clumpCell);
+            const clumpMaxX = Math.ceil((centerMerc.x + halfW * FOREST_CLUMP_OUTER_RADIUS) / clumpCell);
+            const clumpMinY = Math.floor((centerMerc.y - halfH * FOREST_CLUMP_OUTER_RADIUS) / clumpCell);
+            const clumpMaxY = Math.ceil((centerMerc.y + halfH * FOREST_CLUMP_OUTER_RADIUS) / clumpCell);
+
+            clumpLoop:
+            for (let iy = clumpMinY; iy <= clumpMaxY; iy++) {
+              for (let ix = clumpMinX; ix <= clumpMaxX; ix++) {
+                if (clumpCount >= FOREST_CLUMP_CAP) break clumpLoop;
+                const rnd = forestMulberry32(forestCellSeed(ix, iy, 911));
+                const mx = (ix + 0.12 + rnd() * 0.76) * clumpCell;
+                const my = (iy + 0.12 + rnd() * 0.76) * clumpCell;
+                const d = this.viewportDistance(mx, my, centerMerc, halfW, halfH);
+                if (d < FOREST_CLUMP_INNER_RADIUS || d > FOREST_CLUMP_OUTER_RADIUS) continue;
+
+                const ll = new maplibregl.MercatorCoordinate(mx, my, 0).toLngLat();
+                const biomeEntry = forestFeatureAtCoordinate(biomeFeatures, ll.lng, ll.lat);
+                if (!biomeEntry) continue;
+
+                // Clumps represent many crowns, so they need fewer accepted cells.
+                // They are densest around 1-2 viewports and thin gradually outward.
+                const outerFade = Math.max(0, Math.min(1,
+                  (FOREST_CLUMP_OUTER_RADIUS - d) / (FOREST_CLUMP_OUTER_RADIUS - 1.55)
+                ));
+                const innerFade = Math.max(0, Math.min(1,
+                  (d - FOREST_CLUMP_INNER_RADIUS) / 0.42
+                ));
+                const keep = biomeEntry.density * (0.32 + 0.68 * outerFade) * innerFade;
+                if (rnd() > keep) continue;
+
+                const elevation = this.getElevation(ix, iy, ll.lng, ll.lat, "c");
+                const merc = maplibregl.MercatorCoordinate.fromLngLat([ll.lng, ll.lat], elevation);
+                const mpu = merc.meterInMercatorCoordinateUnits();
+
+                // Slightly larger at distance so a sparse clump layer still reads as forest canopy.
+                const clumpHeight = FOREST_TREE_HEIGHT_METERS * (1.20 + rnd() * 0.30);
+                const s = clumpHeight * mpu;
+                this.tempPos.set(merc.x, merc.y, merc.z);
+                this.tempEuler.set(0, 0, rnd() * Math.PI * 2);
+                this.tempQuat.setFromEuler(this.tempEuler);
+                this.tempScale.set(s, s, s);
+                this.tempMatrix.compose(this.tempPos, this.tempQuat, this.tempScale);
+                this.clumpMesh.setMatrixAt(clumpCount++, this.tempMatrix);
               }
             }
 
@@ -1085,10 +1137,11 @@
                 mesh.instanceMatrix.needsUpdate = true;
               }
             }
+            this.clumpMesh.count = clumpCount;
+            this.clumpMesh.instanceMatrix.needsUpdate = true;
 
             this.lastCoverageKey = coverageKey;
-            this.lastVisibleTreeCount = totalVisible;
-            console.info(`Dense tiled forest: ${totalVisible} visible trees, stride ${stride}, ${tiles.length} active tiles.`);
+            console.info(`Hybrid forest: ${realCount} real trees + ${clumpCount} canopy clumps.`);
             this.map.triggerRepaint();
           },
 
@@ -1103,10 +1156,12 @@
           onRemove() {
             if (this.onMoveEnd) this.map.off("moveend", this.onMoveEnd);
             if (this.onZoomEnd) this.map.off("zoomend", this.onZoomEnd);
-            if (this.onIdle) this.map.off("idle", this.onIdle);
             for (const group of this.meshGroups || []) {
               for (const mesh of group) mesh.dispose?.();
             }
+            this.clumpMesh?.dispose?.();
+            clumpGeometry.dispose();
+            clumpMaterial.dispose();
             this.renderer?.dispose();
           }
         };
@@ -1114,9 +1169,8 @@
         const beforeId = map.getLayer("Town names") ? "Town names" :
                          map.getLayer("Capitals") ? "Capitals" : undefined;
         map.addLayer(forestLayer, beforeId);
-        console.info("Dense tiled Gobkit biome forest layer installed.");
+        console.info("Hybrid 3D forest installed: real Gobkit trees nearby, canopy clumps at distance.");
       }
-
 
       map.on("load", () => {
         status.textContent = "Bigane-style + GitHub terrain werkt. Kanka laden...";
