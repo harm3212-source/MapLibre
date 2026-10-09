@@ -734,7 +734,7 @@
       // ---------------------------------------------------------------------
       const STONEFRONT_MODEL_URL = "./Stonefront_v2_Textured.glb";
       const STONEFRONT_NAME = "Stonefront";
-      const STONEFRONT_WIDTH_METERS = 18000;
+      const STONEFRONT_WIDTH_METERS = 36000;
       const STONEFRONT_ROTATION_DEG = 0;
 
       function findStonefrontCoordinates() {
@@ -787,19 +787,17 @@
         const bbox = new THREE.Box3().setFromObject(root);
         const size = new THREE.Vector3();
         bbox.getSize(size);
+        // Stonefront_v2_Textured.glb is already Z-up: X/Y are horizontal,
+        // Z is height. Keep it upright and place its bottom at local Z=0.
         const cx = (bbox.min.x + bbox.max.x) * 0.5;
-        const cz = (bbox.min.z + bbox.max.z) * 0.5;
-        const horizontalSize = Math.max(size.x, size.z, 0.0001);
+        const cy = (bbox.min.y + bbox.max.y) * 0.5;
+        const horizontalSize = Math.max(size.x, size.y, 0.0001);
 
-        root.position.set(-cx, -bbox.min.y, -cz);
-
-        const yUpToZUp = new THREE.Group();
-        yUpToZUp.rotation.x = Math.PI / 2;
-        yUpToZUp.add(root);
+        root.position.set(-cx, -cy, -bbox.min.z);
 
         const placement = new THREE.Group();
         placement.rotation.z = THREE.MathUtils.degToRad(STONEFRONT_ROTATION_DEG);
-        placement.add(yUpToZUp);
+        placement.add(root);
         placement.visible = false;
 
         const stonefrontLayer = {
