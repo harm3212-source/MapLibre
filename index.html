@@ -729,16 +729,25 @@
 
 
 
-      // ---------------------------------------------------------------------
-      // STONEFRONT 3D LANDMARK
-      // ---------------------------------------------------------------------
-      const STONEFRONT_MODEL_URL = "./Stonefront_v2_Textured.glb";
-      const STONEFRONT_NAME = "Stonefront";
-      const STONEFRONT_WIDTH_METERS = 36000;
-      const STONEFRONT_ROTATION_DEG = 0;
 
-      function findStonefrontCoordinates() {
-        const wanted = normalizeLocationName(STONEFRONT_NAME);
+      // ---------------------------------------------------------------------
+      // 3D LANDMARKS - city models placed automatically on their map features
+      // ---------------------------------------------------------------------
+      // All current landmark GLBs are already Z-up (X/Y horizontal, Z vertical).
+      // Widths are deliberately cartographic so the landmarks remain readable
+      // at Bigane's continental map scale.
+      const LANDMARKS_3D = [
+        { name: "Stonefront", model: "./Stonefront_v2_Textured.glb", widthMeters: 36000, rotationDeg: 0 },
+        { name: "Ehlehuak", model: "./Ehlehuak_v2.glb", widthMeters: 43000, rotationDeg: 0 },
+        { name: "Khuktul", model: "./Khuktul_v1.glb", widthMeters: 36000, rotationDeg: 0, aliases: ["Kuktul"] },
+        { name: "Ambrezzo", model: "./Ambrezzo_v2.glb", widthMeters: 36000, rotationDeg: 0 },
+        { name: "Yumizen", model: "./Yumizen_v1.glb", widthMeters: 35000, rotationDeg: 0 },
+        { name: "Seawatch", model: "./Keelfort_v2_Compact.glb", widthMeters: 36000, rotationDeg: 0 },
+        { name: "Old Hill", model: "./Ruined_Hill_Settlement_v1.glb", widthMeters: 29000, rotationDeg: 0 }
+      ];
+
+      function findLandmarkCoordinates(config) {
+        const wantedNames = [config.name, ...(config.aliases || [])].map(normalizeLocationName);
         const layerIds = ["Town names", "Capitals", "clickable"].filter(id => map.getLayer(id));
 
         for (const layerId of layerIds) {
@@ -750,13 +759,13 @@
             const features = map.querySourceFeatures(source, { sourceLayer });
             for (const feature of features || []) {
               const name = feature?.properties?.Burg || feature?.properties?.name || feature?.properties?.Name;
-              if (normalizeLocationName(name) !== wanted) continue;
+              if (!wantedNames.includes(normalizeLocationName(name))) continue;
               if (feature.geometry?.type === "Point" && Array.isArray(feature.geometry.coordinates)) {
                 return feature.geometry.coordinates.slice(0, 2);
               }
             }
           } catch (error) {
-            console.warn(`Stonefront source-query failed for ${layerId}:`, error);
+            console.warn(`${config.name} source-query failed for ${layerId}:`, error);
           }
         }
 
@@ -764,44 +773,45 @@
           const features = map.queryRenderedFeatures({ layers: layerIds });
           for (const feature of features || []) {
             const name = feature?.properties?.Burg || feature?.properties?.name || feature?.properties?.Name;
-            if (normalizeLocationName(name) !== wanted) continue;
+            if (!wantedNames.includes(normalizeLocationName(name))) continue;
             if (feature.geometry?.type === "Point" && Array.isArray(feature.geometry.coordinates)) {
               return feature.geometry.coordinates.slice(0, 2);
             }
           }
         } catch (error) {
-          console.warn("Stonefront rendered-query failed:", error);
+          console.warn(`${config.name} rendered-query failed:`, error);
         }
         return null;
       }
 
-      async function installStonefrontModel() {
-        if (map.getLayer("stonefront-3d")) return;
+      async function installLandmarkModel(config) {
+        const layerId = `landmark-${normalizeLocationName(config.name).replace(/[^a-z0-9]+/g, "-")}-3d`;
+        if (map.getLayer(layerId)) return;
         await ensureThreeJs();
 
         const loader = new GLTFLoader();
-        const gltf = await loader.loadAsync(STONEFRONT_MODEL_URL);
+        const gltf = await loader.loadAsync(config.model);
         const root = gltf.scene;
         root.updateMatrixWorld(true);
 
         const bbox = new THREE.Box3().setFromObject(root);
         const size = new THREE.Vector3();
         bbox.getSize(size);
-        // Stonefront_v2_Textured.glb is already Z-up: X/Y are horizontal,
-        // Z is height. Keep it upright and place its bottom at local Z=0.
         const cx = (bbox.min.x + bbox.max.x) * 0.5;
         const cy = (bbox.min.y + bbox.max.y) * 0.5;
         const horizontalSize = Math.max(size.x, size.y, 0.0001);
 
+        // Current models are authored Z-up. Center X/Y and place the lowest
+        // model point at local Z=0 so the terrain elevation becomes the base.
         root.position.set(-cx, -cy, -bbox.min.z);
 
         const placement = new THREE.Group();
-        placement.rotation.z = THREE.MathUtils.degToRad(STONEFRONT_ROTATION_DEG);
+        placement.rotation.z = THREE.MathUtils.degToRad(config.rotationDeg || 0);
         placement.add(root);
         placement.visible = false;
 
-        const stonefrontLayer = {
-          id: "stonefront-3d",
+        const landmarkLayer = {
+          id: layerId,
           type: "custom",
           renderingMode: "3d",
 
@@ -827,7 +837,7 @@
             this.renderer.autoClear = false;
 
             this.updatePlacement = () => {
-              if (!this.coordinates) this.coordinates = findStonefrontCoordinates();
+              if (!this.coordinates) this.coordinates = findLandmarkCoordinates(config);
               if (!this.coordinates) {
                 this.placement.visible = false;
                 return;
@@ -836,7 +846,7 @@
               const elevation = this.map.queryTerrainElevation(this.coordinates) ?? 0;
               const merc = maplibregl.MercatorCoordinate.fromLngLat(this.coordinates, elevation);
               const mpu = merc.meterInMercatorCoordinateUnits();
-              const scale = (STONEFRONT_WIDTH_METERS / this.horizontalSize) * mpu;
+              const scale = (config.widthMeters / this.horizontalSize) * mpu;
 
               this.placement.position.set(merc.x, merc.y, merc.z);
               this.placement.scale.set(scale, scale, scale);
@@ -869,263 +879,18 @@
 
         const beforeId = map.getLayer("Town names") ? "Town names" :
                          map.getLayer("Capitals") ? "Capitals" : undefined;
-        map.addLayer(stonefrontLayer, beforeId);
-        console.info("Stonefront 3D model layer installed; waiting for Stonefront map feature if not loaded yet.");
+        map.addLayer(landmarkLayer, beforeId);
+        console.info(`${config.name} 3D landmark installed; waiting for its map feature if not loaded yet.`);
       }
 
-
-      // ---------------------------------------------------------------------
-      // DENSE 3D FOREST - real external low-poly GLB trees (Gobkit, CC0)
-      // ---------------------------------------------------------------------
-      // The biome map is continental-scale, so tree height is intentionally
-      // cartographic rather than realistic. Dense clusters create the visual
-      // impression of a continuous forest without drawing millions of trees.
-      const FOREST_3D_MIN_ZOOM = 4.15;
-      const FOREST_CLUSTER_FILE = "./forest-clusters-3d.geojson";
-      const FOREST_MODELS = [
-        "https://gobkit.com/freebies/environment/TreeHigh001.glb",
-        "https://gobkit.com/freebies/environment/TreeHigh002.glb",
-        "https://gobkit.com/freebies/environment/TreeHigh003.glb",
-        "https://gobkit.com/freebies/environment/TreeMed001.glb",
-        "https://gobkit.com/freebies/environment/TreeMed002.glb",
-        "https://gobkit.com/freebies/environment/TreeMed003.glb",
-        "https://gobkit.com/freebies/environment/TreeLow001.glb",
-        "https://gobkit.com/freebies/environment/TreeLow002.glb",
-        "https://gobkit.com/freebies/environment/TreeLow003.glb"
-      ];
-
-      function forestMulberry32(seed) {
-        return function() {
-          let t = seed += 0x6D2B79F5;
-          t = Math.imul(t ^ t >>> 15, t | 1);
-          t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-          return ((t ^ t >>> 14) >>> 0) / 4294967296;
-        };
-      }
-
-      function forestHeightMetersForZoom(z) {
-        // At low zoom these function like raised map symbols. At high zoom they
-        // shrink toward a less exaggerated size.
-        if (z <= 4.5) return 2200;
-        if (z <= 5.5) return 2200 - (z - 4.5) * 650;
-        if (z <= 7.0) return 1550 - (z - 5.5) * 400;
-        if (z <= 9.0) return 950 - (z - 7.0) * 250;
-        return 450;
-      }
-
-      function forestRadiusMetersForZoom(z) {
-        if (z <= 4.5) return 8000;
-        if (z <= 5.5) return 8000 - (z - 4.5) * 1800;
-        if (z <= 7.0) return 6200 - (z - 5.5) * 1200;
-        if (z <= 9.0) return 4400 - (z - 7.0) * 900;
-        return 2600;
-      }
-
-      async function loadForestPrototype(url) {
-        await ensureThreeJs();
-        const loader = new GLTFLoader();
-        const gltf = await loader.loadAsync(url);
-        const root = gltf.scene;
-        root.updateMatrixWorld(true);
-
-        const bbox = new THREE.Box3().setFromObject(root);
-        const size = new THREE.Vector3();
-        bbox.getSize(size);
-        const height = Math.max(size.y, 0.0001);
-        const cx = (bbox.min.x + bbox.max.x) * 0.5;
-        const cz = (bbox.min.z + bbox.max.z) * 0.5;
-
-        const parts = [];
-        root.traverse(obj => {
-          if (!obj.isMesh || !obj.geometry) return;
-          const geom = obj.geometry.clone();
-          geom.applyMatrix4(obj.matrixWorld);
-          geom.translate(-cx, -bbox.min.y, -cz);
-          geom.scale(1 / height, 1 / height, 1 / height);
-          // glTF is Y-up; the map's custom world uses Z-up.
-          geom.rotateX(Math.PI / 2);
-          geom.computeBoundingSphere();
-          const mats = Array.isArray(obj.material) ? obj.material.map(m => m.clone()) : obj.material.clone();
-          parts.push({ geometry: geom, material: mats });
-        });
-        if (!parts.length) throw new Error(`Geen meshes gevonden in ${url}`);
-        return parts;
-      }
-
-      async function installDenseThreeForestLayer() {
-        if (map.getLayer("bigane-3d-forest")) return;
-
-        // Load Three only after the base map has finished loading.
-        await ensureThreeJs();
-
-        const response = await fetch(FOREST_CLUSTER_FILE, { cache: "no-store" });
-        if (!response.ok) throw new Error(`3D forest data HTTP ${response.status}`);
-        const data = await response.json();
-        const clusters = data.features || [];
-        if (!clusters.length) return;
-
-        // Load real artist-made models first. If this fails, the map remains usable.
-        const prototypes = await Promise.all(FOREST_MODELS.map(loadForestPrototype));
-
-        // Build deterministic tree records once. Elevation is queried per cluster,
-        // not per tree, which keeps thousands of instances affordable.
-        const recordsByModel = Array.from({ length: prototypes.length }, () => []);
-        for (let ci = 0; ci < clusters.length; ci++) {
-          const feature = clusters[ci];
-          const [lng, lat] = feature.geometry.coordinates;
-          const props = feature.properties || {};
-          const rnd = forestMulberry32(Number(props.seed) || ci + 1);
-          const count = Math.max(8, Number(props.count) || 24);
-          const clusterScale = Number(props.scale) || 1;
-          const biome = props.biome || "";
-
-          for (let i = 0; i < count; i++) {
-            const angle = rnd() * Math.PI * 2;
-            const radial01 = Math.pow(rnd(), 0.60);
-            let modelIndex;
-            // Slightly different height mix per biome while reusing the same
-            // artist-made model family.
-            if (biome === "Taiga" || biome === "Deep Wood") {
-              modelIndex = rnd() < 0.72 ? Math.floor(rnd() * 3) : 3 + Math.floor(rnd() * 3);
-            } else if (biome.includes("rainforest")) {
-              modelIndex = rnd() < 0.58 ? Math.floor(rnd() * 3) : 3 + Math.floor(rnd() * 3);
-            } else {
-              const r = rnd();
-              modelIndex = r < 0.34 ? Math.floor(rnd() * 3) : r < 0.76 ? 3 + Math.floor(rnd() * 3) : 6 + Math.floor(rnd() * 3);
-            }
-            recordsByModel[modelIndex].push({
-              lng, lat,
-              radial01,
-              angle,
-              rot: rnd() * Math.PI * 2,
-              scale: clusterScale * (0.72 + rnd() * 0.58),
-              clusterIndex: ci
-            });
+      async function installAllLandmarks() {
+        for (const config of LANDMARKS_3D) {
+          try {
+            await installLandmarkModel(config);
+          } catch (error) {
+            console.warn(`${config.name} 3D-model overgeslagen; kaart blijft werken:`, error);
           }
         }
-
-        const forestLayer = {
-          id: "bigane-3d-forest",
-          type: "custom",
-          renderingMode: "3d",
-
-          onAdd(mapInstance, gl) {
-            this.map = mapInstance;
-            this.camera = new THREE.Camera();
-            this.scene = new THREE.Scene();
-            this.clusters = clusters;
-            this.prototypes = prototypes;
-            this.recordsByModel = recordsByModel;
-            this.clusterElevations = new Array(clusters.length).fill(null);
-            this.meshGroups = [];
-            this.tempMatrix = new THREE.Matrix4();
-            this.tempPos = new THREE.Vector3();
-            this.tempQuat = new THREE.Quaternion();
-            this.tempScale = new THREE.Vector3();
-            this.tempEuler = new THREE.Euler(0, 0, 0, "XYZ");
-            this.lastZoomBucket = -1;
-
-            // Models keep their original materials; lighting makes their low-poly
-            // facets readable against the textured map.
-            this.scene.add(new THREE.HemisphereLight(0xf4f1dc, 0x344231, 2.25));
-            const sun = new THREE.DirectionalLight(0xfff0c8, 2.8);
-            sun.position.set(-0.7, -0.6, 1.6).normalize();
-            this.scene.add(sun);
-
-            for (let mi = 0; mi < this.prototypes.length; mi++) {
-              const count = this.recordsByModel[mi].length;
-              const meshes = [];
-              for (const part of this.prototypes[mi]) {
-                const mesh = new THREE.InstancedMesh(part.geometry, part.material, Math.max(1, count));
-                mesh.frustumCulled = false;
-                mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-                meshes.push(mesh);
-                this.scene.add(mesh);
-              }
-              this.meshGroups.push(meshes);
-            }
-
-            this.renderer = new THREE.WebGLRenderer({
-              canvas: mapInstance.getCanvas(),
-              context: gl,
-              antialias: true
-            });
-            this.renderer.autoClear = false;
-
-            this.updateInstances(true);
-            this.onMoveEnd = () => this.updateInstances(true);
-            this.onZoom = () => {
-              const bucket = Math.floor(mapInstance.getZoom() * 3);
-              if (bucket !== this.lastZoomBucket) {
-                this.lastZoomBucket = bucket;
-                this.updateInstances(false);
-              }
-            };
-            mapInstance.on("moveend", this.onMoveEnd);
-            mapInstance.on("zoom", this.onZoom);
-          },
-
-          updateInstances(refreshElevation = false) {
-            const zoom = this.map.getZoom();
-            const show = zoom >= FOREST_3D_MIN_ZOOM;
-            const targetHeight = forestHeightMetersForZoom(zoom);
-            const clusterRadius = forestRadiusMetersForZoom(zoom);
-
-            if (refreshElevation) {
-              for (let ci = 0; ci < this.clusters.length; ci++) {
-                const [lng, lat] = this.clusters[ci].geometry.coordinates;
-                const e = this.map.queryTerrainElevation([lng, lat]);
-                if (e != null && Number.isFinite(e)) this.clusterElevations[ci] = e;
-              }
-            }
-
-            for (let mi = 0; mi < this.recordsByModel.length; mi++) {
-              const recs = this.recordsByModel[mi];
-              const group = this.meshGroups[mi];
-              for (let i = 0; i < recs.length; i++) {
-                const t = recs[i];
-                const elevation = Number.isFinite(this.clusterElevations[t.clusterIndex]) ? this.clusterElevations[t.clusterIndex] : 0;
-                const merc = maplibregl.MercatorCoordinate.fromLngLat([t.lng, t.lat], elevation);
-                const mpu = merc.meterInMercatorCoordinateUnits();
-                const radial = t.radial01 * clusterRadius;
-                const east = Math.cos(t.angle) * radial;
-                const north = Math.sin(t.angle) * radial;
-                const x = merc.x + east * mpu;
-                const y = merc.y - north * mpu;
-                const z = merc.z;
-
-                const s = show ? targetHeight * t.scale * mpu : 0;
-                this.tempPos.set(x, y, z);
-                this.tempEuler.set(0, 0, t.rot);
-                this.tempQuat.setFromEuler(this.tempEuler);
-                this.tempScale.set(s, s, s);
-                this.tempMatrix.compose(this.tempPos, this.tempQuat, this.tempScale);
-                for (const mesh of group) mesh.setMatrixAt(i, this.tempMatrix);
-              }
-              for (const mesh of group) mesh.instanceMatrix.needsUpdate = true;
-            }
-            this.map.triggerRepaint();
-          },
-
-          render(gl, args) {
-            const mainMatrix = args?.defaultProjectionData?.mainMatrix;
-            if (!mainMatrix) return;
-            this.camera.projectionMatrix = new THREE.Matrix4().fromArray(mainMatrix);
-            this.renderer.resetState();
-            this.renderer.render(this.scene, this.camera);
-          },
-
-          onRemove() {
-            if (this.onMoveEnd) this.map.off("moveend", this.onMoveEnd);
-            if (this.onZoom) this.map.off("zoom", this.onZoom);
-            this.renderer?.dispose();
-          }
-        };
-
-        const beforeId = map.getLayer("Town names") ? "Town names" :
-                         map.getLayer("Capitals") ? "Capitals" : undefined;
-        map.addLayer(forestLayer, beforeId);
-        console.info(`Dense 3D forest installed: ${clusters.length} clusters, ${recordsByModel.reduce((a,b)=>a+b.length,0)} tree instances.`);
       }
 
 
@@ -1156,13 +921,7 @@
           exaggeration: 1.5
         });
 
-        installDenseThreeForestLayer().catch(error => {
-          console.warn("3D boslaag overgeslagen; kaart blijft werken:", error);
-        });
-
-        installStonefrontModel().catch(error => {
-          console.warn("Stonefront 3D-model overgeslagen; kaart blijft werken:", error);
-        });
+        installAllLandmarks();
 
         // Hillshade from the same DEM.
         if (!map.getLayer("bigane-hillshade")) {
