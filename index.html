@@ -886,8 +886,8 @@
       const HF_OUTER_RADIUS = 2.55;
       const HF_FADE_START = 1.48;
       const HF_HEIGHTMAP_SIZE = 1024;
-      const HF_NEAR_CAP_PER_TYPE = 1800;
-      const HF_SPRITE_CAP_PER_TYPE = 6500;
+      const HF_NEAR_CAP_TOTAL = 10800;
+      const HF_SPRITE_CAP_TOTAL = 39000;
       const HF_MAX_CANDIDATES = 80000;
       let hybridForestController = null;
 
@@ -935,6 +935,14 @@
           widthRatio: 0.42
         }
       ];
+      const HF_SPRITE_PALETTES = {
+        deciduous: [[0.22,0.40,0.16],[0.27,0.46,0.19],[0.17,0.34,0.13]],
+        conifer:   [[0.10,0.27,0.14],[0.13,0.31,0.17],[0.075,0.22,0.115]],
+        tropical:  [[0.15,0.46,0.20],[0.20,0.53,0.24],[0.11,0.39,0.16]],
+        deepwood:  [[0.07,0.21,0.10],[0.09,0.25,0.12],[0.045,0.16,0.075]],
+        savanna:   [[0.38,0.46,0.17],[0.45,0.52,0.20],[0.31,0.38,0.14]],
+        wetland:   [[0.18,0.34,0.21],[0.22,0.40,0.25],[0.14,0.28,0.17]]
+      };
       const HF_TYPE_INDEX = new Map(HF_TYPES.map((t, i) => [t.id, i]));
 
       const HF_BIOMES = {
@@ -1222,8 +1230,10 @@
         const ctx = canvas.getContext("2d");
         ctx.clearRect(0, 0, 160, 160);
         ctx.imageSmoothingEnabled = true;
-        const foliage = hfColorCss(type.foliage, 0.98);
-        const foliageLight = hfColorCss(type.foliage.map(v => Math.min(1, v * 1.22 + 0.04)), 0.92);
+        const palette = HF_SPRITE_PALETTES[type.id] || [type.foliage, type.foliage, type.foliage];
+        const foliage = hfColorCss(palette[0], 0.98);
+        const foliageLight = hfColorCss(palette[1], 0.94);
+        const foliageDark = hfColorCss(palette[2], 0.98);
         const trunk = hfColorCss(type.trunk, 0.98);
 
         const drawTrunk = (x, y, w, h) => {
@@ -1270,10 +1280,10 @@
           drawTrunk(48, 149, 7, 47);
           drawTrunk(82, 149, 8, 55);
           drawTrunk(116, 149, 6, 43);
-          ellipse(45, 88, type.id === "tropical" ? 33 : 29, type.id === "savanna" ? 15 : 30);
+          ellipse(45, 88, type.id === "tropical" ? 33 : 29, type.id === "savanna" ? 15 : 30, foliageDark);
           ellipse(84, 72, type.id === "tropical" ? 39 : 34, type.id === "deepwood" ? 37 : 35, foliageLight);
-          ellipse(118, 91, type.id === "tropical" ? 31 : 27, type.id === "deepwood" ? 32 : 29);
-          ellipse(69, 94, 27, 23);
+          ellipse(118, 91, type.id === "tropical" ? 31 : 27, type.id === "deepwood" ? 32 : 29, foliage);
+          ellipse(69, 94, 27, 23, foliage);
           ellipse(101, 99, 25, 22, foliageLight);
         }
         return canvas;
@@ -1450,11 +1460,11 @@
 
               const nearInstanceBuffer = gl.createBuffer();
               gl.bindBuffer(gl.ARRAY_BUFFER, nearInstanceBuffer);
-              gl.bufferData(gl.ARRAY_BUFFER, HF_NEAR_CAP_PER_TYPE * 7 * 4, gl.DYNAMIC_DRAW);
+              gl.bufferData(gl.ARRAY_BUFFER, HF_NEAR_CAP_TOTAL * 7 * 4, gl.DYNAMIC_DRAW);
 
               const spriteInstanceBuffer = gl.createBuffer();
               gl.bindBuffer(gl.ARRAY_BUFFER, spriteInstanceBuffer);
-              gl.bufferData(gl.ARRAY_BUFFER, HF_SPRITE_CAP_PER_TYPE * 8 * 4, gl.DYNAMIC_DRAW);
+              gl.bufferData(gl.ARRAY_BUFFER, HF_SPRITE_CAP_TOTAL * 8 * 4, gl.DYNAMIC_DRAW);
 
               return {
                 type,
@@ -1668,19 +1678,23 @@
 
             const spriteWidthMultiplier = zoom < 4.85 ? 2.55 : zoom < 6.25 ? 1.75 : 1.28;
             const spriteHeightMultiplier = zoom < 4.85 ? 1.16 : zoom < 6.25 ? 1.10 : 1.04;
+            let nearTotalSelected = 0;
+            let spriteTotalSelected = 0;
             for (const c of candidates) {
               const n = nearData[c.typeIndex];
               const s = spriteData[c.typeIndex];
-              if (c.near && n.length / 7 < HF_NEAR_CAP_PER_TYPE) {
+              if (c.near && nearTotalSelected < HF_NEAR_CAP_TOTAL) {
                 n.push(c.x, c.y, c.mpu, c.width, c.height, c.rotation, c.seed);
+                nearTotalSelected++;
               }
-              if (c.alpha > 0.045 && s.length / 8 < HF_SPRITE_CAP_PER_TYPE) {
+              if (c.alpha > 0.045 && spriteTotalSelected < HF_SPRITE_CAP_TOTAL) {
                 s.push(
                   c.x, c.y, c.mpu,
                   c.width * spriteWidthMultiplier,
                   c.height * spriteHeightMultiplier,
                   c.rotation, c.seed, c.alpha
                 );
+                spriteTotalSelected++;
               }
             }
 
@@ -1705,7 +1719,7 @@
 
             const nearTotal = this.typeStates.reduce((sum, state) => sum + state.nearCount, 0);
             const spriteTotal = this.typeStates.reduce((sum, state) => sum + state.spriteCount, 0);
-            console.info(`Hybrid forest: ${nearTotal} 3D trees + ${spriteTotal} sprite clusters from ${features.length} biome polygons.`);
+            console.info(`Hybrid forest: ${nearTotal}/${HF_NEAR_CAP_TOTAL} 3D trees + ${spriteTotal}/${HF_SPRITE_CAP_TOTAL} sprite clusters from ${features.length} biome polygons.`);
             this.map.triggerRepaint();
           },
 
