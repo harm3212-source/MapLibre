@@ -248,6 +248,10 @@
       <input type="checkbox" id="toggle-towns" checked />
       <span>Town names / Capitals</span>
     </label>
+    <label>
+      <input type="checkbox" id="toggle-forests" checked />
+      <span>3D forests</span>
+    </label>
   </div>
 
 
@@ -713,6 +717,7 @@
       function setupLayerSwitcher() {
         const statesToggle = document.getElementById("toggle-states");
         const townsToggle = document.getElementById("toggle-towns");
+        const forestsToggle = document.getElementById("toggle-forests");
 
         // Match the original style defaults.
         const statesInitiallyVisible =
@@ -736,6 +741,17 @@
           townsToggle.addEventListener("change", () => {
             for (const id of townLayerIds) {
               setLayerVisibility(id, townsToggle.checked);
+            }
+          });
+        }
+
+        if (forestsToggle) {
+          forestsToggle.addEventListener("change", () => {
+            if (hybridForestController) {
+              hybridForestController.enabled = forestsToggle.checked;
+              hybridForestController.needsRebuild = true;
+              hybridForestController.scheduleRebuild?.(true, 0);
+              map.triggerRepaint();
             }
           });
         }
@@ -852,6 +868,986 @@
             map.setPaintProperty("Sandwich", "fill-opacity", 1);
           }
         }
+      }
+
+      // ---------------------------------------------------------------------
+      // HYBRID GPU FOREST
+      // ---------------------------------------------------------------------
+      // Forest placement is derived from the existing Biomes vector layer.
+      // Close to the camera: low-poly 3D tree archetypes.
+      // Farther away: cheap crossed-plane sprite clusters.
+      // Both sample MapLibre's terrain height map on the GPU. A wide padded
+      // viewport and an alpha fade keep the active forest boundary out of sight.
+      const HF_LAYER_ID = "bigane-hybrid-forest";
+      const HF_MIN_ZOOM = 4.15;
+      const HF_WORLD_METERS = 40075016.68557849;
+      const HF_BASE_CELL_METERS = 7000;
+      const HF_BASE_CELL_WORLD = HF_BASE_CELL_METERS / HF_WORLD_METERS;
+      const HF_OUTER_RADIUS = 2.55;
+      const HF_FADE_START = 1.48;
+      const HF_HEIGHTMAP_SIZE = 1024;
+      const HF_NEAR_CAP_PER_TYPE = 1800;
+      const HF_SPRITE_CAP_PER_TYPE = 6500;
+      const HF_MAX_CANDIDATES = 80000;
+      let hybridForestController = null;
+
+      const HF_TYPES = [
+        {
+          id: "deciduous",
+          foliage: [0.22, 0.40, 0.16],
+          trunk: [0.28, 0.18, 0.10],
+          baseHeight: 7400,
+          widthRatio: 0.70
+        },
+        {
+          id: "conifer",
+          foliage: [0.10, 0.27, 0.14],
+          trunk: [0.25, 0.17, 0.10],
+          baseHeight: 8500,
+          widthRatio: 0.43
+        },
+        {
+          id: "tropical",
+          foliage: [0.15, 0.46, 0.20],
+          trunk: [0.31, 0.20, 0.10],
+          baseHeight: 8000,
+          widthRatio: 0.82
+        },
+        {
+          id: "deepwood",
+          foliage: [0.07, 0.21, 0.10],
+          trunk: [0.22, 0.14, 0.08],
+          baseHeight: 9100,
+          widthRatio: 0.76
+        },
+        {
+          id: "savanna",
+          foliage: [0.38, 0.46, 0.17],
+          trunk: [0.33, 0.22, 0.10],
+          baseHeight: 6600,
+          widthRatio: 1.02
+        },
+        {
+          id: "wetland",
+          foliage: [0.18, 0.34, 0.21],
+          trunk: [0.26, 0.18, 0.11],
+          baseHeight: 7900,
+          widthRatio: 0.42
+        }
+      ];
+      const HF_TYPE_INDEX = new Map(HF_TYPES.map((t, i) => [t.id, i]));
+
+      const HF_BIOMES = {
+        "Tropical rainforest": {
+          density: 0.96,
+          mix: [["tropical", 0.78], ["deciduous", 0.22]]
+        },
+        "Tropical seasonal forest": {
+          density: 0.72,
+          mix: [["tropical", 0.52], ["savanna", 0.33], ["deciduous", 0.15]]
+        },
+        "Temperate rainforest": {
+          density: 0.93,
+          mix: [["deciduous", 0.68], ["conifer", 0.32]]
+        },
+        "Temperate deciduous forest": {
+          density: 0.86,
+          mix: [["deciduous", 0.88], ["conifer", 0.12]]
+        },
+        "Taiga": {
+          density: 0.92,
+          mix: [["conifer", 0.94], ["wetland", 0.06]]
+        },
+        "Deep Wood": {
+          density: 0.99,
+          mix: [["deepwood", 0.68], ["conifer", 0.25], ["deciduous", 0.07]]
+        },
+        "Wetland": {
+          density: 0.43,
+          mix: [["wetland", 0.68], ["deciduous", 0.32]]
+        },
+        "Savanna": {
+          density: 0.19,
+          mix: [["savanna", 0.92], ["tropical", 0.08]]
+        }
+      };
+
+      function hfHash(ix, iy, salt = 0) {
+        let h = Math.imul((ix | 0) ^ Math.imul(salt + 1, 374761393), 668265263);
+        h ^= Math.imul((iy | 0) ^ Math.imul(salt + 7, 1274126177), 2246822519);
+        h ^= h >>> 15;
+        h = Math.imul(h, 3266489917);
+        h ^= h >>> 16;
+        return (h >>> 0) / 4294967295;
+      }
+
+      function hfMod(value, divisor) {
+        return ((value % divisor) + divisor) % divisor;
+      }
+
+      function hfMercY(lat) {
+        const r = Math.max(-85.05112878, Math.min(85.05112878, lat)) * Math.PI / 180;
+        return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) * 0.5;
+      }
+
+      function hfLng(x) { return x * 360 - 180; }
+      function hfLat(y) {
+        const n = Math.PI * (1 - 2 * y);
+        return Math.atan(Math.sinh(n)) * 180 / Math.PI;
+      }
+
+      function hfFeatureBounds(feature) {
+        let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+        const visit = value => {
+          if (!Array.isArray(value)) return;
+          if (value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number") {
+            west = Math.min(west, value[0]);
+            east = Math.max(east, value[0]);
+            south = Math.min(south, value[1]);
+            north = Math.max(north, value[1]);
+            return;
+          }
+          for (const child of value) visit(child);
+        };
+        visit(feature?.geometry?.coordinates);
+        if (!Number.isFinite(west)) return null;
+        return {
+          west, east, south, north,
+          x0: (west + 180) / 360,
+          x1: (east + 180) / 360,
+          y0: hfMercY(north),
+          y1: hfMercY(south)
+        };
+      }
+
+      function hfStrideForZoom(zoom) {
+        if (zoom < 4.85) return 4;
+        if (zoom < 6.25) return 2;
+        return 1;
+      }
+
+      function hfNearRadiusForZoom(zoom) {
+        if (zoom < 5.0) return 0;
+        if (zoom < 5.8) return 0.38;
+        if (zoom < 6.8) return 0.64;
+        return 0.92;
+      }
+
+      function hfSelectType(biome, random01) {
+        const config = HF_BIOMES[biome];
+        if (!config) return 0;
+        let running = 0;
+        for (const [typeId, weight] of config.mix) {
+          running += weight;
+          if (random01 <= running) return HF_TYPE_INDEX.get(typeId) ?? 0;
+        }
+        return HF_TYPE_INDEX.get(config.mix[config.mix.length - 1][0]) ?? 0;
+      }
+
+      function hfCompileProgram(gl, vertexSource, fragmentSource) {
+        const compile = (type, source) => {
+          const shader = gl.createShader(type);
+          gl.shaderSource(shader, `#version 300 es\nprecision highp float;\n${source}`);
+          gl.compileShader(shader);
+          if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            const message = gl.getShaderInfoLog(shader) || "Shader compile error";
+            gl.deleteShader(shader);
+            throw new Error(message);
+          }
+          return shader;
+        };
+        const vertex = compile(gl.VERTEX_SHADER, vertexSource);
+        const fragment = compile(gl.FRAGMENT_SHADER, fragmentSource);
+        const program = gl.createProgram();
+        gl.attachShader(program, vertex);
+        gl.attachShader(program, fragment);
+        gl.linkProgram(program);
+        gl.deleteShader(vertex);
+        gl.deleteShader(fragment);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+          const message = gl.getProgramInfoLog(program) || "Shader link error";
+          gl.deleteProgram(program);
+          throw new Error(message);
+        }
+        return program;
+      }
+
+      function hfNormal(a, b, c) {
+        const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+        const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+        let nx = uy * vz - uz * vy;
+        let ny = uz * vx - ux * vz;
+        let nz = ux * vy - uy * vx;
+        const len = Math.hypot(nx, ny, nz) || 1;
+        nx /= len; ny /= len; nz /= len;
+        return [nx, ny, nz];
+      }
+
+      function hfPushTriangle(out, a, b, c, part) {
+        const normal = hfNormal(a, b, c);
+        for (const p of [a, b, c]) {
+          out.push(p[0], p[1], p[2], normal[0], normal[1], normal[2], part);
+        }
+      }
+
+      function hfAddPrism(out, radius, z0, z1, sides, part, cx = 0, cy = 0) {
+        const bottom = [], top = [];
+        for (let i = 0; i < sides; i++) {
+          const a = i / sides * Math.PI * 2;
+          bottom.push([cx + Math.cos(a) * radius, cy + Math.sin(a) * radius, z0]);
+          top.push([cx + Math.cos(a) * radius, cy + Math.sin(a) * radius, z1]);
+        }
+        for (let i = 0; i < sides; i++) {
+          const j = (i + 1) % sides;
+          hfPushTriangle(out, bottom[i], bottom[j], top[j], part);
+          hfPushTriangle(out, bottom[i], top[j], top[i], part);
+        }
+        for (let i = 1; i < sides - 1; i++) {
+          hfPushTriangle(out, bottom[0], bottom[i + 1], bottom[i], part);
+          hfPushTriangle(out, top[0], top[i], top[i + 1], part);
+        }
+      }
+
+      function hfAddCone(out, radius, z0, z1, sides, part, cx = 0, cy = 0) {
+        const ring = [];
+        const apex = [cx, cy, z1];
+        for (let i = 0; i < sides; i++) {
+          const a = i / sides * Math.PI * 2;
+          ring.push([cx + Math.cos(a) * radius, cy + Math.sin(a) * radius, z0]);
+        }
+        for (let i = 0; i < sides; i++) {
+          const j = (i + 1) % sides;
+          hfPushTriangle(out, ring[i], ring[j], apex, part);
+        }
+        for (let i = 1; i < sides - 1; i++) {
+          hfPushTriangle(out, ring[0], ring[i + 1], ring[i], part);
+        }
+      }
+
+      function hfAddEllipsoid(out, center, radii, segments, rings, part, irregularity = 0) {
+        const [cx, cy, cz] = center;
+        const [rx, ry, rz] = radii;
+        const point = (ring, segment) => {
+          const phi = -Math.PI / 2 + (ring / rings) * Math.PI;
+          const theta = (segment / segments) * Math.PI * 2;
+          const wobble = 1 + irregularity * (
+            Math.sin(theta * 3.1 + ring * 1.7) * 0.45 +
+            Math.cos(theta * 5.3 - ring * 0.8) * 0.25
+          );
+          const cp = Math.cos(phi);
+          return [
+            cx + Math.cos(theta) * cp * rx * wobble,
+            cy + Math.sin(theta) * cp * ry * wobble,
+            cz + Math.sin(phi) * rz
+          ];
+        };
+        for (let r = 0; r < rings; r++) {
+          for (let s = 0; s < segments; s++) {
+            const n = (s + 1) % segments;
+            const a = point(r, s);
+            const b = point(r, n);
+            const c = point(r + 1, n);
+            const d = point(r + 1, s);
+            hfPushTriangle(out, a, b, c, part);
+            hfPushTriangle(out, a, c, d, part);
+          }
+        }
+      }
+
+      function hfTreeGeometry(typeId) {
+        const out = [];
+        if (typeId === "conifer") {
+          hfAddPrism(out, 0.065, 0, 0.70, 6, 0);
+          hfAddCone(out, 0.43, 0.18, 0.65, 8, 1);
+          hfAddCone(out, 0.34, 0.43, 0.83, 8, 1);
+          hfAddCone(out, 0.24, 0.66, 1.02, 8, 1);
+        } else if (typeId === "tropical") {
+          hfAddPrism(out, 0.075, 0, 0.58, 7, 0, -0.02, 0);
+          hfAddEllipsoid(out, [0, 0, 0.76], [0.48, 0.42, 0.28], 8, 4, 1, 0.10);
+          hfAddEllipsoid(out, [-0.22, 0.04, 0.72], [0.34, 0.31, 0.24], 8, 4, 1, 0.12);
+          hfAddEllipsoid(out, [0.24, -0.04, 0.75], [0.35, 0.30, 0.25], 8, 4, 1, 0.12);
+          hfAddEllipsoid(out, [0.06, 0.09, 0.93], [0.30, 0.28, 0.20], 8, 4, 1, 0.10);
+        } else if (typeId === "deepwood") {
+          hfAddPrism(out, 0.105, 0, 0.56, 7, 0, 0.01, -0.01);
+          hfAddEllipsoid(out, [0, 0, 0.73], [0.48, 0.44, 0.32], 8, 4, 1, 0.17);
+          hfAddEllipsoid(out, [-0.25, -0.03, 0.73], [0.34, 0.33, 0.27], 8, 4, 1, 0.17);
+          hfAddEllipsoid(out, [0.25, 0.07, 0.78], [0.36, 0.31, 0.28], 8, 4, 1, 0.17);
+          hfAddEllipsoid(out, [0.02, -0.04, 0.98], [0.31, 0.29, 0.21], 8, 4, 1, 0.15);
+        } else if (typeId === "savanna") {
+          hfAddPrism(out, 0.075, 0, 0.66, 7, 0);
+          hfAddEllipsoid(out, [0, 0, 0.79], [0.57, 0.47, 0.15], 10, 3, 1, 0.08);
+          hfAddEllipsoid(out, [-0.20, 0.02, 0.82], [0.34, 0.30, 0.12], 8, 3, 1, 0.08);
+          hfAddEllipsoid(out, [0.22, -0.02, 0.82], [0.35, 0.29, 0.12], 8, 3, 1, 0.08);
+        } else if (typeId === "wetland") {
+          hfAddPrism(out, 0.06, 0, 0.58, 6, 0);
+          hfAddEllipsoid(out, [0, 0, 0.68], [0.24, 0.22, 0.38], 8, 5, 1, 0.06);
+          hfAddEllipsoid(out, [0.02, -0.01, 0.89], [0.17, 0.16, 0.24], 8, 4, 1, 0.05);
+        } else {
+          hfAddPrism(out, 0.075, 0, 0.57, 7, 0);
+          hfAddEllipsoid(out, [0, 0, 0.75], [0.45, 0.40, 0.31], 8, 4, 1, 0.11);
+          hfAddEllipsoid(out, [-0.20, 0.04, 0.77], [0.32, 0.30, 0.25], 8, 4, 1, 0.11);
+          hfAddEllipsoid(out, [0.22, -0.04, 0.80], [0.34, 0.29, 0.26], 8, 4, 1, 0.11);
+          hfAddEllipsoid(out, [0.02, 0.02, 0.98], [0.28, 0.27, 0.20], 8, 4, 1, 0.10);
+        }
+        return new Float32Array(out);
+      }
+
+      function hfSpriteGeometry() {
+        // Two crossed vertical quads. Local X/Y are horizontal, Z is vertical.
+        return new Float32Array([
+          -0.5, 0, 0,  0, 0,
+           0.5, 0, 0,  1, 0,
+           0.5, 0, 1,  1, 1,
+          -0.5, 0, 0,  0, 0,
+           0.5, 0, 1,  1, 1,
+          -0.5, 0, 1,  0, 1,
+
+           0, -0.5, 0,  0, 0,
+           0,  0.5, 0,  1, 0,
+           0,  0.5, 1,  1, 1,
+           0, -0.5, 0,  0, 0,
+           0,  0.5, 1,  1, 1,
+           0, -0.5, 1,  0, 1
+        ]);
+      }
+
+      function hfColorCss(rgb, alpha = 1) {
+        return `rgba(${Math.round(rgb[0] * 255)},${Math.round(rgb[1] * 255)},${Math.round(rgb[2] * 255)},${alpha})`;
+      }
+
+      function hfMakeSpriteCanvas(type) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 160;
+        canvas.height = 160;
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, 160, 160);
+        ctx.imageSmoothingEnabled = true;
+        const foliage = hfColorCss(type.foliage, 0.98);
+        const foliageLight = hfColorCss(type.foliage.map(v => Math.min(1, v * 1.22 + 0.04)), 0.92);
+        const trunk = hfColorCss(type.trunk, 0.98);
+
+        const drawTrunk = (x, y, w, h) => {
+          ctx.fillStyle = trunk;
+          ctx.fillRect(x - w / 2, y - h, w, h);
+        };
+        const ellipse = (x, y, rx, ry, color = foliage) => {
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+          ctx.fill();
+        };
+        const conifer = (x, baseY, scale = 1) => {
+          drawTrunk(x, baseY, 5 * scale, 36 * scale);
+          ctx.fillStyle = foliage;
+          for (const [cy, halfW, h] of [[104,25,40],[82,21,34],[62,15,28]]) {
+            ctx.beginPath();
+            ctx.moveTo(x, baseY - cy * scale + 93 * scale);
+            ctx.lineTo(x - halfW * scale, baseY - (cy - h) * scale + 93 * scale);
+            ctx.lineTo(x + halfW * scale, baseY - (cy - h) * scale + 93 * scale);
+            ctx.closePath();
+            ctx.fill();
+          }
+        };
+
+        if (type.id === "conifer") {
+          conifer(47, 150, 0.88);
+          conifer(82, 150, 1.06);
+          conifer(116, 150, 0.78);
+        } else if (type.id === "savanna") {
+          drawTrunk(56, 148, 7, 55);
+          drawTrunk(104, 148, 6, 48);
+          ellipse(56, 84, 39, 13);
+          ellipse(104, 92, 34, 12, foliageLight);
+          ellipse(80, 79, 28, 10, foliageLight);
+        } else if (type.id === "wetland") {
+          drawTrunk(46, 150, 5, 50);
+          drawTrunk(81, 150, 5, 58);
+          drawTrunk(116, 150, 4, 45);
+          ellipse(46, 85, 17, 43);
+          ellipse(81, 74, 19, 52, foliageLight);
+          ellipse(116, 93, 15, 37);
+        } else {
+          drawTrunk(48, 149, 7, 47);
+          drawTrunk(82, 149, 8, 55);
+          drawTrunk(116, 149, 6, 43);
+          ellipse(45, 88, type.id === "tropical" ? 33 : 29, type.id === "savanna" ? 15 : 30);
+          ellipse(84, 72, type.id === "tropical" ? 39 : 34, type.id === "deepwood" ? 37 : 35, foliageLight);
+          ellipse(118, 91, type.id === "tropical" ? 31 : 27, type.id === "deepwood" ? 32 : 29);
+          ellipse(69, 94, 27, 23);
+          ellipse(101, 99, 25, 22, foliageLight);
+        }
+        return canvas;
+      }
+
+      function hfCreateTexture(gl, canvas) {
+        const texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        return texture;
+      }
+
+      function installHybridForestLayer() {
+        if (map.getLayer(HF_LAYER_ID)) return;
+
+        const forestLayer = {
+          id: HF_LAYER_ID,
+          type: "custom",
+          renderingMode: "3d",
+          enabled: true,
+          needsRebuild: true,
+          rebuildTimer: null,
+          lastBuildKey: "",
+          biomeFeatures: [],
+          heightBounds: new Float32Array([0, 0, 1, 1]),
+
+          onAdd(mapInstance, gl) {
+            this.map = mapInstance;
+            if (!(gl instanceof WebGL2RenderingContext)) {
+              throw new Error("De hybride boslaag vereist WebGL2.");
+            }
+            this.enabled = document.getElementById("toggle-forests")?.checked !== false;
+            gl.getExtension("EXT_color_buffer_float");
+            this.floatLinear = Boolean(gl.getExtension("OES_texture_float_linear"));
+
+            this.nearProgram = hfCompileProgram(gl, `
+              uniform mat4 u_matrix;
+              uniform vec4 u_heightBounds;
+              uniform sampler2D u_heightMap;
+              in vec3 a_local;
+              in vec3 a_normal;
+              in float a_part;
+              in vec2 i_position;
+              in float i_mpu;
+              in float i_width;
+              in float i_height;
+              in float i_rotation;
+              in float i_seed;
+              out vec3 v_normal;
+              out float v_part;
+              out float v_seed;
+
+              void main() {
+                float cs = cos(i_rotation);
+                float sn = sin(i_rotation);
+                mat2 rot = mat2(cs, -sn, sn, cs);
+                vec2 localXY = rot * (a_local.xy * i_width);
+                vec2 worldXY = i_position + localXY * i_mpu;
+                vec2 uv = (i_position - u_heightBounds.xy) / (u_heightBounds.zw - u_heightBounds.xy);
+                uv = clamp(uv, vec2(0.0), vec2(1.0));
+                float elevation = texture(u_heightMap, vec2(uv.x, 1.0 - uv.y)).r;
+                float zMeters = elevation - i_height * 0.055 + a_local.z * i_height;
+                gl_Position = u_matrix * vec4(worldXY, zMeters * i_mpu, 1.0);
+                v_normal = normalize(vec3(rot * a_normal.xy, a_normal.z));
+                v_part = a_part;
+                v_seed = i_seed;
+              }
+            `, `
+              uniform vec3 u_foliageColor;
+              uniform vec3 u_trunkColor;
+              in vec3 v_normal;
+              in float v_part;
+              in float v_seed;
+              out vec4 fragColor;
+
+              void main() {
+                vec3 lightDir = normalize(vec3(-0.55, -0.70, 1.25));
+                float diffuse = 0.54 + 0.46 * max(dot(normalize(v_normal), lightDir), 0.0);
+                float variation = fract(v_seed * 17.731) - 0.5;
+                vec3 foliage = u_foliageColor * (1.0 + variation * 0.22);
+                vec3 trunk = u_trunkColor * (1.0 + variation * 0.12);
+                vec3 base = mix(trunk, foliage, step(0.5, v_part));
+                fragColor = vec4(base * diffuse, 1.0);
+              }
+            `);
+
+            this.spriteProgram = hfCompileProgram(gl, `
+              uniform mat4 u_matrix;
+              uniform vec4 u_heightBounds;
+              uniform sampler2D u_heightMap;
+              in vec3 a_local;
+              in vec2 a_uv;
+              in vec2 i_position;
+              in float i_mpu;
+              in float i_width;
+              in float i_height;
+              in float i_rotation;
+              in float i_seed;
+              in float i_alpha;
+              out vec2 v_uv;
+              out float v_seed;
+              out float v_alpha;
+
+              void main() {
+                float cs = cos(i_rotation);
+                float sn = sin(i_rotation);
+                mat2 rot = mat2(cs, -sn, sn, cs);
+                vec2 localXY = rot * (a_local.xy * i_width);
+                vec2 worldXY = i_position + localXY * i_mpu;
+                vec2 uv = (i_position - u_heightBounds.xy) / (u_heightBounds.zw - u_heightBounds.xy);
+                uv = clamp(uv, vec2(0.0), vec2(1.0));
+                float elevation = texture(u_heightMap, vec2(uv.x, 1.0 - uv.y)).r;
+                float zMeters = elevation - i_height * 0.045 + a_local.z * i_height;
+                gl_Position = u_matrix * vec4(worldXY, zMeters * i_mpu, 1.0);
+                v_uv = a_uv;
+                v_seed = i_seed;
+                v_alpha = i_alpha;
+              }
+            `, `
+              uniform sampler2D u_sprite;
+              in vec2 v_uv;
+              in float v_seed;
+              in float v_alpha;
+              out vec4 fragColor;
+
+              void main() {
+                vec4 texel = texture(u_sprite, v_uv);
+                float alpha = texel.a * v_alpha;
+                if (alpha < 0.055) discard;
+                float variation = 0.90 + (fract(v_seed * 11.917) - 0.5) * 0.20;
+                fragColor = vec4(texel.rgb * variation, alpha);
+              }
+            `);
+
+            this.nearLocations = {
+              matrix: gl.getUniformLocation(this.nearProgram, "u_matrix"),
+              bounds: gl.getUniformLocation(this.nearProgram, "u_heightBounds"),
+              heightMap: gl.getUniformLocation(this.nearProgram, "u_heightMap"),
+              foliage: gl.getUniformLocation(this.nearProgram, "u_foliageColor"),
+              trunk: gl.getUniformLocation(this.nearProgram, "u_trunkColor")
+            };
+            this.spriteLocations = {
+              matrix: gl.getUniformLocation(this.spriteProgram, "u_matrix"),
+              bounds: gl.getUniformLocation(this.spriteProgram, "u_heightBounds"),
+              heightMap: gl.getUniformLocation(this.spriteProgram, "u_heightMap"),
+              sprite: gl.getUniformLocation(this.spriteProgram, "u_sprite")
+            };
+
+            this.heightMap = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
+            gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, HF_HEIGHTMAP_SIZE, HF_HEIGHTMAP_SIZE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, this.floatLinear ? gl.LINEAR : gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, this.floatLinear ? gl.LINEAR : gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+            this.spriteGeometry = gl.createBuffer();
+            const spriteGeometry = hfSpriteGeometry();
+            this.spriteVertexCount = spriteGeometry.length / 5;
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteGeometry);
+            gl.bufferData(gl.ARRAY_BUFFER, spriteGeometry, gl.STATIC_DRAW);
+
+            this.typeStates = HF_TYPES.map(type => {
+              const nearGeometry = hfTreeGeometry(type.id);
+              const nearGeometryBuffer = gl.createBuffer();
+              gl.bindBuffer(gl.ARRAY_BUFFER, nearGeometryBuffer);
+              gl.bufferData(gl.ARRAY_BUFFER, nearGeometry, gl.STATIC_DRAW);
+
+              const nearInstanceBuffer = gl.createBuffer();
+              gl.bindBuffer(gl.ARRAY_BUFFER, nearInstanceBuffer);
+              gl.bufferData(gl.ARRAY_BUFFER, HF_NEAR_CAP_PER_TYPE * 7 * 4, gl.DYNAMIC_DRAW);
+
+              const spriteInstanceBuffer = gl.createBuffer();
+              gl.bindBuffer(gl.ARRAY_BUFFER, spriteInstanceBuffer);
+              gl.bufferData(gl.ARRAY_BUFFER, HF_SPRITE_CAP_PER_TYPE * 8 * 4, gl.DYNAMIC_DRAW);
+
+              return {
+                type,
+                nearGeometryBuffer,
+                nearVertexCount: nearGeometry.length / 7,
+                nearInstanceBuffer,
+                nearCount: 0,
+                spriteInstanceBuffer,
+                spriteCount: 0,
+                spriteTexture: hfCreateTexture(gl, hfMakeSpriteCanvas(type))
+              };
+            });
+
+            this.scheduleRebuild = (force = false, delay = 80) => {
+              if (force) this.lastBuildKey = "";
+              clearTimeout(this.rebuildTimer);
+              this.rebuildTimer = setTimeout(() => this.rebuild(gl), delay);
+            };
+            this.onMoveEnd = () => this.scheduleRebuild(false, 35);
+            this.onZoomEnd = () => this.scheduleRebuild(true, 35);
+            this.onIdle = () => {
+              if (this.needsRebuild || !this.lastBuildKey) this.scheduleRebuild(false, 30);
+            };
+            this.onSourceData = event => {
+              const biomeLayer = this.map.getLayer("Biomes");
+              if (event?.sourceId === biomeLayer?.source && event?.isSourceLoaded) {
+                this.needsRebuild = true;
+                this.scheduleRebuild(true, 130);
+              }
+            };
+            mapInstance.on("moveend", this.onMoveEnd);
+            mapInstance.on("zoomend", this.onZoomEnd);
+            mapInstance.on("idle", this.onIdle);
+            mapInstance.on("sourcedata", this.onSourceData);
+            this.scheduleRebuild(true, 20);
+            hybridForestController = this;
+          },
+
+          collectBiomeFeatures() {
+            const biomeLayer = this.map.getLayer("Biomes");
+            if (!biomeLayer?.source) return [];
+            const sourceLayer = biomeLayer["source-layer"] || biomeLayer.sourceLayer;
+            let raw = [];
+            try {
+              raw = this.map.querySourceFeatures(
+                biomeLayer.source,
+                sourceLayer ? { sourceLayer } : undefined
+              ) || [];
+            } catch (error) {
+              console.warn("Forest biome source-query failed:", error);
+            }
+            if (!raw.length) {
+              try {
+                raw = this.map.queryRenderedFeatures({ layers: ["Biomes"] }) || [];
+              } catch (_) {}
+            }
+            const features = [];
+            const seenFeatures = new Set();
+            for (const feature of raw) {
+              const biome = feature?.properties?.Biome || "";
+              if (!HF_BIOMES[biome]) continue;
+              const geometry = feature?.geometry;
+              if (!geometry || (geometry.type !== "Polygon" && geometry.type !== "MultiPolygon")) continue;
+              const bounds = hfFeatureBounds(feature);
+              if (!bounds) continue;
+              const first = geometry.type === "Polygon"
+                ? geometry.coordinates?.[0]?.[0]
+                : geometry.coordinates?.[0]?.[0]?.[0];
+              const featureKey = [
+                biome,
+                bounds.west.toFixed(5), bounds.east.toFixed(5),
+                bounds.south.toFixed(5), bounds.north.toFixed(5),
+                Number(first?.[0] || 0).toFixed(5), Number(first?.[1] || 0).toFixed(5)
+              ].join("|");
+              if (seenFeatures.has(featureKey)) continue;
+              seenFeatures.add(featureKey);
+              features.push({ feature, biome, bounds });
+            }
+            return features;
+          },
+
+          activeFrame() {
+            const bounds = this.map.getBounds();
+            const center = this.map.getCenter();
+            const nw = maplibregl.MercatorCoordinate.fromLngLat([bounds.getWest(), bounds.getNorth()]);
+            const se = maplibregl.MercatorCoordinate.fromLngLat([bounds.getEast(), bounds.getSouth()]);
+            const c = maplibregl.MercatorCoordinate.fromLngLat([center.lng, center.lat]);
+            const halfW = Math.max(Math.abs(se.x - nw.x) * 0.5, 1e-8);
+            const halfH = Math.max(Math.abs(se.y - nw.y) * 0.5, 1e-8);
+            return {
+              c, halfW, halfH,
+              x0: c.x - halfW * HF_OUTER_RADIUS,
+              x1: c.x + halfW * HF_OUTER_RADIUS,
+              y0: c.y - halfH * HF_OUTER_RADIUS,
+              y1: c.y + halfH * HF_OUTER_RADIUS
+            };
+          },
+
+          rebuild(gl) {
+            this.needsRebuild = false;
+            if (!this.enabled || this.map.getZoom() < HF_MIN_ZOOM) {
+              for (const state of this.typeStates) {
+                state.nearCount = 0;
+                state.spriteCount = 0;
+              }
+              this.map.triggerRepaint();
+              return;
+            }
+
+            const features = this.collectBiomeFeatures();
+            if (!features.length) {
+              this.needsRebuild = true;
+              return;
+            }
+
+            const zoom = this.map.getZoom();
+            const stride = hfStrideForZoom(zoom);
+            const nearRadius = hfNearRadiusForZoom(zoom);
+            const frame = this.activeFrame();
+            const buildKey = [
+              Math.floor(frame.x0 / HF_BASE_CELL_WORLD),
+              Math.ceil(frame.x1 / HF_BASE_CELL_WORLD),
+              Math.floor(frame.y0 / HF_BASE_CELL_WORLD),
+              Math.ceil(frame.y1 / HF_BASE_CELL_WORLD),
+              stride,
+              features.length
+            ].join(":");
+            if (buildKey === this.lastBuildKey) return;
+
+            const seen = new Set();
+            const candidates = [];
+
+            featureLoop:
+            for (const entry of features) {
+              const b = entry.bounds;
+              const x0 = Math.max(frame.x0, b.x0);
+              const x1 = Math.min(frame.x1, b.x1);
+              const y0 = Math.max(frame.y0, b.y0);
+              const y1 = Math.min(frame.y1, b.y1);
+              if (x0 >= x1 || y0 >= y1) continue;
+
+              const ix0 = Math.floor(x0 / HF_BASE_CELL_WORLD) - 1;
+              const ix1 = Math.ceil(x1 / HF_BASE_CELL_WORLD) + 1;
+              const iy0 = Math.floor(y0 / HF_BASE_CELL_WORLD) - 1;
+              const iy1 = Math.ceil(y1 / HF_BASE_CELL_WORLD) + 1;
+              const biomeConfig = HF_BIOMES[entry.biome];
+
+              for (let ix = ix0; ix <= ix1; ix++) {
+                if (hfMod(ix, stride) !== 0) continue;
+                for (let iy = iy0; iy <= iy1; iy++) {
+                  if (hfMod(iy, stride) !== 0) continue;
+                  const key = `${ix}:${iy}`;
+                  if (seen.has(key)) continue;
+
+                  const jx = (hfHash(ix, iy, 1) - 0.5) * 0.68;
+                  const jy = (hfHash(ix, iy, 2) - 0.5) * 0.68;
+                  const x = (ix + 0.5 + jx) * HF_BASE_CELL_WORLD;
+                  const y = (iy + 0.5 + jy) * HF_BASE_CELL_WORLD;
+                  if (x < frame.x0 || x > frame.x1 || y < frame.y0 || y > frame.y1) continue;
+
+                  const nx = (x - frame.c.x) / frame.halfW;
+                  const ny = (y - frame.c.y) / frame.halfH;
+                  const norm = Math.hypot(nx, ny);
+                  if (norm > HF_OUTER_RADIUS) continue;
+                  if (norm > 1.30 && hfHash(ix, iy, 71) > 0.56) continue;
+                  if (norm > 1.90 && hfHash(ix, iy, 72) > 0.34) continue;
+                  if (hfHash(ix, iy, 3) > biomeConfig.density) continue;
+
+                  const lng = hfLng(x), lat = hfLat(y);
+                  if (!featureContainsCoordinate(entry.feature, [lng, lat])) continue;
+                  seen.add(key);
+
+                  const merc = new maplibregl.MercatorCoordinate(x, y, 0);
+                  const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4));
+                  const type = HF_TYPES[typeIndex];
+                  const scale = 0.78 + hfHash(ix, iy, 5) * 0.54;
+                  const height = type.baseHeight * scale;
+                  const width = height * type.widthRatio * (0.86 + hfHash(ix, iy, 6) * 0.28);
+                  const rotation = hfHash(ix, iy, 7) * Math.PI * 2;
+                  const seed = hfHash(ix, iy, 8);
+
+                  let alpha;
+                  if (nearRadius > 0 && norm <= nearRadius) {
+                    alpha = 0.22;
+                  } else if (norm <= HF_FADE_START) {
+                    alpha = 0.91;
+                  } else {
+                    alpha = 0.91 * Math.max(0, (HF_OUTER_RADIUS - norm) / (HF_OUTER_RADIUS - HF_FADE_START));
+                  }
+
+                  candidates.push({
+                    x, y,
+                    mpu: merc.meterInMercatorCoordinateUnits(),
+                    typeIndex,
+                    width,
+                    height,
+                    rotation,
+                    seed,
+                    alpha,
+                    norm,
+                    near: nearRadius > 0 && norm <= nearRadius
+                  });
+                  if (candidates.length >= HF_MAX_CANDIDATES) break featureLoop;
+                }
+              }
+            }
+
+            candidates.sort((a, b) => a.norm - b.norm);
+            const nearData = HF_TYPES.map(() => []);
+            const spriteData = HF_TYPES.map(() => []);
+
+            const spriteWidthMultiplier = zoom < 4.85 ? 2.55 : zoom < 6.25 ? 1.75 : 1.28;
+            const spriteHeightMultiplier = zoom < 4.85 ? 1.16 : zoom < 6.25 ? 1.10 : 1.04;
+            for (const c of candidates) {
+              const n = nearData[c.typeIndex];
+              const s = spriteData[c.typeIndex];
+              if (c.near && n.length / 7 < HF_NEAR_CAP_PER_TYPE) {
+                n.push(c.x, c.y, c.mpu, c.width, c.height, c.rotation, c.seed);
+              }
+              if (c.alpha > 0.045 && s.length / 8 < HF_SPRITE_CAP_PER_TYPE) {
+                s.push(
+                  c.x, c.y, c.mpu,
+                  c.width * spriteWidthMultiplier,
+                  c.height * spriteHeightMultiplier,
+                  c.rotation, c.seed, c.alpha
+                );
+              }
+            }
+
+            for (let i = 0; i < this.typeStates.length; i++) {
+              const state = this.typeStates[i];
+              const nearArray = new Float32Array(nearData[i]);
+              const spriteArray = new Float32Array(spriteData[i]);
+              state.nearCount = nearArray.length / 7;
+              state.spriteCount = spriteArray.length / 8;
+              gl.bindBuffer(gl.ARRAY_BUFFER, state.nearInstanceBuffer);
+              if (nearArray.length) gl.bufferSubData(gl.ARRAY_BUFFER, 0, nearArray);
+              gl.bindBuffer(gl.ARRAY_BUFFER, state.spriteInstanceBuffer);
+              if (spriteArray.length) gl.bufferSubData(gl.ARRAY_BUFFER, 0, spriteArray);
+            }
+
+            const extra = HF_BASE_CELL_WORLD * 2.6;
+            this.heightBounds[0] = frame.x0 - extra;
+            this.heightBounds[1] = frame.y0 - extra;
+            this.heightBounds[2] = frame.x1 + extra;
+            this.heightBounds[3] = frame.y1 + extra;
+            this.lastBuildKey = buildKey;
+
+            const nearTotal = this.typeStates.reduce((sum, state) => sum + state.nearCount, 0);
+            const spriteTotal = this.typeStates.reduce((sum, state) => sum + state.spriteCount, 0);
+            console.info(`Hybrid forest: ${nearTotal} 3D trees + ${spriteTotal} sprite clusters from ${features.length} biome polygons.`);
+            this.map.triggerRepaint();
+          },
+
+          prerender(gl, options) {
+            if (!this.enabled || this.map.getZoom() < HF_MIN_ZOOM) return;
+            options.renderTerrainHeightMap?.({
+              texture: this.heightMap,
+              width: HF_HEIGHTMAP_SIZE,
+              height: HF_HEIGHTMAP_SIZE,
+              bounds: this.heightBounds
+            });
+          },
+
+          bindNearAttributes(gl, state) {
+            const local = gl.getAttribLocation(this.nearProgram, "a_local");
+            const normal = gl.getAttribLocation(this.nearProgram, "a_normal");
+            const part = gl.getAttribLocation(this.nearProgram, "a_part");
+            gl.bindBuffer(gl.ARRAY_BUFFER, state.nearGeometryBuffer);
+            const geometryStride = 7 * 4;
+            gl.enableVertexAttribArray(local);
+            gl.vertexAttribPointer(local, 3, gl.FLOAT, false, geometryStride, 0);
+            gl.vertexAttribDivisor(local, 0);
+            gl.enableVertexAttribArray(normal);
+            gl.vertexAttribPointer(normal, 3, gl.FLOAT, false, geometryStride, 3 * 4);
+            gl.vertexAttribDivisor(normal, 0);
+            gl.enableVertexAttribArray(part);
+            gl.vertexAttribPointer(part, 1, gl.FLOAT, false, geometryStride, 6 * 4);
+            gl.vertexAttribDivisor(part, 0);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, state.nearInstanceBuffer);
+            const instanceStride = 7 * 4;
+            const attributes = [
+              ["i_position", 2, 0],
+              ["i_mpu", 1, 2 * 4],
+              ["i_width", 1, 3 * 4],
+              ["i_height", 1, 4 * 4],
+              ["i_rotation", 1, 5 * 4],
+              ["i_seed", 1, 6 * 4]
+            ];
+            for (const [name, size, offset] of attributes) {
+              const location = gl.getAttribLocation(this.nearProgram, name);
+              gl.enableVertexAttribArray(location);
+              gl.vertexAttribPointer(location, size, gl.FLOAT, false, instanceStride, offset);
+              gl.vertexAttribDivisor(location, 1);
+            }
+          },
+
+          bindSpriteAttributes(gl, state) {
+            const local = gl.getAttribLocation(this.spriteProgram, "a_local");
+            const uv = gl.getAttribLocation(this.spriteProgram, "a_uv");
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteGeometry);
+            const geometryStride = 5 * 4;
+            gl.enableVertexAttribArray(local);
+            gl.vertexAttribPointer(local, 3, gl.FLOAT, false, geometryStride, 0);
+            gl.vertexAttribDivisor(local, 0);
+            gl.enableVertexAttribArray(uv);
+            gl.vertexAttribPointer(uv, 2, gl.FLOAT, false, geometryStride, 3 * 4);
+            gl.vertexAttribDivisor(uv, 0);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, state.spriteInstanceBuffer);
+            const instanceStride = 8 * 4;
+            const attributes = [
+              ["i_position", 2, 0],
+              ["i_mpu", 1, 2 * 4],
+              ["i_width", 1, 3 * 4],
+              ["i_height", 1, 4 * 4],
+              ["i_rotation", 1, 5 * 4],
+              ["i_seed", 1, 6 * 4],
+              ["i_alpha", 1, 7 * 4]
+            ];
+            for (const [name, size, offset] of attributes) {
+              const location = gl.getAttribLocation(this.spriteProgram, name);
+              gl.enableVertexAttribArray(location);
+              gl.vertexAttribPointer(location, size, gl.FLOAT, false, instanceStride, offset);
+              gl.vertexAttribDivisor(location, 1);
+            }
+          },
+
+          render(gl, options) {
+            if (!this.enabled || this.map.getZoom() < HF_MIN_ZOOM) return;
+            const matrix = options?.defaultProjectionData?.mainMatrix;
+            if (!matrix) return;
+
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+            gl.disable(gl.CULL_FACE);
+
+            gl.useProgram(this.nearProgram);
+            gl.uniformMatrix4fv(this.nearLocations.matrix, false, matrix);
+            gl.uniform4fv(this.nearLocations.bounds, this.heightBounds);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
+            gl.uniform1i(this.nearLocations.heightMap, 0);
+            gl.disable(gl.BLEND);
+            gl.depthMask(true);
+
+            for (const state of this.typeStates) {
+              if (!state.nearCount) continue;
+              gl.uniform3fv(this.nearLocations.foliage, state.type.foliage);
+              gl.uniform3fv(this.nearLocations.trunk, state.type.trunk);
+              this.bindNearAttributes(gl, state);
+              gl.drawArraysInstanced(gl.TRIANGLES, 0, state.nearVertexCount, state.nearCount);
+            }
+
+            gl.useProgram(this.spriteProgram);
+            gl.uniformMatrix4fv(this.spriteLocations.matrix, false, matrix);
+            gl.uniform4fv(this.spriteLocations.bounds, this.heightBounds);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
+            gl.uniform1i(this.spriteLocations.heightMap, 0);
+            gl.activeTexture(gl.TEXTURE1);
+            gl.uniform1i(this.spriteLocations.sprite, 1);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.depthMask(false);
+
+            for (const state of this.typeStates) {
+              if (!state.spriteCount) continue;
+              gl.bindTexture(gl.TEXTURE_2D, state.spriteTexture);
+              this.bindSpriteAttributes(gl, state);
+              gl.drawArraysInstanced(gl.TRIANGLES, 0, this.spriteVertexCount, state.spriteCount);
+            }
+
+            gl.depthMask(true);
+            gl.disable(gl.BLEND);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            gl.useProgram(null);
+          },
+
+          onRemove() {
+            clearTimeout(this.rebuildTimer);
+            if (this.onMoveEnd) this.map.off("moveend", this.onMoveEnd);
+            if (this.onZoomEnd) this.map.off("zoomend", this.onZoomEnd);
+            if (this.onIdle) this.map.off("idle", this.onIdle);
+            if (this.onSourceData) this.map.off("sourcedata", this.onSourceData);
+            hybridForestController = null;
+          }
+        };
+
+        const beforeId = map.getLayer("Town names") ? "Town names" :
+                         map.getLayer("Capitals") ? "Capitals" : undefined;
+        map.addLayer(forestLayer, beforeId);
       }
 
 
@@ -1337,6 +2333,12 @@
           source: "bigane-dem",
           exaggeration: 1.5
         });
+
+        try {
+          installHybridForestLayer();
+        } catch (error) {
+          console.warn("Hybride boslaag overgeslagen; kaart blijft werken:", error);
+        }
 
         installAllLandmarks().then(() => {
           setupLandmarkEditor();
