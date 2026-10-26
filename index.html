@@ -164,6 +164,74 @@
       margin: 0;
       cursor: pointer;
     }
+
+
+    .landmark-editor {
+      position: absolute;
+      z-index: 20;
+      top: 108px;
+      right: 10px;
+      width: 310px;
+      max-height: calc(100% - 125px);
+      overflow-y: auto;
+      box-sizing: border-box;
+      padding: 12px;
+      border-radius: 10px;
+      background: rgba(255,255,255,.96);
+      box-shadow: 0 2px 12px rgba(0,0,0,.26);
+      font: 12px/1.3 Arial, sans-serif;
+    }
+    .landmark-editor h3 { margin: 0 0 8px; font-size: 14px; }
+    .landmark-editor label { display: block; margin: 7px 0 3px; font-weight: 600; }
+    .landmark-editor select,
+    .landmark-editor input,
+    .landmark-editor textarea,
+    .landmark-editor button {
+      box-sizing: border-box;
+      font: inherit;
+    }
+    .landmark-editor select,
+    .landmark-editor input[type="number"],
+    .landmark-editor textarea {
+      width: 100%;
+      padding: 6px 7px;
+      border: 1px solid #bbb;
+      border-radius: 5px;
+      background: #fff;
+    }
+    .landmark-editor-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 8px;
+    }
+    .landmark-editor .mini-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 5px;
+      margin-top: 7px;
+    }
+    .landmark-editor button {
+      min-height: 30px;
+      padding: 5px 7px;
+      border: 1px solid #aaa;
+      border-radius: 5px;
+      background: #f7f7f7;
+      cursor: pointer;
+    }
+    .landmark-editor button:hover { background: #eee; }
+    .landmark-editor textarea { min-height: 72px; resize: vertical; font-family: Consolas, monospace; font-size: 11px; }
+    .landmark-editor-help { margin-top: 8px; color: #555; }
+    .landmark-editor-status { margin-top: 7px; min-height: 16px; color: #333; font-weight: 600; }
+    .landmark-anchor-marker {
+      width: 14px;
+      height: 14px;
+      border: 2px solid #ff3b30;
+      border-radius: 50%;
+      background: rgba(255,255,255,.65);
+      box-shadow: 0 0 0 2px rgba(0,0,0,.18);
+      pointer-events: none;
+    }
+
   </style>
 </head>
 <body>
@@ -180,6 +248,60 @@
       <input type="checkbox" id="toggle-towns" checked />
       <span>Town names / Capitals</span>
     </label>
+  </div>
+
+
+
+
+  <div class="landmark-editor" id="landmark-editor">
+    <h3>3D Landmark editor</h3>
+    <label for="landmark-select">Model</label>
+    <select id="landmark-select"></select>
+
+    <div class="landmark-editor-grid">
+      <div>
+        <label for="landmark-east">Oost / west (m)</label>
+        <input id="landmark-east" type="number" step="250" />
+      </div>
+      <div>
+        <label for="landmark-north">Noord / zuid (m)</label>
+        <input id="landmark-north" type="number" step="250" />
+      </div>
+      <div>
+        <label for="landmark-rotation">Rotatie (deg)</label>
+        <input id="landmark-rotation" type="number" step="5" />
+      </div>
+      <div>
+        <label for="landmark-width">Breedte (m)</label>
+        <input id="landmark-width" type="number" step="500" min="100" />
+      </div>
+      <div>
+        <label for="landmark-elevation">Hoogte offset (m)</label>
+        <input id="landmark-elevation" type="number" step="100" />
+      </div>
+      <div>
+        <label for="landmark-step">Stapgrootte (m)</label>
+        <input id="landmark-step" type="number" step="100" min="10" value="500" />
+      </div>
+    </div>
+
+    <div class="mini-row">
+      <button type="button" id="landmark-focus">Focus</button>
+      <button type="button" id="landmark-save">Bewaar</button>
+      <button type="button" id="landmark-reset">Reset</button>
+    </div>
+
+    <label for="landmark-export">Definitieve config</label>
+    <textarea id="landmark-export" readonly></textarea>
+    <div class="mini-row">
+      <button type="button" id="landmark-copy">Kopieer</button>
+      <button type="button" id="landmark-anchor-toggle">Anker aan/uit</button>
+      <button type="button" id="landmark-reload">Herlaad saved</button>
+    </div>
+    <div class="landmark-editor-help">
+      Toetsen: W/S = noord/zuid, A/D = west/oost, Q/E = draaien, R/F = hoger/lager, +/− = groter/kleiner. Klik eerst in de kaart/editor.
+    </div>
+    <div class="landmark-editor-status" id="landmark-editor-status"></div>
   </div>
 
 
@@ -760,22 +882,39 @@
         { name: "Khypir Tul", model: "./Dwarven_Lighthouse_v2_FixedRoof.glb", widthMeters: 22000, rotationDeg: 180, eastMeters: 0, northMeters: 0, aliases: ["Khypir Tul", "Khypir-Tul", "Khypirtul"] }
       ];
 
+      // Live landmark editor state. The config objects above are intentionally
+      // mutable; editing them updates the active Three.js layers immediately.
+      const LANDMARK_EDITOR_STORAGE_KEY = "bigane-landmark-editor-v1";
+      const landmarkLayersByName = new Map();
+      const landmarkDefaultsByName = new Map(
+        LANDMARKS_3D.map(c => [c.name, {
+          widthMeters: c.widthMeters,
+          rotationDeg: c.rotationDeg || 0,
+          eastMeters: c.eastMeters || 0,
+          northMeters: c.northMeters || 0,
+          elevationOffsetMeters: c.elevationOffsetMeters || 0
+        }])
+      );
+      let landmarkAnchorMarker = null;
+      let landmarkAnchorVisible = true;
+
       function landmarkNameMatches(candidate, config) {
-        const name = normalizeLocationName(candidate);
-        const wantedNames = [config.name, ...(config.aliases || [])].map(normalizeLocationName);
-        if (wantedNames.includes(name)) return true;
-        // Very small fuzzy fallback for minor map/editor spelling drift.
-        const compact = (v) => String(v || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]/g, '');
+        const compact = (v) => String(v || '')
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9]/g, '');
+
         const c = compact(candidate);
-        // Empty/missing feature properties must never count as a match.
-        // (String.includes('') is true, which previously made every landmark
-        // match the first map feature and sent all 3D models to one wrong place.)
         if (!c) return false;
-        return wantedNames.some(w => {
-          const ww = compact(w);
-          if (!ww) return false;
-          return c === ww || c.includes(ww) || ww.includes(c);
-        });
+
+        const wantedNames = [config.name, ...(config.aliases || [])]
+          .map(compact)
+          .filter(Boolean);
+
+        // Exact normalized-name matching only. Never use substring matching:
+        // e.g. river "Till" must NOT match city "Tillfort".
+        return wantedNames.includes(c);
       }
 
       function findLandmarkCoordinates(config) {
@@ -897,8 +1036,10 @@
               const scale = (config.widthMeters / this.horizontalSize) * mpu;
 
               this.placement.position.set(merc.x, merc.y, merc.z);
+              this.placement.rotation.z = THREE.MathUtils.degToRad(config.rotationDeg || 0);
               this.placement.scale.set(scale, scale, scale);
               this.placement.visible = true;
+              this.shiftedCoordinates = shiftedCoordinates;
               this.map.triggerRepaint();
             };
 
@@ -928,6 +1069,7 @@
         const beforeId = map.getLayer("Town names") ? "Town names" :
                          map.getLayer("Capitals") ? "Capitals" : undefined;
         map.addLayer(landmarkLayer, beforeId);
+        landmarkLayersByName.set(config.name, landmarkLayer);
         console.info(`${config.name} 3D landmark installed; waiting for its map feature if not loaded yet.`);
       }
 
@@ -941,6 +1083,205 @@
         }
       }
 
+
+
+      function setupLandmarkEditor() {
+        const select = document.getElementById("landmark-select");
+        const east = document.getElementById("landmark-east");
+        const north = document.getElementById("landmark-north");
+        const rotation = document.getElementById("landmark-rotation");
+        const width = document.getElementById("landmark-width");
+        const elevation = document.getElementById("landmark-elevation");
+        const step = document.getElementById("landmark-step");
+        const output = document.getElementById("landmark-export");
+        const editorStatus = document.getElementById("landmark-editor-status");
+        const editorRoot = document.getElementById("landmark-editor");
+        if (!select || !editorRoot) return;
+
+        for (const config of LANDMARKS_3D) {
+          const opt = document.createElement("option");
+          opt.value = config.name;
+          opt.textContent = config.name;
+          select.appendChild(opt);
+        }
+
+        function currentConfig() {
+          return LANDMARKS_3D.find(c => c.name === select.value) || LANDMARKS_3D[0];
+        }
+
+        function configLine(c) {
+          const extras = c.aliases?.length ? `, aliases: ${JSON.stringify(c.aliases)}` : "";
+          return `{ name: ${JSON.stringify(c.name)}, model: ${JSON.stringify(c.model)}, widthMeters: ${Math.round(c.widthMeters)}, rotationDeg: ${Number(c.rotationDeg || 0).toFixed(1)}, eastMeters: ${Math.round(c.eastMeters || 0)}, northMeters: ${Math.round(c.northMeters || 0)}, elevationOffsetMeters: ${Math.round(c.elevationOffsetMeters || 0)}${extras} }`;
+        }
+
+        function refreshFields() {
+          const c = currentConfig();
+          if (!c) return;
+          east.value = Math.round(c.eastMeters || 0);
+          north.value = Math.round(c.northMeters || 0);
+          rotation.value = Number(c.rotationDeg || 0).toFixed(1);
+          width.value = Math.round(c.widthMeters || 0);
+          elevation.value = Math.round(c.elevationOffsetMeters || 0);
+          output.value = configLine(c);
+          updateAnchor();
+        }
+
+        function applyFields() {
+          const c = currentConfig();
+          if (!c) return;
+          const read = (el, fallback) => Number.isFinite(Number(el.value)) ? Number(el.value) : fallback;
+          c.eastMeters = read(east, c.eastMeters || 0);
+          c.northMeters = read(north, c.northMeters || 0);
+          c.rotationDeg = read(rotation, c.rotationDeg || 0);
+          c.widthMeters = Math.max(100, read(width, c.widthMeters || 100));
+          c.elevationOffsetMeters = read(elevation, c.elevationOffsetMeters || 0);
+          const layer = landmarkLayersByName.get(c.name);
+          if (layer?.updatePlacement) layer.updatePlacement();
+          output.value = configLine(c);
+          editorStatus.textContent = `${c.name} live bijgewerkt`;
+          updateAnchor();
+        }
+
+        function saveAll() {
+          const data = {};
+          for (const c of LANDMARKS_3D) {
+            data[c.name] = {
+              widthMeters: c.widthMeters,
+              rotationDeg: c.rotationDeg || 0,
+              eastMeters: c.eastMeters || 0,
+              northMeters: c.northMeters || 0,
+              elevationOffsetMeters: c.elevationOffsetMeters || 0
+            };
+          }
+          localStorage.setItem(LANDMARK_EDITOR_STORAGE_KEY, JSON.stringify(data));
+          editorStatus.textContent = "Alle landmark-posities lokaal bewaard";
+        }
+
+        function loadSaved() {
+          try {
+            const raw = localStorage.getItem(LANDMARK_EDITOR_STORAGE_KEY);
+            if (!raw) {
+              editorStatus.textContent = "Geen opgeslagen instellingen gevonden";
+              return;
+            }
+            const data = JSON.parse(raw);
+            for (const c of LANDMARKS_3D) {
+              const saved = data[c.name];
+              if (!saved) continue;
+              for (const key of ["widthMeters","rotationDeg","eastMeters","northMeters","elevationOffsetMeters"]) {
+                if (Number.isFinite(Number(saved[key]))) c[key] = Number(saved[key]);
+              }
+              landmarkLayersByName.get(c.name)?.updatePlacement?.();
+            }
+            refreshFields();
+            editorStatus.textContent = "Opgeslagen instellingen geladen";
+          } catch (error) {
+            console.warn("Landmark editor save kon niet geladen worden:", error);
+            editorStatus.textContent = "Kon opgeslagen instellingen niet laden";
+          }
+        }
+
+        function resetSelected() {
+          const c = currentConfig();
+          const d = landmarkDefaultsByName.get(c.name);
+          if (!c || !d) return;
+          Object.assign(c, d);
+          landmarkLayersByName.get(c.name)?.updatePlacement?.();
+          refreshFields();
+          editorStatus.textContent = `${c.name} teruggezet naar HTML-standaard`;
+        }
+
+        function focusSelected() {
+          const c = currentConfig();
+          const layer = landmarkLayersByName.get(c.name);
+          const coord = layer?.shiftedCoordinates || layer?.coordinates || findLandmarkCoordinates(c);
+          if (!coord) {
+            editorStatus.textContent = `${c.name}: locatie nog niet geladen`;
+            return;
+          }
+          map.easeTo({ center: coord, zoom: Math.max(map.getZoom(), 7.0), pitch: Math.max(map.getPitch(), 48), duration: 700 });
+        }
+
+        function updateAnchor() {
+          if (landmarkAnchorMarker) {
+            landmarkAnchorMarker.remove();
+            landmarkAnchorMarker = null;
+          }
+          if (!landmarkAnchorVisible) return;
+          const c = currentConfig();
+          const layer = landmarkLayersByName.get(c.name);
+          const coord = layer?.coordinates || findLandmarkCoordinates(c);
+          if (!coord) return;
+          const el = document.createElement("div");
+          el.className = "landmark-anchor-marker";
+          el.title = `${c.name} originele stadscoördinaat`;
+          landmarkAnchorMarker = new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat(coord).addTo(map);
+        }
+
+        for (const el of [east, north, rotation, width, elevation]) {
+          el.addEventListener("input", applyFields);
+          el.addEventListener("change", applyFields);
+        }
+        select.addEventListener("change", refreshFields);
+        document.getElementById("landmark-focus").addEventListener("click", focusSelected);
+        document.getElementById("landmark-save").addEventListener("click", saveAll);
+        document.getElementById("landmark-reset").addEventListener("click", resetSelected);
+        document.getElementById("landmark-reload").addEventListener("click", loadSaved);
+        document.getElementById("landmark-anchor-toggle").addEventListener("click", () => {
+          landmarkAnchorVisible = !landmarkAnchorVisible;
+          updateAnchor();
+        });
+        document.getElementById("landmark-copy").addEventListener("click", async () => {
+          output.select();
+          try {
+            await navigator.clipboard.writeText(output.value);
+            editorStatus.textContent = "Config gekopieerd";
+          } catch (_) {
+            editorStatus.textContent = "Config geselecteerd; gebruik Ctrl+C";
+          }
+        });
+
+        function nudge(key) {
+          const c = currentConfig();
+          const amount = Math.max(10, Number(step.value) || 500);
+          if (key === "w") c.northMeters = (c.northMeters || 0) + amount;
+          if (key === "s") c.northMeters = (c.northMeters || 0) - amount;
+          if (key === "a") c.eastMeters = (c.eastMeters || 0) - amount;
+          if (key === "d") c.eastMeters = (c.eastMeters || 0) + amount;
+          if (key === "q") c.rotationDeg = (c.rotationDeg || 0) - 5;
+          if (key === "e") c.rotationDeg = (c.rotationDeg || 0) + 5;
+          if (key === "r") c.elevationOffsetMeters = (c.elevationOffsetMeters || 0) + Math.max(50, amount / 5);
+          if (key === "f") c.elevationOffsetMeters = (c.elevationOffsetMeters || 0) - Math.max(50, amount / 5);
+          if (key === "+" || key === "=") c.widthMeters = Math.max(100, c.widthMeters * 1.05);
+          if (key === "-" || key === "_") c.widthMeters = Math.max(100, c.widthMeters / 1.05);
+          landmarkLayersByName.get(c.name)?.updatePlacement?.();
+          refreshFields();
+        }
+
+        document.addEventListener("keydown", (event) => {
+          const tag = document.activeElement?.tagName;
+          if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+          const key = event.key.toLowerCase();
+          if (["w","a","s","d","q","e","r","f","+","=","-","_"].includes(key)) {
+            event.preventDefault();
+            nudge(key);
+          }
+        });
+
+        // Load prior tuning if available, otherwise show HTML defaults.
+        try {
+          const raw = localStorage.getItem(LANDMARK_EDITOR_STORAGE_KEY);
+          if (raw) {
+            const data = JSON.parse(raw);
+            for (const c of LANDMARKS_3D) {
+              const saved = data[c.name];
+              if (!saved) continue;
+              Object.assign(c, saved);
+            }
+          }
+        } catch (_) {}
+        refreshFields();
+      }
 
       map.on("load", () => {
         status.textContent = "Bigane-style + GitHub terrain werkt. Kanka laden...";
@@ -969,7 +1310,9 @@
           exaggeration: 1.5
         });
 
-        installAllLandmarks();
+        installAllLandmarks().then(() => {
+          setupLandmarkEditor();
+        });
 
         // Hillshade from the same DEM.
         if (!map.getLayer("bigane-hillshade")) {
