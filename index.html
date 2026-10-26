@@ -864,26 +864,22 @@
       // Widths are deliberately cartographic so the landmarks remain readable
       // at Bigane's continental map scale.
       const LANDMARKS_3D = [
-        // eastMeters: + = east, - = west. northMeters: + = north, - = south.
-        // These offsets anchor the *city model* rather than blindly centering its
-        // full bounding box on the map point. Harbour models need this because
-        // docks/quays are intentionally very asymmetrical.
-        { name: "Stonefront", model: "./Stonefront_v2_Textured.glb", widthMeters: 36000, rotationDeg: 0, eastMeters: 0, northMeters: 0 },
-        { name: "Ehlehuak", model: "./Ehlehuak_v2_MapReady.glb", widthMeters: 43000, rotationDeg: -90, eastMeters: 0, northMeters: 0, aliases: ["Ehuleak", "Ehléhuak", "Ehlehuak", "Ehuleák", "Ehleuak", "Ehleak"] },
-        { name: "Khuktul", model: "./Khuktul_v1_MapReady.glb", widthMeters: 18000, rotationDeg: 90.0, eastMeters: 1000, northMeters: 4000, elevationOffsetMeters: -900, aliases: ["Kuktul"] },
-        { name: "Ambrezzo", model: "./Ambrezzo_v2_MapReady.glb", widthMeters: 36000, rotationDeg: 185.0, eastMeters: -162210, northMeters: 115200, elevationOffsetMeters: -300 },
-        { name: "Yumizen", model: "./Yumizen_v1_MapReady.glb", widthMeters: 35000, rotationDeg: -43.0, eastMeters: 150, northMeters: 4260, elevationOffsetMeters: 0 },
-        { name: "Seawatch", model: "./Keelfort_v2_Compact_MapReady.glb", widthMeters: 24000, rotationDeg: -35.0, eastMeters: 8500, northMeters: -3500, elevationOffsetMeters: -1500 },
-        { name: "Old Hill", model: "./Ruined_Hill_Settlement_v1_MapReady.glb", widthMeters: 29000, rotationDeg: 0, eastMeters: 0, northMeters: 0 },
-        { name: "Ecbashah", model: "./Lake_Jewel_City_v2_Pyramid.glb", widthMeters: 32000, rotationDeg: -90.0, eastMeters: 9310, northMeters: 1280, elevationOffsetMeters: -50, aliases: ["Ecbashah", "Ecabashah", "Ecbashahh"] },
-        { name: "Morbus", model: "./Frostfort_v1.glb", widthMeters: 10700, rotationDeg: -95.0, eastMeters: 4150, northMeters: -9180, elevationOffsetMeters: -200 },
-        { name: "Matronass", model: "./Matronass_v2_BreachedWalls.glb", widthMeters: 42000, rotationDeg: -90.0, eastMeters: 5610, northMeters: 1020, elevationOffsetMeters: 300 },
-        { name: "Padin", model: "./Padin_v1_Optimized_Limestone(1).glb", widthMeters: 40000, rotationDeg: 0, eastMeters: 0, northMeters: 0 },
-        { name: "Tillfort", model: "./Tillfort_v3_StonefrontStyle_MapReady_FixedDomes.glb", widthMeters: 40000, rotationDeg: -100.0, eastMeters: -141000, northMeters: -82250, elevationOffsetMeters: -1200, aliases: ["Till Fort", "Tilfort"] },
-        { name: "Khypir Tul", model: "./Dwarven_Lighthouse_v2_FixedRoof.glb", widthMeters: 22000, rotationDeg: 180, eastMeters: 0, northMeters: 0, aliases: ["Khypir Tul", "Khypir-Tul", "Khypirtul"] },
-        { name: "Priddam", model: "./Priddam_MapLibre_Textured.glb", widthMeters: 40000, rotationDeg: 0, eastMeters: 0, northMeters: 0 },
-        { name: "Vinboa", model: "./Vinboa_Renaissance_GateRoofs_Fixed.glb", widthMeters: 40000, rotationDeg: 0, eastMeters: 0, northMeters: 0 },
-        { name: "Copper", model: "./Copper_MapLibre_Textured.glb", widthMeters: 32000, rotationDeg: 0, eastMeters: 0, northMeters: 0 }
+        { name: "Stonefront", model: "./Stonefront_v2_Textured.glb", widthMeters: 36000, rotationDeg: 0, eastMeters: 0, northMeters: 0, elevationOffsetMeters: 0 },
+        { name: "Ehlehuak", model: "./Ehlehuak_v2_MapReady.glb", widthMeters: 43000, rotationDeg: -90, eastMeters: 0, northMeters: 0, elevationOffsetMeters: 0, aliases: ["Ehuleak", "Ehléhuak", "Ehlehuak", "Ehuleák", "Ehleuak", "Ehleak"] },
+        { name: "Khuktul", model: "./Khuktul_v1_MapReady.glb", widthMeters: 18000, rotationDeg: 90, eastMeters: 1000, northMeters: 4000, elevationOffsetMeters: -900, aliases: ["Kuktul"] },
+        { name: "Ambrezzo", model: "./Ambrezzo_v2_MapReady.glb", widthMeters: 36000, rotationDeg: 175, eastMeters: -35220, northMeters: -56670, elevationOffsetMeters: -400 },
+        { name: "Yumizen", model: "./Yumizen_v1_MapReady.glb", widthMeters: 35000, rotationDeg: -43, eastMeters: 150, northMeters: 4260, elevationOffsetMeters: 0 },
+        { name: "Seawatch", model: "./Keelfort_v2_Compact_MapReady.glb", widthMeters: 24000, rotationDeg: -35, eastMeters: 8500, northMeters: -3500, elevationOffsetMeters: -1600 },
+        { name: "Old Hill", model: "./Ruined_Hill_Settlement_v1_MapReady.glb", widthMeters: 29000, rotationDeg: 0, eastMeters: 0, northMeters: 0, elevationOffsetMeters: 0 },
+        { name: "Ecbashah", model: "./Lake_Jewel_City_v2_Pyramid.glb", widthMeters: 32000, rotationDeg: -90, eastMeters: 9310, northMeters: 1280, elevationOffsetMeters: -50, aliases: ["Ecbashah", "Ecabashah", "Ecbashahh"] },
+        { name: "Morbus", model: "./Frostfort_v1.glb", widthMeters: 10700, rotationDeg: -95, eastMeters: 4150, northMeters: -9180, elevationOffsetMeters: -200 },
+        { name: "Matronass", model: "./Matronass_v2_BreachedWalls.glb", widthMeters: 42000, rotationDeg: -90, eastMeters: 5610, northMeters: 1020, elevationOffsetMeters: 300 },
+        { name: "Padin", model: "./Padin_v1_Optimized_Limestone(1).glb", widthMeters: 40000, rotationDeg: 0, eastMeters: 0, northMeters: -13770, elevationOffsetMeters: -450 },
+        { name: "Tillfort", model: "./Tillfort_v3_StonefrontStyle_MapReady_FixedDomes.glb", widthMeters: 40000, rotationDeg: -95, eastMeters: 220080, northMeters: -92450, elevationOffsetMeters: -1000, aliases: ["Till Fort", "Tilfort"] },
+        { name: "Khypir Tul", model: "./Dwarven_Lighthouse_v2_FixedRoof.glb", widthMeters: 22000, rotationDeg: 180, eastMeters: 0, northMeters: 0, elevationOffsetMeters: 0, aliases: ["Khypir Tul", "Khypir-Tul", "Khypirtul"] },
+        { name: "Priddam", model: "./Priddam_MapLibre_Textured.glb", widthMeters: 40000, rotationDeg: 180, eastMeters: -55590, northMeters: 123930, elevationOffsetMeters: -4100 },
+        { name: "Vinboa", model: "./Vinboa_Renaissance_GateRoofs_Fixed.glb", widthMeters: 40000, rotationDeg: -15, eastMeters: 221340, northMeters: -91290, elevationOffsetMeters: -3450 },
+        { name: "Copper", model: "./Copper_MapLibre_Textured.glb", widthMeters: 32000, rotationDeg: 0, eastMeters: 0, northMeters: 0, elevationOffsetMeters: -3300 }
       ];
 
       // Live landmark editor state. The config objects above are intentionally
