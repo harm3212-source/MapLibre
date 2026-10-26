@@ -1036,11 +1036,11 @@
       }
 
       function hfNearRadiusForZoom(zoom) {
-        // Keep the distant forest sprite-only for longer. Real 3D trees
-        // appear only once the user is substantially zoomed in.
-        if (zoom < 6.15) return 0;
-        if (zoom < 6.9) return 0.30;
-        if (zoom < 7.8) return 0.56;
+        // Sprites carry the distant forest. Real 3D trees begin at zoom 5
+        // and take over a progressively larger area as the user zooms in.
+        if (zoom < 5.0) return 0;
+        if (zoom < 5.8) return 0.30;
+        if (zoom < 6.7) return 0.56;
         return 0.86;
       }
 
@@ -1486,8 +1486,33 @@
               clearTimeout(this.rebuildTimer);
               this.rebuildTimer = setTimeout(() => this.rebuild(gl), delay);
             };
-            this.onMoveEnd = () => this.scheduleRebuild(false, 35);
-            this.onZoomEnd = () => this.scheduleRebuild(true, 35);
+
+            // During pan/zoom, rebuild at a throttled cadence instead of waiting
+            // for moveend/zoomend. This keeps the forest viewport following the
+            // camera without regenerating tens of thousands of instances every frame.
+            this.lastLiveBuildAt = 0;
+            this.liveBuildTimer = null;
+            this.scheduleLiveRebuild = (force = false) => {
+              const now = performance.now();
+              const interval = 140;
+              const elapsed = now - this.lastLiveBuildAt;
+              const run = () => {
+                this.liveBuildTimer = null;
+                this.lastLiveBuildAt = performance.now();
+                if (force) this.lastBuildKey = "";
+                this.rebuild(gl);
+              };
+              if (elapsed >= interval) {
+                run();
+              } else if (!this.liveBuildTimer) {
+                this.liveBuildTimer = setTimeout(run, interval - elapsed);
+              }
+            };
+
+            this.onMove = () => this.scheduleLiveRebuild(false);
+            this.onZoom = () => this.scheduleLiveRebuild(true);
+            this.onMoveEnd = () => this.scheduleRebuild(false, 20);
+            this.onZoomEnd = () => this.scheduleRebuild(true, 20);
             this.onIdle = () => {
               if (this.needsRebuild || !this.lastBuildKey) this.scheduleRebuild(false, 30);
             };
@@ -1498,6 +1523,8 @@
                 this.scheduleRebuild(true, 130);
               }
             };
+            mapInstance.on("move", this.onMove);
+            mapInstance.on("zoom", this.onZoom);
             mapInstance.on("moveend", this.onMoveEnd);
             mapInstance.on("zoomend", this.onZoomEnd);
             mapInstance.on("idle", this.onIdle);
@@ -1854,8 +1881,11 @@
 
           onRemove() {
             clearTimeout(this.rebuildTimer);
+            if (this.onMove) this.map.off("move", this.onMove);
+            if (this.onZoom) this.map.off("zoom", this.onZoom);
             if (this.onMoveEnd) this.map.off("moveend", this.onMoveEnd);
             if (this.onZoomEnd) this.map.off("zoomend", this.onZoomEnd);
+            if (this.liveBuildTimer) clearTimeout(this.liveBuildTimer);
             if (this.onIdle) this.map.off("idle", this.onIdle);
             if (this.onSourceData) this.map.off("sourcedata", this.onSourceData);
             hybridForestController = null;
