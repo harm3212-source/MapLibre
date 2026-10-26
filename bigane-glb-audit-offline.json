@@ -1,0 +1,507 @@
+{
+  "format": "bigane-glb-audit-offline-v1",
+  "landmarks": [
+    {
+      "name": "Stonefront",
+      "expectedModel": "./Stonefront_v2_Textured.glb",
+      "availableLocalFile": "Stonefront_v2_Textured.glb",
+      "status": "audited",
+      "bytes": 648704,
+      "meshCount": 430,
+      "vertexCount": 16728,
+      "triangleCount": 5576,
+      "materialCount": 5,
+      "embeddedTextureCountDetected": 5,
+      "bounds": {
+        "min": [
+          -139.0500030517578,
+          -36.400001525878906,
+          -9.0
+        ],
+        "max": [
+          139.0500030517578,
+          41.79999923706055,
+          42.95000076293945
+        ],
+        "size": [
+          278.1000061035156,
+          78.20000076293945,
+          51.95000076293945
+        ]
+      },
+      "warnings": []
+    },
+    {
+      "name": "Ehlehuak",
+      "expectedModel": "./Ehlehuak_v2_MapReady.glb",
+      "availableLocalFile": "Ehlehuak_v2.glb",
+      "status": "audited",
+      "bytes": 913404,
+      "meshCount": 1508,
+      "vertexCount": 14542,
+      "triangleCount": 23052,
+      "materialCount": 0,
+      "embeddedTextureCountDetected": 0,
+      "bounds": {
+        "min": [
+          -190.0,
+          -170.0,
+          -4.0
+        ],
+        "max": [
+          190.0,
+          170.0,
+          97.01599884033203
+        ],
+        "size": [
+          380.0,
+          340.0,
+          101.01599884033203
+        ]
+      },
+      "warnings": [
+        "No embedded texture detected by trimesh.",
+        "Many separate geometry parts; draw-call consolidation may help."
+      ]
+    },
+    {
+      "name": "Khuktul",
+      "expectedModel": "./Khuktul_v1_MapReady.glb",
+      "availableLocalFile": "Khuktul_v1.glb",
+      "status": "audited",
+      "bytes": 491400,
+      "meshCount": 788,
+      "vertexCount": 9560,
+      "triangleCount": 15968,
+      "materialCount": 0,
+      "embeddedTextureCountDetected": 0,
+      "bounds": {
+        "min": [
+          -180.0,
+          -220.0,
+          -4.0
+        ],
+        "max": [
+          180.0,
+          150.0,
+          29.899999618530273
+        ],
+        "size": [
+          360.0,
+          370.0,
+          33.89999961853027
+        ]
+      },
+      "warnings": [
+        "No embedded texture detected by trimesh.",
+        "Many separate geometry parts; draw-call consolidation may help."
+      ]
+    },
+    {
+      "name": "Ambrezzo",
+      "expectedModel": "./Ambrezzo_v2_MapReady.glb",
+      "availableLocalFile": "Ambrezzo_v2.glb",
+      "status": "audited",
+      "bytes": 461528,
+      "meshCount": 762,
+      "vertexCount": 8128,
+      "triangleCount": 13208,
+      "materialCount": 0,
+      "embeddedTextureCountDetected": 0,
+      "bounds": {
+        "min": [
+          -170.0,
+          -140.0,
+          -4.0
+        ],
+        "max": [
+          170.0,
+          140.0,
+          34.70000076293945
+        ],
+        "size": [
+          340.0,
+          280.0,
+          38.70000076293945
+        ]
+      },
+      "warnings": [
+        "No embedded texture detected by trimesh.",
+        "Many separate geometry parts; draw-call consolidation may help."
+      ]
+    },
+    {
+      "name": "Yumizen",
+      "expectedModel": "./Yumizen_v1_MapReady.glb",
+      "availableLocalFile": "Yumizen_v1.glb",
+      "status": "audited",
+      "bytes": 613024,
+      "meshCount": 926,
+      "vertexCount": 12662,
+      "triangleCount": 21620,
+      "materialCount": 0,
+      "embeddedTextureCountDetected": 0,
+      "bounds": {
+        "min": [
+          -140.0,
+          -145.0,
+          -4.0
+        ],
+        "max": [
+          140.0,
+          105.0,
+          83.94440460205078
+        ],
+        "size": [
+          280.0,
+          250.0,
+          87.94440460205078
+        ]
+      },
+      "warnings": [
+        "No embedded texture detected by trimesh.",
+        "Many separate geometry parts; draw-call consolidation may help."
+      ]
+    },
+    {
+      "name": "Seawatch",
+      "expectedModel": "./Keelfort_v2_Compact_MapReady.glb",
+      "availableLocalFile": "Keelfort_v2_Compact.glb",
+      "status": "audited",
+      "bytes": 254196,
+      "meshCount": 414,
+      "vertexCount": 4812,
+      "triangleCount": 7968,
+      "materialCount": 0,
+      "embeddedTextureCountDetected": 0,
+      "bounds": {
+        "min": [
+          -130.0,
+          -178.0,
+          -4.0
+        ],
+        "max": [
+          130.0,
+          110.0,
+          31.92799949645996
+        ],
+        "size": [
+          260.0,
+          288.0,
+          35.92799949645996
+        ]
+      },
+      "warnings": [
+        "No embedded texture detected by trimesh."
+      ]
+    },
+    {
+      "name": "Old Hill",
+      "expectedModel": "./Ruined_Hill_Settlement_v1_MapReady.glb",
+      "availableLocalFile": "Ruined_Hill_Settlement_v1.glb",
+      "status": "audited",
+      "bytes": 291576,
+      "meshCount": 389,
+      "vertexCount": 6234,
+      "triangleCount": 10912,
+      "materialCount": 0,
+      "embeddedTextureCountDetected": 0,
+      "bounds": {
+        "min": [
+          -160.0,
+          -160.0,
+          -6.0
+        ],
+        "max": [
+          160.0,
+          160.0,
+          75.84248352050781
+        ],
+        "size": [
+          320.0,
+          320.0,
+          81.84248352050781
+        ]
+      },
+      "warnings": [
+        "No embedded texture detected by trimesh."
+      ]
+    },
+    {
+      "name": "Ecbashah",
+      "expectedModel": "./Lake_Jewel_City_v2_Pyramid.glb",
+      "availableLocalFile": "Lake_Jewel_City_v2_Pyramid.glb",
+      "status": "audited",
+      "bytes": 425096,
+      "meshCount": 17,
+      "vertexCount": 12920,
+      "triangleCount": 21456,
+      "materialCount": 1,
+      "embeddedTextureCountDetected": 0,
+      "bounds": {
+        "min": [
+          -119.00253295898438,
+          -116.0,
+          -2.200000047683716
+        ],
+        "max": [
+          129.00253295898438,
+          118.9000015258789,
+          39.75
+        ],
+        "size": [
+          248.00506591796875,
+          234.9000015258789,
+          41.950000047683716
+        ]
+      },
+      "warnings": [
+        "No embedded texture detected by trimesh."
+      ]
+    },
+    {
+      "name": "Morbus",
+      "expectedModel": "./Frostfort_v1.glb",
+      "availableLocalFile": "Frostfort_v1.glb",
+      "status": "audited",
+      "bytes": 137572,
+      "meshCount": 11,
+      "vertexCount": 4156,
+      "triangleCount": 6652,
+      "materialCount": 1,
+      "embeddedTextureCountDetected": 0,
+      "bounds": {
+        "min": [
+          -70.59429931640625,
+          -83.0,
+          -1.0
+        ],
+        "max": [
+          68.91581726074219,
+          73.0,
+          38.375
+        ],
+        "size": [
+          139.51011657714844,
+          156.0,
+          39.375
+        ]
+      },
+      "warnings": [
+        "No embedded texture detected by trimesh."
+      ]
+    },
+    {
+      "name": "Matronass",
+      "expectedModel": "./Matronass_v2_BreachedWalls.glb",
+      "availableLocalFile": "Matronass_v2_BreachedWalls.glb",
+      "status": "audited",
+      "bytes": 167776,
+      "meshCount": 13,
+      "vertexCount": 5330,
+      "triangleCount": 8236,
+      "materialCount": 1,
+      "embeddedTextureCountDetected": 0,
+      "bounds": {
+        "min": [
+          -99.00253295898438,
+          -93.00253295898438,
+          -2.5999999046325684
+        ],
+        "max": [
+          118.0,
+          95.0,
+          24.700000762939453
+        ],
+        "size": [
+          217.00253295898438,
+          188.00253295898438,
+          27.30000066757202
+        ]
+      },
+      "warnings": [
+        "No embedded texture detected by trimesh."
+      ]
+    },
+    {
+      "name": "Padin",
+      "expectedModel": "./Padin_v1_Optimized_Limestone(1).glb",
+      "availableLocalFile": "Padin_v1_Optimized_Limestone(1).glb",
+      "status": "audited",
+      "bytes": 1474376,
+      "meshCount": 12,
+      "vertexCount": 46854,
+      "triangleCount": 29196,
+      "materialCount": 12,
+      "embeddedTextureCountDetected": 2,
+      "bounds": {
+        "min": [
+          -137.5,
+          -120.0,
+          -2.700000047683716
+        ],
+        "max": [
+          155.14382934570312,
+          156.75,
+          46.54999923706055
+        ],
+        "size": [
+          292.6438293457031,
+          276.75,
+          49.24999928474426
+        ]
+      },
+      "warnings": []
+    },
+    {
+      "name": "Tillfort",
+      "expectedModel": "./Tillfort_v3_StonefrontStyle_MapReady_FixedDomes.glb",
+      "availableLocalFile": "Tillfort_v3_StonefrontStyle_MapReady_FixedDomes.glb",
+      "status": "audited",
+      "bytes": 1398324,
+      "meshCount": 7,
+      "vertexCount": 55584,
+      "triangleCount": 18528,
+      "materialCount": 7,
+      "embeddedTextureCountDetected": 7,
+      "bounds": {
+        "min": [
+          -121.75,
+          -126.0,
+          -4.800000190734863
+        ],
+        "max": [
+          128.60000610351562,
+          125.75,
+          26.399999618530273
+        ],
+        "size": [
+          250.35000610351562,
+          251.75,
+          31.199999809265137
+        ]
+      },
+      "warnings": []
+    },
+    {
+      "name": "Khypir Tul",
+      "expectedModel": "./Dwarven_Lighthouse_v2_FixedRoof.glb",
+      "availableLocalFile": "Dwarven_Lighthouse_v2_FixedRoof.glb",
+      "status": "audited",
+      "bytes": 205580,
+      "meshCount": 6,
+      "vertexCount": 5664,
+      "triangleCount": 1888,
+      "materialCount": 6,
+      "embeddedTextureCountDetected": 6,
+      "bounds": {
+        "min": [
+          -21.0,
+          -60.0,
+          0.0
+        ],
+        "max": [
+          21.0,
+          24.0,
+          60.400001525878906
+        ],
+        "size": [
+          42.0,
+          84.0,
+          60.400001525878906
+        ]
+      },
+      "warnings": []
+    },
+    {
+      "name": "Priddam",
+      "expectedModel": "./Priddam_MapLibre_Textured.glb",
+      "availableLocalFile": "Priddam_MapLibre_Textured.glb",
+      "status": "audited",
+      "bytes": 909724,
+      "meshCount": 149,
+      "vertexCount": 29640,
+      "triangleCount": 9880,
+      "materialCount": 12,
+      "embeddedTextureCountDetected": 12,
+      "bounds": {
+        "min": [
+          -138.0,
+          -135.0,
+          -30.0
+        ],
+        "max": [
+          138.25,
+          134.6271209716797,
+          59.0
+        ],
+        "size": [
+          276.25,
+          269.6271209716797,
+          89.0
+        ]
+      },
+      "warnings": []
+    },
+    {
+      "name": "Vinboa",
+      "expectedModel": "./Vinboa_Renaissance_GateRoofs_Fixed.glb",
+      "availableLocalFile": "Vinboa_Renaissance_GateRoofs_Fixed(1).glb",
+      "status": "audited",
+      "bytes": 4689828,
+      "meshCount": 70,
+      "vertexCount": 57414,
+      "triangleCount": 19138,
+      "materialCount": 10,
+      "embeddedTextureCountDetected": 10,
+      "bounds": {
+        "min": [
+          -144.0,
+          -99.0,
+          -31.0
+        ],
+        "max": [
+          144.0,
+          114.8869857788086,
+          55.0
+        ],
+        "size": [
+          288.0,
+          213.8869857788086,
+          86.0
+        ]
+      },
+      "warnings": []
+    },
+    {
+      "name": "Copper",
+      "expectedModel": "./Copper_MapLibre_Textured.glb",
+      "availableLocalFile": "Copper_MapLibre_Textured(1).glb",
+      "status": "audited",
+      "bytes": 737496,
+      "meshCount": 67,
+      "vertexCount": 25452,
+      "triangleCount": 8484,
+      "materialCount": 12,
+      "embeddedTextureCountDetected": 12,
+      "bounds": {
+        "min": [
+          -93.5,
+          -121.0,
+          -25.0
+        ],
+        "max": [
+          93.5,
+          88.0,
+          86.0
+        ],
+        "size": [
+          187.0,
+          209.0,
+          111.0
+        ]
+      },
+      "warnings": []
+    }
+  ]
+}

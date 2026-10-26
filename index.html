@@ -232,6 +232,111 @@
       pointer-events: none;
     }
 
+    /* v20: clean view mode; editor only appears when requested. */
+    .landmark-editor {
+      display: none;
+      width: 360px;
+      top: 10px;
+      right: 205px;
+      max-height: calc(100% - 20px);
+      padding: 12px;
+    }
+    body.landmark-edit-mode .landmark-editor { display: block; }
+    .edit-mode-toggle {
+      width: 100%;
+      margin-top: 8px;
+      min-height: 30px;
+      border: 1px solid #aaa;
+      border-radius: 6px;
+      background: #f7f7f7;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+    }
+    .edit-mode-toggle:hover { background: #ececec; }
+    .editor-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .editor-title-row h3 { margin: 0; }
+    .editor-close {
+      width: 30px;
+      min-height: 28px !important;
+      padding: 0 !important;
+      font-size: 20px !important;
+      line-height: 25px;
+    }
+    .landmark-editor details {
+      margin: 9px 0;
+      padding: 7px 8px;
+      border: 1px solid #d4d4d4;
+      border-radius: 7px;
+      background: rgba(249,249,249,.9);
+    }
+    .landmark-editor summary {
+      cursor: pointer;
+      font-weight: 700;
+      user-select: none;
+    }
+    .landmark-editor details[open] summary { margin-bottom: 7px; }
+    .landmark-editor .mini-row.four { grid-template-columns: repeat(4, 1fr); }
+    .editor-inline-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 7px 0;
+    }
+    .editor-checkbox {
+      display: flex !important;
+      align-items: center;
+      gap: 6px;
+      margin: 0 !important;
+      font-weight: 600;
+    }
+    .status-chip {
+      display: inline-block;
+      max-width: 190px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: #e8e8e8;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 11px;
+    }
+    .status-chip.ok { background: #dff2df; color: #1f5e26; }
+    .status-chip.loading { background: #fff1c9; color: #705100; }
+    .status-chip.error { background: #ffdede; color: #7d1515; }
+    .status-chip.warning { background: #ffe9c7; color: #704400; }
+    .runtime-stats {
+      margin-top: 9px;
+      padding: 7px;
+      border-radius: 6px;
+      background: #222;
+      color: #f1f1f1;
+      font: 11px/1.35 Consolas, monospace;
+    }
+    .landmark-sample-marker {
+      width: 12px;
+      height: 12px;
+      border: 2px solid #177ddc;
+      transform: rotate(45deg);
+      background: rgba(255,255,255,.72);
+      box-shadow: 0 0 0 2px rgba(0,0,0,.18);
+      pointer-events: none;
+    }
+    @media (max-width: 900px) {
+      .landmark-editor {
+        right: 10px;
+        top: 100px;
+        width: min(360px, calc(100% - 20px));
+        max-height: calc(100% - 110px);
+      }
+    }
+
   </style>
 </head>
 <body>
@@ -252,60 +357,148 @@
       <input type="checkbox" id="toggle-forests" checked />
       <span>3D forests</span>
     </label>
+    <button type="button" id="edit-mode-toggle" class="edit-mode-toggle">Bewerken</button>
   </div>
 
 
 
+  <div class="landmark-editor" id="landmark-editor" aria-label="3D landmark editor">
+    <div class="editor-title-row">
+      <h3>3D kaarteditor</h3>
+      <button type="button" id="landmark-editor-close" class="editor-close" aria-label="Editor sluiten">×</button>
+    </div>
 
-  <div class="landmark-editor" id="landmark-editor">
-    <h3>3D Landmark editor</h3>
-    <label for="landmark-select">Model</label>
+    <label for="landmark-select">Landmark</label>
     <select id="landmark-select"></select>
-
-    <div class="landmark-editor-grid">
-      <div>
-        <label for="landmark-east">Oost / west (m)</label>
-        <input id="landmark-east" type="number" step="250" />
-      </div>
-      <div>
-        <label for="landmark-north">Noord / zuid (m)</label>
-        <input id="landmark-north" type="number" step="250" />
-      </div>
-      <div>
-        <label for="landmark-rotation">Rotatie (deg)</label>
-        <input id="landmark-rotation" type="number" step="5" />
-      </div>
-      <div>
-        <label for="landmark-width">Breedte (m)</label>
-        <input id="landmark-width" type="number" step="500" min="100" />
-      </div>
-      <div>
-        <label for="landmark-elevation">Hoogte offset (m)</label>
-        <input id="landmark-elevation" type="number" step="100" />
-      </div>
-      <div>
-        <label for="landmark-step">Stapgrootte (m)</label>
-        <input id="landmark-step" type="number" step="100" min="10" value="500" />
-      </div>
+    <div class="editor-inline-row">
+      <label class="editor-checkbox"><input id="landmark-visible" type="checkbox" checked /> model zichtbaar</label>
+      <span id="landmark-model-status" class="status-chip">Nog niet geladen</span>
     </div>
 
-    <div class="mini-row">
-      <button type="button" id="landmark-focus">Focus</button>
-      <button type="button" id="landmark-save">Bewaar</button>
-      <button type="button" id="landmark-reset">Reset</button>
-    </div>
+    <details open>
+      <summary>Positie en vorm</summary>
+      <div class="landmark-editor-grid">
+        <div>
+          <label for="landmark-lng">Longitude</label>
+          <input id="landmark-lng" type="number" step="0.00001" />
+        </div>
+        <div>
+          <label for="landmark-lat">Latitude</label>
+          <input id="landmark-lat" type="number" step="0.00001" />
+        </div>
+        <div>
+          <label for="landmark-rotation">Rotatie (°)</label>
+          <input id="landmark-rotation" type="number" step="1" />
+        </div>
+        <div>
+          <label for="landmark-width">Breedte (m)</label>
+          <input id="landmark-width" type="number" step="250" min="100" />
+        </div>
+        <div>
+          <label for="landmark-elevation">Hoogte-offset (m)</label>
+          <input id="landmark-elevation" type="number" step="50" />
+        </div>
+        <div>
+          <label for="landmark-terrain-mode">Terrainmeting</label>
+          <select id="landmark-terrain-mode">
+            <option value="point">Eén punt</option>
+            <option value="median">Mediaan 5×5</option>
+            <option value="coast">Laag kwartiel</option>
+            <option value="high">Hoog kwartiel</option>
+          </select>
+        </div>
+        <div>
+          <label for="landmark-sample-east">Meetpunt oost/west (m)</label>
+          <input id="landmark-sample-east" type="number" step="250" />
+        </div>
+        <div>
+          <label for="landmark-sample-north">Meetpunt noord/zuid (m)</label>
+          <input id="landmark-sample-north" type="number" step="250" />
+        </div>
+      </div>
+      <div class="mini-row four">
+        <button type="button" id="landmark-focus">Focus</button>
+        <button type="button" id="landmark-use-anchor">Gebruik stadsanker</button>
+        <button type="button" id="landmark-anchor-toggle">Markers aan/uit</button>
+        <button type="button" id="landmark-reset">Reset model</button>
+      </div>
+    </details>
 
-    <label for="landmark-export">Definitieve config</label>
-    <textarea id="landmark-export" readonly></textarea>
-    <div class="mini-row">
-      <button type="button" id="landmark-copy">Kopieer</button>
+    <details>
+      <summary>Stapgroottes en toetsen</summary>
+      <div class="landmark-editor-grid">
+        <div>
+          <label for="landmark-move-step">Verplaatsen (m)</label>
+          <input id="landmark-move-step" type="number" step="100" min="10" value="500" />
+        </div>
+        <div>
+          <label for="landmark-rotation-step">Rotatie (°)</label>
+          <input id="landmark-rotation-step" type="number" step="1" min="0.1" value="5" />
+        </div>
+        <div>
+          <label for="landmark-elevation-step">Hoogte (m)</label>
+          <input id="landmark-elevation-step" type="number" step="25" min="1" value="100" />
+        </div>
+        <div>
+          <label for="landmark-scale-step">Schaal (%)</label>
+          <input id="landmark-scale-step" type="number" step="1" min="0.1" value="5" />
+        </div>
+      </div>
+      <div class="landmark-editor-help">
+        W/S noord-zuid · A/D west-oost · Q/E draaien · R/F hoogte · +/− schaal · Ctrl+Z/Ctrl+Y undo/redo.
+      </div>
+    </details>
+
+    <details>
+      <summary>Bosinstellingen</summary>
+      <div class="landmark-editor-grid">
+        <div>
+          <label for="forest-tree-size">Boomgrootte</label>
+          <input id="forest-tree-size" type="number" step="0.05" min="0.1" max="2" />
+        </div>
+        <div>
+          <label for="forest-3d-zoom">3D vanaf zoom</label>
+          <input id="forest-3d-zoom" type="number" step="0.1" min="3" max="12" />
+        </div>
+        <div>
+          <label for="forest-outer-radius">Viewportbuffer</label>
+          <input id="forest-outer-radius" type="number" step="0.1" min="1.2" max="4" />
+        </div>
+        <div>
+          <label for="forest-density">Dichtheid</label>
+          <input id="forest-density" type="number" step="0.05" min="0.1" max="2" />
+        </div>
+        <div>
+          <label for="forest-near-cap">Max. 3D-bomen</label>
+          <input id="forest-near-cap" type="number" step="500" min="0" max="18000" />
+        </div>
+        <div>
+          <label for="forest-sprite-cap">Max. sprites</label>
+          <input id="forest-sprite-cap" type="number" step="1000" min="0" max="60000" />
+        </div>
+      </div>
+      <button type="button" id="forest-reset">Herstel bosstandaarden</button>
+    </details>
+
+    <div class="mini-row four">
+      <button type="button" id="landmark-undo">Undo</button>
+      <button type="button" id="landmark-redo">Redo</button>
+      <button type="button" id="landmark-copy-position">Kopieer positie</button>
+      <button type="button" id="landmark-paste-position">Plak positie</button>
+    </div>
+    <div class="mini-row four">
+      <button type="button" id="landmark-save">Bewaar lokaal</button>
+      <button type="button" id="landmark-import-json">Importeer JSON</button>
       <button type="button" id="landmark-download-json">Download JSON</button>
-      <button type="button" id="landmark-anchor-toggle">Anker aan/uit</button>
-      <button type="button" id="landmark-reload">Herlaad saved</button>
+      <button type="button" id="landmark-download-audit">Download audit</button>
     </div>
-    <div class="landmark-editor-help">
-      Toetsen: W/S = noord/zuid, A/D = west/oost, Q/E = draaien, R/F = hoger/lager, +/− = groter/kleiner. Klik eerst in de kaart/editor.
-    </div>
+    <input id="landmark-import-file" type="file" accept="application/json,.json" hidden />
+
+    <label for="landmark-export">Huidige config</label>
+    <textarea id="landmark-export" readonly></textarea>
+    <button type="button" id="landmark-copy">Kopieer configregel</button>
+
+    <div class="runtime-stats" id="runtime-stats">Statistieken worden opgebouwd…</div>
     <div class="landmark-editor-status" id="landmark-editor-status"></div>
   </div>
 
@@ -334,6 +527,7 @@
 
     const KANKA_ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIxIiwianRpIjoiMjdhZWUxZDFlMmY2NzY5NTgxOWQxNzVmMTViMTc1OTQ1NzczOWZiNTAwOGU2NGM4NWVkMjg4NGUxNjU0ZGExZjNjMmI1ZTQ2NDk1ZTQ5MTUiLCJpYXQiOjE3OTA2ODIwOTYuNjg2NzYsIm5iZiI6MTc5MDY4MjA5Ni42ODY3NjEsImV4cCI6MTgyMjIxODA5Ni42ODE0OTMsInN1YiI6IjIwMTY1MCIsInNjb3BlcyI6W119.VzFgAQZcD6U92h1uoLA70gxNZ_14RfHtVTkhe3X4cVxA-haNtGTGH3ULugqmje0EkRSptcJyNglIOlNiKe3qFnGakEp9evGOmnkWbmTYrsgjZEMHFKGfA9HtCKh07ITRZrToAYxK3_u6nm4JWZcK3uSKXNuXwr4C5VQ0OOTulUR20ZSbyvFMaAWH3J9XtFrV5wK1xYmMAqr3T_Wj4FVmk95xZrobz8-SlEOyELS_jdKrtdbvmWnNAZt5PH0Osixn2lSKy3YH7qr_fIRG7R4pdGJNtW14n_lJ5NgJpQ1jI9K7L117CNfpCUaWcGrVatz8m4_aEQwroPEb2pHOK6vZKyAp4zv-Rr5EZYF1Fe1MzpW49rwdWYl6eES5KsYEj0_eGPY9utKrHg73ETyGOkK5DqpYIuo9lpDV9dlZKdWzWbodUngp_rkjTjZCitA9qNgoaqyJOOV6sNlr2vUXS6SNH6jBJC_Hyxntq4uweFbUmcWkrg0eGBH87d7yUg4UX_XbFs4ssNw4jvzEL1LVgQ1pPlSZB1Uhlr5q7tULEVT5NrqTSjz5-NtnxJrgXl2TC0yrLgkObssW4VOB-kFo37eHC13dnhvvNvwxNiH9Ay67z5qzS4LVyh3GN6hAuJsT0dnmm0ShU-Vz5K2HiCAXjZkG0NvzFYQjFh1Tm9FlTR-Qm-w";
     const KANKA_CAMPAIGN_ID = "196997";
+    const KANKA_ACCESS_TOKEN_KEY = "bigane-kanka-access-token";
     const status = document.getElementById("status");
 
     const escapeHtml = (value) => String(value ?? "")
@@ -410,7 +604,7 @@
       let kankaLocationsLoaded = false;
       let refreshingKankaMarkers = false;
 
-      function getKankaToken() { return KANKA_ACCESS_TOKEN; }
+      function getKankaToken() { return localStorage.getItem(KANKA_ACCESS_TOKEN_KEY) || KANKA_ACCESS_TOKEN; }
 
       function authHeaders() {
         return {
@@ -879,17 +1073,35 @@
       // Both sample MapLibre's terrain height map on the GPU. A wide padded
       // viewport and an alpha fade keep the active forest boundary out of sight.
       const HF_LAYER_ID = "bigane-hybrid-forest";
-      const HF_MIN_ZOOM = 4.15;
       const HF_WORLD_METERS = 40075016.68557849;
       const HF_BASE_CELL_METERS = 7000;
       const HF_BASE_CELL_WORLD = HF_BASE_CELL_METERS / HF_WORLD_METERS;
-      const HF_OUTER_RADIUS = 2.55;
-      const HF_FADE_START = 1.48;
       const HF_HEIGHTMAP_SIZE = 1024;
-      const HF_NEAR_CAP_TOTAL = 10800;
-      const HF_SPRITE_CAP_TOTAL = 39000;
       const HF_MAX_CANDIDATES = 80000;
-      const HF_TREE_SIZE_MULTIPLIER = 0.68;
+      const HF_MAX_NEAR_CAP = 18000;
+      const HF_MAX_SPRITE_CAP = 60000;
+      const HF_DEFAULT_SETTINGS = Object.freeze({
+        minZoom: 4.15,
+        threeDStartZoom: 5.0,
+        outerRadius: 2.55,
+        fadeStart: 1.48,
+        treeSize: 0.68,
+        nearCap: 10800,
+        spriteCap: 39000,
+        densityMultiplier: 1.0
+      });
+      const HF_SETTINGS = { ...HF_DEFAULT_SETTINGS };
+      function hfNormalizeSettings() {
+        HF_SETTINGS.minZoom = Math.max(2, Math.min(12, Number(HF_SETTINGS.minZoom || HF_DEFAULT_SETTINGS.minZoom)));
+        HF_SETTINGS.threeDStartZoom = Math.max(HF_SETTINGS.minZoom, Math.min(14, Number(HF_SETTINGS.threeDStartZoom || HF_DEFAULT_SETTINGS.threeDStartZoom)));
+        HF_SETTINGS.outerRadius = Math.max(1.2, Math.min(4, Number(HF_SETTINGS.outerRadius || HF_DEFAULT_SETTINGS.outerRadius)));
+        HF_SETTINGS.fadeStart = Math.max(0.8, Math.min(HF_SETTINGS.outerRadius - 0.05, Number(HF_SETTINGS.fadeStart || HF_DEFAULT_SETTINGS.fadeStart)));
+        HF_SETTINGS.treeSize = Math.max(0.1, Math.min(2, Number(HF_SETTINGS.treeSize || HF_DEFAULT_SETTINGS.treeSize)));
+        HF_SETTINGS.nearCap = Math.max(0, Math.min(HF_MAX_NEAR_CAP, Math.round(Number(HF_SETTINGS.nearCap || 0))));
+        HF_SETTINGS.spriteCap = Math.max(0, Math.min(HF_MAX_SPRITE_CAP, Math.round(Number(HF_SETTINGS.spriteCap || 0))));
+        HF_SETTINGS.densityMultiplier = Math.max(0.1, Math.min(2, Number(HF_SETTINGS.densityMultiplier || HF_DEFAULT_SETTINGS.densityMultiplier)));
+      }
+      hfNormalizeSettings();
       let hybridForestController = null;
 
       const HF_TYPES = [
@@ -1036,11 +1248,12 @@
       }
 
       function hfNearRadiusForZoom(zoom) {
-        // Sprites carry the distant forest. Real 3D trees begin at zoom 5
-        // and take over a progressively larger area as the user zooms in.
-        if (zoom < 5.0) return 0;
-        if (zoom < 5.8) return 0.30;
-        if (zoom < 6.7) return 0.56;
+        // Sprites carry the distant forest. Real 3D trees phase in from the
+        // configurable start zoom and occupy a larger inner viewport at closer zooms.
+        const start = Number(HF_SETTINGS.threeDStartZoom || 5.0);
+        if (zoom < start) return 0;
+        if (zoom < start + 0.8) return 0.30;
+        if (zoom < start + 1.7) return 0.56;
         return 0.86;
       }
 
@@ -1204,21 +1417,15 @@
       }
 
       function hfSpriteGeometry() {
-        // Two crossed vertical quads. Local X/Y are horizontal, Z is vertical.
+        // One camera-facing billboard. The texture itself is generated from the
+        // exact same low-poly geometry as the near 3D archetype.
         return new Float32Array([
           -0.5, 0, 0,  0, 0,
            0.5, 0, 0,  1, 0,
            0.5, 0, 1,  1, 1,
           -0.5, 0, 0,  0, 0,
            0.5, 0, 1,  1, 1,
-          -0.5, 0, 1,  0, 1,
-
-           0, -0.5, 0,  0, 0,
-           0,  0.5, 0,  1, 0,
-           0,  0.5, 1,  1, 1,
-           0, -0.5, 0,  0, 0,
-           0,  0.5, 1,  1, 1,
-           0, -0.5, 1,  0, 1
+          -0.5, 0, 1,  0, 1
         ]);
       }
 
@@ -1228,66 +1435,84 @@
 
       function hfMakeSpriteCanvas(type) {
         const canvas = document.createElement("canvas");
-        canvas.width = 160;
-        canvas.height = 160;
-        const ctx = canvas.getContext("2d");
-        ctx.clearRect(0, 0, 160, 160);
-        ctx.imageSmoothingEnabled = true;
-        const palette = HF_SPRITE_PALETTES[type.id] || [type.foliage, type.foliage, type.foliage];
-        const foliage = hfColorCss(palette[0], 0.98);
-        const foliageLight = hfColorCss(palette[1], 0.94);
-        const foliageDark = hfColorCss(palette[2], 0.98);
-        const trunk = hfColorCss(type.trunk, 0.98);
+        canvas.width = 256;
+        canvas.height = 256;
+        const context = canvas.getContext("2d");
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.imageSmoothingEnabled = true;
 
-        const drawTrunk = (x, y, w, h) => {
-          ctx.fillStyle = trunk;
-          ctx.fillRect(x - w / 2, y - h, w, h);
-        };
-        const ellipse = (x, y, rx, ry, color = foliage) => {
-          ctx.fillStyle = color;
-          ctx.beginPath();
-          ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-          ctx.fill();
-        };
-        const conifer = (x, baseY, scale = 1) => {
-          drawTrunk(x, baseY, 5 * scale, 36 * scale);
-          ctx.fillStyle = foliage;
-          for (const [cy, halfW, h] of [[104,25,40],[82,21,34],[62,15,28]]) {
-            ctx.beginPath();
-            ctx.moveTo(x, baseY - cy * scale + 93 * scale);
-            ctx.lineTo(x - halfW * scale, baseY - (cy - h) * scale + 93 * scale);
-            ctx.lineTo(x + halfW * scale, baseY - (cy - h) * scale + 93 * scale);
-            ctx.closePath();
-            ctx.fill();
+        const geometry = hfTreeGeometry(type.id);
+        const triangles = [];
+        const trees = [
+          { dx: 0.00, dy: 0.00, scale: 1.00, angle: 0.55, tint: 1.00 },
+          { dx: -0.43, dy: -0.03, scale: 0.72, angle: 1.15, tint: 0.92 },
+          { dx: 0.43, dy: 0.02, scale: 0.68, angle: -0.35, tint: 1.07 }
+        ];
+
+        for (const tree of trees) {
+          const cs = Math.cos(tree.angle), sn = Math.sin(tree.angle);
+          for (let offset = 0; offset < geometry.length; offset += 21) {
+            const points = [];
+            let averageDepth = 0;
+            let part = 0;
+            let normal = [0, 0, 1];
+            for (let vertex = 0; vertex < 3; vertex++) {
+              const base = offset + vertex * 7;
+              const x = geometry[base + 0];
+              const y = geometry[base + 1];
+              const z = geometry[base + 2];
+              const rotatedX = x * cs - y * sn;
+              const depth = x * sn + y * cs;
+              points.push({
+                x: tree.dx + rotatedX * tree.scale,
+                y: tree.dy + (z + depth * 0.10) * tree.scale
+              });
+              averageDepth += depth;
+              if (vertex === 0) {
+                normal = [geometry[base + 3], geometry[base + 4], geometry[base + 5]];
+                part = geometry[base + 6];
+              }
+            }
+            triangles.push({ points, depth: averageDepth / 3 + tree.dy, part, normal, tint: tree.tint });
           }
-        };
+        }
 
-        if (type.id === "conifer") {
-          conifer(47, 150, 0.88);
-          conifer(82, 150, 1.06);
-          conifer(116, 150, 0.78);
-        } else if (type.id === "savanna") {
-          drawTrunk(56, 148, 7, 55);
-          drawTrunk(104, 148, 6, 48);
-          ellipse(56, 84, 39, 13);
-          ellipse(104, 92, 34, 12, foliageLight);
-          ellipse(80, 79, 28, 10, foliageLight);
-        } else if (type.id === "wetland") {
-          drawTrunk(46, 150, 5, 50);
-          drawTrunk(81, 150, 5, 58);
-          drawTrunk(116, 150, 4, 45);
-          ellipse(46, 85, 17, 43);
-          ellipse(81, 74, 19, 52, foliageLight);
-          ellipse(116, 93, 15, 37);
-        } else {
-          drawTrunk(48, 149, 7, 47);
-          drawTrunk(82, 149, 8, 55);
-          drawTrunk(116, 149, 6, 43);
-          ellipse(45, 88, type.id === "tropical" ? 33 : 29, type.id === "savanna" ? 15 : 30, foliageDark);
-          ellipse(84, 72, type.id === "tropical" ? 39 : 34, type.id === "deepwood" ? 37 : 35, foliageLight);
-          ellipse(118, 91, type.id === "tropical" ? 31 : 27, type.id === "deepwood" ? 32 : 29, foliage);
-          ellipse(69, 94, 27, 23, foliage);
-          ellipse(101, 99, 25, 22, foliageLight);
+        const allPoints = triangles.flatMap(triangle => triangle.points);
+        const minX = Math.min(...allPoints.map(point => point.x));
+        const maxX = Math.max(...allPoints.map(point => point.x));
+        const minY = Math.min(...allPoints.map(point => point.y));
+        const maxY = Math.max(...allPoints.map(point => point.y));
+        const margin = 14;
+        const scale = Math.min(
+          (canvas.width - margin * 2) / Math.max(0.001, maxX - minX),
+          (canvas.height - margin * 2) / Math.max(0.001, maxY - minY)
+        );
+        const toCanvas = point => ({
+          x: margin + (point.x - minX) * scale,
+          y: canvas.height - margin - (point.y - minY) * scale
+        });
+        const light = [-0.45, -0.60, 1.25];
+        const lightLength = Math.hypot(...light);
+        triangles.sort((a, b) => a.depth - b.depth);
+
+        for (const triangle of triangles) {
+          const n = triangle.normal;
+          const nLength = Math.hypot(n[0], n[1], n[2]) || 1;
+          const diffuse = 0.58 + 0.42 * Math.max(0,
+            (n[0] * light[0] + n[1] * light[1] + n[2] * light[2]) / (nLength * lightLength)
+          );
+          const source = triangle.part < 0.5 ? type.trunk : type.foliage;
+          const rgb = source.map(value => Math.max(0, Math.min(1, value * diffuse * triangle.tint)));
+          context.fillStyle = hfColorCss(rgb, 1);
+          const p0 = toCanvas(triangle.points[0]);
+          const p1 = toCanvas(triangle.points[1]);
+          const p2 = toCanvas(triangle.points[2]);
+          context.beginPath();
+          context.moveTo(p0.x, p0.y);
+          context.lineTo(p1.x, p1.y);
+          context.lineTo(p2.x, p2.y);
+          context.closePath();
+          context.fill();
         }
         return canvas;
       }
@@ -1341,9 +1566,11 @@
               in float i_height;
               in float i_rotation;
               in float i_seed;
+              in float i_alpha;
               out vec3 v_normal;
               out float v_part;
               out float v_seed;
+              out float v_alpha;
 
               void main() {
                 float cs = cos(i_rotation);
@@ -1359,6 +1586,7 @@
                 v_normal = normalize(vec3(rot * a_normal.xy, a_normal.z));
                 v_part = a_part;
                 v_seed = i_seed;
+                v_alpha = i_alpha;
               }
             `, `
               uniform vec3 u_foliageColor;
@@ -1366,9 +1594,15 @@
               in vec3 v_normal;
               in float v_part;
               in float v_seed;
+              in float v_alpha;
               out vec4 fragColor;
 
+              float dither(vec2 position) {
+                return fract(52.9829189 * fract(dot(position, vec2(0.06711056, 0.00583715))));
+              }
+
               void main() {
+                if (v_alpha < 0.999 && dither(gl_FragCoord.xy) > v_alpha) discard;
                 vec3 lightDir = normalize(vec3(-0.55, -0.70, 1.25));
                 float diffuse = 0.54 + 0.46 * max(dot(normalize(v_normal), lightDir), 0.0);
                 float variation = fract(v_seed * 17.731) - 0.5;
@@ -1383,6 +1617,7 @@
               uniform mat4 u_matrix;
               uniform vec4 u_heightBounds;
               uniform sampler2D u_heightMap;
+              uniform float u_bearing;
               in vec3 a_local;
               in vec2 a_uv;
               in vec2 i_position;
@@ -1397,10 +1632,10 @@
               out float v_alpha;
 
               void main() {
-                float cs = cos(i_rotation);
-                float sn = sin(i_rotation);
-                mat2 rot = mat2(cs, -sn, sn, cs);
-                vec2 localXY = rot * (a_local.xy * i_width);
+                float angle = radians(u_bearing);
+                vec2 right = vec2(cos(angle), sin(angle));
+                float widthJitter = 0.985 + 0.015 * sin(i_rotation * 3.0);
+                vec2 localXY = right * (a_local.x * i_width * widthJitter);
                 vec2 worldXY = i_position + localXY * i_mpu;
                 vec2 uv = (i_position - u_heightBounds.xy) / (u_heightBounds.zw - u_heightBounds.xy);
                 uv = clamp(uv, vec2(0.0), vec2(1.0));
@@ -1422,7 +1657,7 @@
                 vec4 texel = texture(u_sprite, v_uv);
                 float alpha = texel.a * v_alpha;
                 if (alpha < 0.055) discard;
-                float variation = 0.90 + (fract(v_seed * 11.917) - 0.5) * 0.20;
+                float variation = 0.94 + (fract(v_seed * 11.917) - 0.5) * 0.12;
                 fragColor = vec4(texel.rgb * variation, alpha);
               }
             `);
@@ -1438,7 +1673,8 @@
               matrix: gl.getUniformLocation(this.spriteProgram, "u_matrix"),
               bounds: gl.getUniformLocation(this.spriteProgram, "u_heightBounds"),
               heightMap: gl.getUniformLocation(this.spriteProgram, "u_heightMap"),
-              sprite: gl.getUniformLocation(this.spriteProgram, "u_sprite")
+              sprite: gl.getUniformLocation(this.spriteProgram, "u_sprite"),
+              bearing: gl.getUniformLocation(this.spriteProgram, "u_bearing")
             };
 
             this.heightMap = gl.createTexture();
@@ -1463,11 +1699,11 @@
 
               const nearInstanceBuffer = gl.createBuffer();
               gl.bindBuffer(gl.ARRAY_BUFFER, nearInstanceBuffer);
-              gl.bufferData(gl.ARRAY_BUFFER, HF_NEAR_CAP_TOTAL * 7 * 4, gl.DYNAMIC_DRAW);
+              gl.bufferData(gl.ARRAY_BUFFER, HF_MAX_NEAR_CAP * 8 * 4, gl.DYNAMIC_DRAW);
 
               const spriteInstanceBuffer = gl.createBuffer();
               gl.bindBuffer(gl.ARRAY_BUFFER, spriteInstanceBuffer);
-              gl.bufferData(gl.ARRAY_BUFFER, HF_SPRITE_CAP_TOTAL * 8 * 4, gl.DYNAMIC_DRAW);
+              gl.bufferData(gl.ARRAY_BUFFER, HF_MAX_SPRITE_CAP * 8 * 4, gl.DYNAMIC_DRAW);
 
               return {
                 type,
@@ -1487,30 +1723,11 @@
               this.rebuildTimer = setTimeout(() => this.rebuild(gl), delay);
             };
 
-            // During pan/zoom, rebuild at a throttled cadence instead of waiting
-            // for moveend/zoomend. This keeps the forest viewport following the
-            // camera without regenerating tens of thousands of instances every frame.
-            this.lastLiveBuildAt = 0;
-            this.liveBuildTimer = null;
-            this.scheduleLiveRebuild = (force = false) => {
-              const now = performance.now();
-              const interval = 140;
-              const elapsed = now - this.lastLiveBuildAt;
-              const run = () => {
-                this.liveBuildTimer = null;
-                this.lastLiveBuildAt = performance.now();
-                if (force) this.lastBuildKey = "";
-                this.rebuild(gl);
-              };
-              if (elapsed >= interval) {
-                run();
-              } else if (!this.liveBuildTimer) {
-                this.liveBuildTimer = setTimeout(run, interval - elapsed);
-              }
-            };
-
-            this.onMove = () => this.scheduleLiveRebuild(false);
-            this.onZoom = () => this.scheduleLiveRebuild(true);
+            // Keep the current, generously buffered forest instance set while
+            // the camera is moving. Rebuilding tens of thousands of candidates
+            // during pan/zoom was the main performance regression in v18.
+            // MapLibre still redraws these existing instances every frame, so
+            // they move smoothly with the camera. Only reselect after release.
             this.onMoveEnd = () => this.scheduleRebuild(false, 20);
             this.onZoomEnd = () => this.scheduleRebuild(true, 20);
             this.onIdle = () => {
@@ -1523,8 +1740,6 @@
                 this.scheduleRebuild(true, 130);
               }
             };
-            mapInstance.on("move", this.onMove);
-            mapInstance.on("zoom", this.onZoom);
             mapInstance.on("moveend", this.onMoveEnd);
             mapInstance.on("zoomend", this.onZoomEnd);
             mapInstance.on("idle", this.onIdle);
@@ -1586,20 +1801,22 @@
             const halfH = Math.max(Math.abs(se.y - nw.y) * 0.5, 1e-8);
             return {
               c, halfW, halfH,
-              x0: c.x - halfW * HF_OUTER_RADIUS,
-              x1: c.x + halfW * HF_OUTER_RADIUS,
-              y0: c.y - halfH * HF_OUTER_RADIUS,
-              y1: c.y + halfH * HF_OUTER_RADIUS
+              x0: c.x - halfW * HF_SETTINGS.outerRadius,
+              x1: c.x + halfW * HF_SETTINGS.outerRadius,
+              y0: c.y - halfH * HF_SETTINGS.outerRadius,
+              y1: c.y + halfH * HF_SETTINGS.outerRadius
             };
           },
 
           rebuild(gl) {
             this.needsRebuild = false;
-            if (!this.enabled || this.map.getZoom() < HF_MIN_ZOOM) {
+            if (!this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) {
               for (const state of this.typeStates) {
                 state.nearCount = 0;
                 state.spriteCount = 0;
               }
+              this.lastNearTotal = 0;
+              this.lastSpriteTotal = 0;
               this.map.triggerRepaint();
               return;
             }
@@ -1658,10 +1875,10 @@
                   const nx = (x - frame.c.x) / frame.halfW;
                   const ny = (y - frame.c.y) / frame.halfH;
                   const norm = Math.hypot(nx, ny);
-                  if (norm > HF_OUTER_RADIUS) continue;
+                  if (norm > HF_SETTINGS.outerRadius) continue;
                   if (norm > 1.30 && hfHash(ix, iy, 71) > 0.56) continue;
                   if (norm > 1.90 && hfHash(ix, iy, 72) > 0.34) continue;
-                  if (hfHash(ix, iy, 3) > biomeConfig.density) continue;
+                  if (hfHash(ix, iy, 3) > Math.min(1, biomeConfig.density * HF_SETTINGS.densityMultiplier)) continue;
 
                   const lng = hfLng(x), lat = hfLat(y);
                   if (!featureContainsCoordinate(entry.feature, [lng, lat])) continue;
@@ -1671,19 +1888,31 @@
                   const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4));
                   const type = HF_TYPES[typeIndex];
                   const scale = 0.78 + hfHash(ix, iy, 5) * 0.54;
-                  const height = type.baseHeight * scale * HF_TREE_SIZE_MULTIPLIER;
+                  const height = type.baseHeight * scale * HF_SETTINGS.treeSize;
                   const width = height * type.widthRatio * (0.86 + hfHash(ix, iy, 6) * 0.28);
                   const rotation = hfHash(ix, iy, 7) * Math.PI * 2;
                   const seed = hfHash(ix, iy, 8);
 
-                  let alpha;
-                  if (nearRadius > 0 && norm <= nearRadius) {
-                    alpha = 0.22;
-                  } else if (norm <= HF_FADE_START) {
-                    alpha = 0.91;
+                  let outerAlpha;
+                  if (norm <= HF_SETTINGS.fadeStart) {
+                    outerAlpha = 0.91;
                   } else {
-                    alpha = 0.91 * Math.max(0, (HF_OUTER_RADIUS - norm) / (HF_OUTER_RADIUS - HF_FADE_START));
+                    outerAlpha = 0.91 * Math.max(0, (HF_SETTINGS.outerRadius - norm) / (HF_SETTINGS.outerRadius - HF_SETTINGS.fadeStart));
                   }
+
+                  // True LOD crossfade: a position is no longer rendered as a
+                  // fully opaque sprite underneath a fully opaque 3D tree.
+                  let nearAlpha = 0;
+                  if (nearRadius > 0 && norm < nearRadius) {
+                    const transition = Math.min(0.18, nearRadius * 0.45);
+                    const inner = Math.max(0, nearRadius - transition);
+                    if (norm <= inner) nearAlpha = 1;
+                    else {
+                      const t = Math.max(0, Math.min(1, (nearRadius - norm) / Math.max(0.0001, nearRadius - inner)));
+                      nearAlpha = t * t * (3 - 2 * t);
+                    }
+                  }
+                  const spriteAlpha = outerAlpha * (1 - nearAlpha);
 
                   candidates.push({
                     x, y,
@@ -1693,9 +1922,9 @@
                     height,
                     rotation,
                     seed,
-                    alpha,
-                    norm,
-                    near: nearRadius > 0 && norm <= nearRadius
+                    spriteAlpha,
+                    nearAlpha,
+                    norm
                   });
                   if (candidates.length >= HF_MAX_CANDIDATES) break featureLoop;
                 }
@@ -1713,16 +1942,16 @@
             for (const c of candidates) {
               const n = nearData[c.typeIndex];
               const s = spriteData[c.typeIndex];
-              if (c.near && nearTotalSelected < HF_NEAR_CAP_TOTAL) {
-                n.push(c.x, c.y, c.mpu, c.width, c.height, c.rotation, c.seed);
+              if (c.nearAlpha > 0.02 && nearTotalSelected < HF_SETTINGS.nearCap) {
+                n.push(c.x, c.y, c.mpu, c.width, c.height, c.rotation, c.seed, c.nearAlpha);
                 nearTotalSelected++;
               }
-              if (c.alpha > 0.045 && spriteTotalSelected < HF_SPRITE_CAP_TOTAL) {
+              if (c.spriteAlpha > 0.045 && spriteTotalSelected < HF_SETTINGS.spriteCap) {
                 s.push(
                   c.x, c.y, c.mpu,
                   c.width * spriteWidthMultiplier,
                   c.height * spriteHeightMultiplier,
-                  c.rotation, c.seed, c.alpha
+                  c.rotation, c.seed, c.spriteAlpha
                 );
                 spriteTotalSelected++;
               }
@@ -1732,7 +1961,7 @@
               const state = this.typeStates[i];
               const nearArray = new Float32Array(nearData[i]);
               const spriteArray = new Float32Array(spriteData[i]);
-              state.nearCount = nearArray.length / 7;
+              state.nearCount = nearArray.length / 8;
               state.spriteCount = spriteArray.length / 8;
               gl.bindBuffer(gl.ARRAY_BUFFER, state.nearInstanceBuffer);
               if (nearArray.length) gl.bufferSubData(gl.ARRAY_BUFFER, 0, nearArray);
@@ -1749,12 +1978,23 @@
 
             const nearTotal = this.typeStates.reduce((sum, state) => sum + state.nearCount, 0);
             const spriteTotal = this.typeStates.reduce((sum, state) => sum + state.spriteCount, 0);
-            console.info(`Hybrid forest: ${nearTotal}/${HF_NEAR_CAP_TOTAL} 3D trees + ${spriteTotal}/${HF_SPRITE_CAP_TOTAL} sprite clusters from ${features.length} biome polygons.`);
+            this.lastNearTotal = nearTotal;
+            this.lastSpriteTotal = spriteTotal;
+            this.lastBiomeFeatureCount = features.length;
+            console.info(`Hybrid forest: ${nearTotal}/${HF_SETTINGS.nearCap} 3D trees + ${spriteTotal}/${HF_SETTINGS.spriteCap} sprite clusters from ${features.length} biome polygons.`);
             this.map.triggerRepaint();
           },
 
+          getStats() {
+            return {
+              near: this.lastNearTotal || 0,
+              sprites: this.lastSpriteTotal || 0,
+              biomes: this.lastBiomeFeatureCount || 0
+            };
+          },
+
           prerender(gl, options) {
-            if (!this.enabled || this.map.getZoom() < HF_MIN_ZOOM) return;
+            if (!this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) return;
             options.renderTerrainHeightMap?.({
               texture: this.heightMap,
               width: HF_HEIGHTMAP_SIZE,
@@ -1780,14 +2020,15 @@
             gl.vertexAttribDivisor(part, 0);
 
             gl.bindBuffer(gl.ARRAY_BUFFER, state.nearInstanceBuffer);
-            const instanceStride = 7 * 4;
+            const instanceStride = 8 * 4;
             const attributes = [
               ["i_position", 2, 0],
               ["i_mpu", 1, 2 * 4],
               ["i_width", 1, 3 * 4],
               ["i_height", 1, 4 * 4],
               ["i_rotation", 1, 5 * 4],
-              ["i_seed", 1, 6 * 4]
+              ["i_seed", 1, 6 * 4],
+              ["i_alpha", 1, 7 * 4]
             ];
             for (const [name, size, offset] of attributes) {
               const location = gl.getAttribLocation(this.nearProgram, name);
@@ -1829,7 +2070,7 @@
           },
 
           render(gl, options) {
-            if (!this.enabled || this.map.getZoom() < HF_MIN_ZOOM) return;
+            if (!this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) return;
             const matrix = options?.defaultProjectionData?.mainMatrix;
             if (!matrix) return;
 
@@ -1862,6 +2103,7 @@
             gl.uniform1i(this.spriteLocations.heightMap, 0);
             gl.activeTexture(gl.TEXTURE1);
             gl.uniform1i(this.spriteLocations.sprite, 1);
+            gl.uniform1f(this.spriteLocations.bearing, this.map.getBearing());
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
             gl.depthMask(false);
@@ -1881,11 +2123,8 @@
 
           onRemove() {
             clearTimeout(this.rebuildTimer);
-            if (this.onMove) this.map.off("move", this.onMove);
-            if (this.onZoom) this.map.off("zoom", this.onZoom);
             if (this.onMoveEnd) this.map.off("moveend", this.onMoveEnd);
             if (this.onZoomEnd) this.map.off("zoomend", this.onZoomEnd);
-            if (this.liveBuildTimer) clearTimeout(this.liveBuildTimer);
             if (this.onIdle) this.map.off("idle", this.onIdle);
             if (this.onSourceData) this.map.off("sourcedata", this.onSourceData);
             hybridForestController = null;
@@ -1901,11 +2140,12 @@
 
 
       // ---------------------------------------------------------------------
-      // 3D LANDMARKS - city models placed automatically on their map features
+      // SHARED 3D LANDMARK SCENE
       // ---------------------------------------------------------------------
-      // All current landmark GLBs are already Z-up (X/Y horizontal, Z vertical).
-      // Widths are deliberately cartographic so the landmarks remain readable
-      // at Bigane's continental map scale.
+      // One MapLibre custom layer, one Three.js scene and one renderer for all
+      // landmarks. Models are loaded only when their location approaches the
+      // viewport, then cached. Exact lng/lat takes precedence over legacy
+      // city-anchor + metre offsets; existing configs are migrated at runtime.
       const LANDMARKS_3D = [
         { name: "Stonefront", model: "./Stonefront_v2_Textured.glb", widthMeters: 36000, rotationDeg: 0, eastMeters: 0, northMeters: 0, elevationOffsetMeters: 0 },
         { name: "Ehlehuak", model: "./Ehlehuak_v2_MapReady.glb", widthMeters: 43000, rotationDeg: -90, eastMeters: 0, northMeters: 0, elevationOffsetMeters: 0, aliases: ["Ehuleak", "Ehléhuak", "Ehlehuak", "Ehuleák", "Ehleuak", "Ehleak"] },
@@ -1923,47 +2163,49 @@
         { name: "Priddam", model: "./Priddam_MapLibre_Textured.glb", widthMeters: 40000, rotationDeg: 180, eastMeters: -55590, northMeters: 123930, elevationOffsetMeters: -4100 },
         { name: "Vinboa", model: "./Vinboa_Renaissance_GateRoofs_Fixed.glb", widthMeters: 40000, rotationDeg: -15, eastMeters: 221340, northMeters: -91290, elevationOffsetMeters: -3450 },
         { name: "Copper", model: "./Copper_MapLibre_Textured.glb", widthMeters: 32000, rotationDeg: 0, eastMeters: 0, northMeters: 0, elevationOffsetMeters: -3300 }
-      ];
+      ].map(config => ({
+        visible: true,
+        terrainMode: "point",
+        elevationSampleEastMeters: 0,
+        elevationSampleNorthMeters: 0,
+        ...config
+      }));
 
-      // Live landmark editor state. The config objects above are intentionally
-      // mutable; editing them updates the active Three.js layers immediately.
-      const LANDMARK_EDITOR_STORAGE_KEY = "bigane-landmark-editor-v1";
-      const landmarkLayersByName = new Map();
+      const LANDMARK_LAYER_ID = "bigane-landmarks-3d";
+      const LANDMARK_MIN_ZOOM = 3.85;
+      const LANDMARK_LOAD_RADIUS = 3.0;
+      const LANDMARK_RENDER_RADIUS = 1.85;
+      const LANDMARK_EDITOR_STORAGE_KEY = "bigane-landmark-editor-v2";
+      const LANDMARK_EDITOR_LEGACY_STORAGE_KEY = "bigane-landmark-editor-v1";
+      const landmarkStatesByName = new Map();
       const landmarkDefaultsByName = new Map(
-        LANDMARKS_3D.map(c => [c.name, {
-          widthMeters: c.widthMeters,
-          rotationDeg: c.rotationDeg || 0,
-          eastMeters: c.eastMeters || 0,
-          northMeters: c.northMeters || 0,
-          elevationOffsetMeters: c.elevationOffsetMeters || 0
-        }])
+        LANDMARKS_3D.map(config => [config.name, JSON.parse(JSON.stringify(config))])
       );
+      let landmarkController = null;
       let landmarkAnchorMarker = null;
+      let landmarkSampleMarker = null;
       let landmarkAnchorVisible = true;
+      let landmarkEditorSelectName = null;
+
+      function landmarkCompactName(value) {
+        return String(value || "")
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/[^a-z0-9]/g, "");
+      }
 
       function landmarkNameMatches(candidate, config) {
-        const compact = (v) => String(v || '')
-          .toLowerCase()
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .replace(/[^a-z0-9]/g, '');
-
-        const c = compact(candidate);
-        if (!c) return false;
-
-        const wantedNames = [config.name, ...(config.aliases || [])]
-          .map(compact)
+        const compact = landmarkCompactName(candidate);
+        if (!compact) return false;
+        const wanted = [config.name, ...(config.aliases || [])]
+          .map(landmarkCompactName)
           .filter(Boolean);
-
-        // Exact normalized-name matching only. Never use substring matching:
-        // e.g. river "Till" must NOT match city "Tillfort".
-        return wantedNames.includes(c);
+        return wanted.includes(compact);
       }
 
       function findLandmarkCoordinates(config) {
-        const wantedNames = [config.name, ...(config.aliases || [])].map(normalizeLocationName);
         const layerIds = ["Town names", "Capitals", "clickable"].filter(id => map.getLayer(id));
-
         for (const layerId of layerIds) {
           const layer = map.getLayer(layerId);
           const source = layer?.source;
@@ -1972,11 +2214,15 @@
           try {
             const features = map.querySourceFeatures(source, { sourceLayer });
             for (const feature of features || []) {
-              const props = feature?.properties || {};
-              const candidates = [props.Burg, props.name, props.Name, ...Object.values(props).filter(v => typeof v === "string")];
+              const properties = feature?.properties || {};
+              const candidates = [
+                properties.Burg,
+                properties.name,
+                properties.Name,
+                ...Object.values(properties).filter(value => typeof value === "string")
+              ];
               if (!candidates.some(value => landmarkNameMatches(value, config))) continue;
               if (feature.geometry?.type === "Point" && Array.isArray(feature.geometry.coordinates)) {
-                console.info(`${config.name} matched map feature:`, props);
                 return feature.geometry.coordinates.slice(0, 2);
               }
             }
@@ -1984,15 +2230,18 @@
             console.warn(`${config.name} source-query failed for ${layerId}:`, error);
           }
         }
-
         try {
           const features = map.queryRenderedFeatures({ layers: layerIds });
           for (const feature of features || []) {
-            const props = feature?.properties || {};
-            const candidates = [props.Burg, props.name, props.Name, ...Object.values(props).filter(v => typeof v === "string")];
+            const properties = feature?.properties || {};
+            const candidates = [
+              properties.Burg,
+              properties.name,
+              properties.Name,
+              ...Object.values(properties).filter(value => typeof value === "string")
+            ];
             if (!candidates.some(value => landmarkNameMatches(value, config))) continue;
             if (feature.geometry?.type === "Point" && Array.isArray(feature.geometry.coordinates)) {
-              console.info(`${config.name} matched rendered feature:`, props);
               return feature.geometry.coordinates.slice(0, 2);
             }
           }
@@ -2002,357 +2251,1041 @@
         return null;
       }
 
-      async function installLandmarkModel(config) {
-        const layerId = `landmark-${normalizeLocationName(config.name).replace(/[^a-z0-9]+/g, "-")}-3d`;
-        if (map.getLayer(layerId)) return;
-        await ensureThreeJs();
+      function landmarkHasAbsolutePosition(config) {
+        return Number.isFinite(Number(config.lng)) && Number.isFinite(Number(config.lat));
+      }
 
-        const loader = new GLTFLoader();
-        const gltf = await loader.loadAsync(config.model);
-        const root = gltf.scene;
-        root.updateMatrixWorld(true);
+      function landmarkShiftLngLat(coordinates, eastMeters = 0, northMeters = 0) {
+        const base = maplibregl.MercatorCoordinate.fromLngLat(coordinates, 0);
+        const mpu = base.meterInMercatorCoordinateUnits();
+        const shifted = new maplibregl.MercatorCoordinate(
+          base.x + Number(eastMeters || 0) * mpu,
+          base.y - Number(northMeters || 0) * mpu,
+          0
+        ).toLngLat();
+        return [shifted.lng, shifted.lat];
+      }
 
-        const bbox = new THREE.Box3().setFromObject(root);
-        const size = new THREE.Vector3();
-        bbox.getSize(size);
-        const cx = (bbox.min.x + bbox.max.x) * 0.5;
-        const cy = (bbox.min.y + bbox.max.y) * 0.5;
-        const horizontalSize = Math.max(size.x, size.y, 0.0001);
+      function landmarkPercentile(values, percentile) {
+        if (!values.length) return 0;
+        const sorted = [...values].sort((a, b) => a - b);
+        const position = Math.max(0, Math.min(sorted.length - 1, (sorted.length - 1) * percentile));
+        const lo = Math.floor(position), hi = Math.ceil(position);
+        if (lo === hi) return sorted[lo];
+        const t = position - lo;
+        return sorted[lo] * (1 - t) + sorted[hi] * t;
+      }
 
-        // Current models are authored Z-up. Center X/Y and place the lowest
-        // model point at local Z=0 so the terrain elevation becomes the base.
-        root.position.set(-cx, -cy, -bbox.min.z);
+      function landmarkSerializeConfig(config) {
+        return {
+          name: config.name,
+          model: config.model,
+          visible: config.visible !== false,
+          widthMeters: Number(config.widthMeters || 0),
+          rotationDeg: Number(config.rotationDeg || 0),
+          ...(landmarkHasAbsolutePosition(config) ? {
+            lng: Number(config.lng),
+            lat: Number(config.lat),
+            positionMode: "absolute"
+          } : {
+            eastMeters: Number(config.eastMeters || 0),
+            northMeters: Number(config.northMeters || 0),
+            positionMode: "anchor"
+          }),
+          elevationOffsetMeters: Number(config.elevationOffsetMeters || 0),
+          terrainMode: config.terrainMode || "point",
+          elevationSampleEastMeters: Number(config.elevationSampleEastMeters || 0),
+          elevationSampleNorthMeters: Number(config.elevationSampleNorthMeters || 0),
+          ...(config.aliases?.length ? { aliases: [...config.aliases] } : {})
+        };
+      }
 
-        const placement = new THREE.Group();
-        placement.rotation.z = THREE.MathUtils.degToRad(config.rotationDeg || 0);
-        placement.add(root);
-        placement.visible = false;
+      function landmarkApplySerialized(target, source) {
+        if (!target || !source) return;
+        for (const key of [
+          "model", "visible", "widthMeters", "rotationDeg", "eastMeters", "northMeters",
+          "lng", "lat", "positionMode", "elevationOffsetMeters", "terrainMode",
+          "elevationSampleEastMeters", "elevationSampleNorthMeters"
+        ]) {
+          if (source[key] !== undefined) target[key] = source[key];
+        }
+        if (Array.isArray(source.aliases)) target.aliases = [...source.aliases];
+      }
+
+      function applyLandmarkStateObject(data) {
+        const list = Array.isArray(data?.landmarks)
+          ? data.landmarks
+          : data && typeof data === "object"
+            ? Object.entries(data).map(([name, value]) => ({ name, ...value }))
+            : [];
+        for (const incoming of list) {
+          const config = LANDMARKS_3D.find(item => item.name === incoming.name);
+          if (config) landmarkApplySerialized(config, incoming);
+        }
+        if (data?.forest && typeof data.forest === "object" && typeof HF_SETTINGS !== "undefined") {
+          for (const key of Object.keys(HF_SETTINGS)) {
+            if (Number.isFinite(Number(data.forest[key]))) HF_SETTINGS[key] = Number(data.forest[key]);
+          }
+          hfNormalizeSettings();
+        }
+      }
+
+      function loadInitialLandmarkState() {
+        for (const key of [LANDMARK_EDITOR_STORAGE_KEY, LANDMARK_EDITOR_LEGACY_STORAGE_KEY]) {
+          try {
+            const raw = localStorage.getItem(key);
+            if (!raw) continue;
+            applyLandmarkStateObject(JSON.parse(raw));
+            return;
+          } catch (error) {
+            console.warn(`Kon ${key} niet laden:`, error);
+          }
+        }
+      }
+
+      function installSharedLandmarkLayer() {
+        if (map.getLayer(LANDMARK_LAYER_ID)) return;
 
         const landmarkLayer = {
-          id: layerId,
+          id: LANDMARK_LAYER_ID,
           type: "custom",
           renderingMode: "3d",
 
           onAdd(mapInstance, gl) {
             this.map = mapInstance;
+            this.gl = gl;
             this.camera = new THREE.Camera();
             this.scene = new THREE.Scene();
-            this.placement = placement;
-            this.horizontalSize = horizontalSize;
-            this.coordinates = null;
-
-            this.scene.add(new THREE.HemisphereLight(0xf5f1df, 0x3f463d, 2.15));
-            const sun = new THREE.DirectionalLight(0xffe7ba, 2.5);
-            sun.position.set(-0.6, -0.8, 1.5).normalize();
-            this.scene.add(sun);
-            this.scene.add(this.placement);
-
+            this.loader = new GLTFLoader();
             this.renderer = new THREE.WebGLRenderer({
               canvas: mapInstance.getCanvas(),
               context: gl,
               antialias: true
             });
             this.renderer.autoClear = false;
+            this.frameCount = 0;
+            this.lastFpsAt = performance.now();
+            this.fps = 0;
+            this.selectedName = null;
+            this.hoveredName = null;
+            this.auditStartedAt = new Date().toISOString();
 
-            this.updatePlacement = () => {
-              if (!this.coordinates) this.coordinates = findLandmarkCoordinates(config);
-              if (!this.coordinates) {
-                this.placement.visible = false;
-                return;
+            this.scene.add(new THREE.HemisphereLight(0xf5f1df, 0x3f463d, 2.15));
+            const sun = new THREE.DirectionalLight(0xffe7ba, 2.5);
+            sun.position.set(-0.6, -0.8, 1.5).normalize();
+            this.scene.add(sun);
+
+            for (const config of LANDMARKS_3D) {
+              landmarkStatesByName.set(config.name, {
+                config,
+                anchorCoordinates: null,
+                coordinates: null,
+                sampleCoordinates: null,
+                placement: null,
+                modelRoot: null,
+                horizontalSize: 1,
+                loaded: false,
+                loading: false,
+                loadingPromise: null,
+                error: null,
+                renderVisible: false,
+                elevationCacheKey: "",
+                elevation: 0,
+                audit: {
+                  status: "not-loaded",
+                  model: config.model,
+                  bytes: null,
+                  triangles: null,
+                  meshes: null,
+                  materials: null,
+                  textures: null,
+                  bounds: null,
+                  error: null
+                }
+              });
+            }
+
+            this.resolveCoordinate = (state, migrate = true) => {
+              const config = state.config;
+              if (landmarkHasAbsolutePosition(config)) {
+                state.coordinates = [Number(config.lng), Number(config.lat)];
+                return state.coordinates;
+              }
+              if (!state.anchorCoordinates) state.anchorCoordinates = findLandmarkCoordinates(config);
+              if (!state.anchorCoordinates) return null;
+              state.coordinates = landmarkShiftLngLat(
+                state.anchorCoordinates,
+                config.eastMeters || 0,
+                config.northMeters || 0
+              );
+              if (migrate) {
+                config.lng = state.coordinates[0];
+                config.lat = state.coordinates[1];
+                config.positionMode = "absolute";
+              }
+              return state.coordinates;
+            };
+
+            this.getViewNorm = coordinates => {
+              if (!coordinates) return Infinity;
+              const bounds = this.map.getBounds();
+              const center = this.map.getCenter();
+              const nw = maplibregl.MercatorCoordinate.fromLngLat([bounds.getWest(), bounds.getNorth()]);
+              const se = maplibregl.MercatorCoordinate.fromLngLat([bounds.getEast(), bounds.getSouth()]);
+              const c = maplibregl.MercatorCoordinate.fromLngLat([center.lng, center.lat]);
+              const p = maplibregl.MercatorCoordinate.fromLngLat(coordinates);
+              const halfW = Math.max(Math.abs(se.x - nw.x) * 0.5, 1e-8);
+              const halfH = Math.max(Math.abs(se.y - nw.y) * 0.5, 1e-8);
+              return Math.hypot((p.x - c.x) / halfW, (p.y - c.y) / halfH);
+            };
+
+            this.getElevationSampleCoordinates = state => {
+              const config = state.config;
+              const coordinates = this.resolveCoordinate(state, true);
+              if (!coordinates) return null;
+              if (Number.isFinite(Number(config.elevationSampleLng)) && Number.isFinite(Number(config.elevationSampleLat))) {
+                state.sampleCoordinates = [Number(config.elevationSampleLng), Number(config.elevationSampleLat)];
+              } else {
+                state.sampleCoordinates = landmarkShiftLngLat(
+                  coordinates,
+                  config.elevationSampleEastMeters || 0,
+                  config.elevationSampleNorthMeters || 0
+                );
+              }
+              return state.sampleCoordinates;
+            };
+
+            this.sampleElevation = (state, force = false) => {
+              const config = state.config;
+              const coordinates = this.resolveCoordinate(state, true);
+              const sampleCoordinates = this.getElevationSampleCoordinates(state);
+              if (!coordinates || !sampleCoordinates) return 0;
+              const mode = config.terrainMode || "point";
+              const radius = Math.max(750, Math.min(24000, Number(config.widthMeters || 10000) * 0.30));
+              const key = [
+                sampleCoordinates[0].toFixed(7), sampleCoordinates[1].toFixed(7),
+                mode, radius.toFixed(0), Number(config.elevationOffsetMeters || 0)
+              ].join("|");
+              if (!force && state.elevationCacheKey === key && Number.isFinite(state.elevation)) return state.elevation;
+
+              const values = [];
+              if (mode === "point") {
+                const value = this.map.queryTerrainElevation(sampleCoordinates);
+                if (Number.isFinite(value)) values.push(value);
+              } else {
+                for (const fy of [-1, -0.5, 0, 0.5, 1]) {
+                  for (const fx of [-1, -0.5, 0, 0.5, 1]) {
+                    const sample = landmarkShiftLngLat(sampleCoordinates, fx * radius, fy * radius);
+                    const value = this.map.queryTerrainElevation(sample);
+                    if (Number.isFinite(value)) values.push(value);
+                  }
+                }
               }
 
-              // Shift the model in real map metres before asking for terrain
-              // elevation. This lets a harbour sit on the coast while the city
-              // label can remain at the historical/visual city centre.
-              const baseMerc = maplibregl.MercatorCoordinate.fromLngLat(this.coordinates, 0);
-              const baseMpu = baseMerc.meterInMercatorCoordinateUnits();
-              const shiftedMerc = new maplibregl.MercatorCoordinate(
-                baseMerc.x + (config.eastMeters || 0) * baseMpu,
-                baseMerc.y - (config.northMeters || 0) * baseMpu,
-                0
-              );
-              const shiftedLngLat = shiftedMerc.toLngLat();
-              const shiftedCoordinates = [shiftedLngLat.lng, shiftedLngLat.lat];
-              const elevation = (this.map.queryTerrainElevation(shiftedCoordinates) ?? 0) + (config.elevationOffsetMeters || 0);
-              const merc = maplibregl.MercatorCoordinate.fromLngLat(shiftedCoordinates, elevation);
-              const mpu = merc.meterInMercatorCoordinateUnits();
-              const scale = (config.widthMeters / this.horizontalSize) * mpu;
+              let elevation = 0;
+              if (values.length) {
+                if (mode === "coast") elevation = landmarkPercentile(values, 0.25);
+                else if (mode === "high") elevation = landmarkPercentile(values, 0.75);
+                else elevation = landmarkPercentile(values, 0.50);
+              }
+              state.elevation = elevation + Number(config.elevationOffsetMeters || 0);
+              state.elevationCacheKey = key;
+              return state.elevation;
+            };
 
-              this.placement.position.set(merc.x, merc.y, merc.z);
-              this.placement.rotation.z = THREE.MathUtils.degToRad(config.rotationDeg || 0);
-              this.placement.scale.set(scale, scale, scale);
-              this.placement.visible = true;
-              this.shiftedCoordinates = shiftedCoordinates;
+            this.auditModel = (state, root, bbox) => {
+              const materials = new Set();
+              const textures = new Set();
+              let meshes = 0;
+              let triangles = 0;
+              root.traverse(object => {
+                if (!object.isMesh || !object.geometry) return;
+                meshes++;
+                const geometry = object.geometry;
+                const count = geometry.index?.count || geometry.attributes?.position?.count || 0;
+                triangles += Math.floor(count / 3);
+                const materialList = Array.isArray(object.material) ? object.material : [object.material];
+                for (const material of materialList) {
+                  if (!material) continue;
+                  materials.add(material.uuid || material.name || String(material.id));
+                  for (const value of Object.values(material)) {
+                    if (value?.isTexture) textures.add(value.uuid || value.name || String(value.id));
+                  }
+                }
+              });
+              const size = new THREE.Vector3();
+              bbox.getSize(size);
+              state.audit = {
+                ...state.audit,
+                status: "loaded",
+                triangles,
+                meshes,
+                materials: materials.size,
+                textures: textures.size,
+                bounds: { x: size.x, y: size.y, z: size.z },
+                error: null
+              };
+            };
+
+            this.ensureModel = state => {
+              if (state.loaded || state.loading) return state.loadingPromise;
+              state.loading = true;
+              state.error = null;
+              state.audit.status = "loading";
+              const modelAtStart = state.config.model;
+
+              state.loadingPromise = (async () => {
+                try {
+                  try {
+                    const head = await fetch(modelAtStart, { method: "HEAD", cache: "no-store" });
+                    const bytes = Number(head.headers.get("content-length"));
+                    if (Number.isFinite(bytes) && bytes > 0) state.audit.bytes = bytes;
+                  } catch (_) {}
+
+                  const gltf = await this.loader.loadAsync(modelAtStart);
+                  if (state.config.model !== modelAtStart) {
+                    state.loading = false;
+                    state.loadingPromise = null;
+                    return;
+                  }
+                  const root = gltf.scene;
+                  root.updateMatrixWorld(true);
+                  const bbox = new THREE.Box3().setFromObject(root);
+                  const size = new THREE.Vector3();
+                  bbox.getSize(size);
+                  const cx = (bbox.min.x + bbox.max.x) * 0.5;
+                  const cy = (bbox.min.y + bbox.max.y) * 0.5;
+                  state.horizontalSize = Math.max(size.x, size.y, 0.0001);
+                  root.position.set(-cx, -cy, -bbox.min.z);
+
+                  const placement = new THREE.Group();
+                  placement.add(root);
+                  placement.visible = false;
+                  placement.userData.landmarkName = state.config.name;
+                  this.scene.add(placement);
+                  state.modelRoot = root;
+                  state.placement = placement;
+                  state.loaded = true;
+                  state.loading = false;
+                  state.error = null;
+                  this.auditModel(state, root, bbox);
+                  this.updateStatePlacement(state, true);
+                  this.updateVisibilityAndLoading(false);
+                  this.map.triggerRepaint();
+                } catch (error) {
+                  state.loading = false;
+                  state.error = error;
+                  state.audit.status = "error";
+                  state.audit.error = error?.message || String(error);
+                  console.warn(`${state.config.name} GLB kon niet laden:`, error);
+                }
+              })();
+              return state.loadingPromise;
+            };
+
+            this.updateStatePlacement = (state, forceTerrain = false) => {
+              const config = state.config;
+              const coordinates = this.resolveCoordinate(state, true);
+              if (!coordinates || !state.loaded || !state.placement) return;
+              const elevation = this.sampleElevation(state, forceTerrain);
+              const mercator = maplibregl.MercatorCoordinate.fromLngLat(coordinates, elevation);
+              const mpu = mercator.meterInMercatorCoordinateUnits();
+              const baseScale = (Number(config.widthMeters || 1) / state.horizontalSize) * mpu;
+              state.baseScale = baseScale;
+              const highlightScale = this.hoveredName === config.name ? 1.035 : 1;
+              state.placement.position.set(mercator.x, mercator.y, mercator.z);
+              state.placement.rotation.z = THREE.MathUtils.degToRad(Number(config.rotationDeg || 0));
+              state.placement.scale.setScalar(baseScale * highlightScale);
+            };
+
+            this.reloadModel = name => {
+              const state = landmarkStatesByName.get(name);
+              if (!state) return;
+              if (state.placement) {
+                state.placement.traverse(object => {
+                  if (!object.isMesh) return;
+                  object.geometry?.dispose?.();
+                  const materials = Array.isArray(object.material) ? object.material : [object.material];
+                  for (const material of materials) {
+                    if (!material) continue;
+                    for (const value of Object.values(material)) if (value?.isTexture) value.dispose?.();
+                    material.dispose?.();
+                  }
+                });
+                this.scene.remove(state.placement);
+                state.placement = null;
+              }
+              state.loaded = false;
+              state.loading = false;
+              state.loadingPromise = null;
+              state.error = null;
+              state.audit = { ...state.audit, status: "not-loaded", model: state.config.model, error: null };
+              this.updateVisibilityAndLoading(true);
+            };
+
+            this.updateLandmark = (name, forceTerrain = false) => {
+              const state = landmarkStatesByName.get(name);
+              if (!state) return;
+              state.coordinates = null;
+              state.sampleCoordinates = null;
+              state.elevationCacheKey = "";
+              this.resolveCoordinate(state, true);
+              this.updateStatePlacement(state, forceTerrain);
+              this.updateVisibilityAndLoading(false);
               this.map.triggerRepaint();
             };
 
-            this.onIdle = () => this.updatePlacement();
-            this.onMoveEnd = () => this.updatePlacement();
-            mapInstance.on("idle", this.onIdle);
+            this.updateVisibilityAndLoading = (allowLoad = true) => {
+              const zoom = this.map.getZoom();
+              let visibleCount = 0;
+              for (const state of landmarkStatesByName.values()) {
+                const config = state.config;
+                const coordinates = this.resolveCoordinate(state, true);
+                const norm = this.getViewNorm(coordinates);
+                const forceSelected = this.selectedName === config.name && document.body.classList.contains("landmark-edit-mode");
+                const shouldLoad = config.visible !== false && coordinates && zoom >= LANDMARK_MIN_ZOOM && (norm <= LANDMARK_LOAD_RADIUS || forceSelected);
+                const shouldRender = config.visible !== false && coordinates && zoom >= LANDMARK_MIN_ZOOM && (norm <= LANDMARK_RENDER_RADIUS || forceSelected);
+                if (allowLoad && shouldLoad && !state.loaded && !state.loading) this.ensureModel(state);
+                if (state.loaded && state.placement) {
+                  state.renderVisible = Boolean(shouldRender);
+                  state.placement.visible = state.renderVisible;
+                  if (state.renderVisible) {
+                    visibleCount++;
+                    if (allowLoad || !state.baseScale) this.updateStatePlacement(state, false);
+                  }
+                }
+              }
+              this.visibleCount = visibleCount;
+              if (allowLoad) this.map.triggerRepaint();
+            };
+
+            this.getCoordinate = name => {
+              const state = landmarkStatesByName.get(name);
+              return state ? this.resolveCoordinate(state, true) : null;
+            };
+
+            this.getSampleCoordinate = name => {
+              const state = landmarkStatesByName.get(name);
+              return state ? this.getElevationSampleCoordinates(state) : null;
+            };
+
+            this.findNearestAtPoint = (point, maxPixels = 44) => {
+              let best = null;
+              let bestDistance = maxPixels;
+              for (const state of landmarkStatesByName.values()) {
+                if (!state.renderVisible || state.config.visible === false || !state.coordinates) continue;
+                const projected = this.map.project(state.coordinates);
+                const distance = Math.hypot(projected.x - point.x, projected.y - point.y);
+                if (distance < bestDistance) {
+                  bestDistance = distance;
+                  best = state;
+                }
+              }
+              return best;
+            };
+
+            this.setHovered = name => {
+              if (this.hoveredName === name) return;
+              const previous = this.hoveredName ? landmarkStatesByName.get(this.hoveredName) : null;
+              this.hoveredName = name;
+              if (previous?.loaded) this.updateStatePlacement(previous, false);
+              const current = name ? landmarkStatesByName.get(name) : null;
+              if (current?.loaded) this.updateStatePlacement(current, false);
+              this.map.triggerRepaint();
+            };
+
+            this.getAuditReport = () => ({
+              format: "bigane-glb-audit-v1",
+              generatedAt: new Date().toISOString(),
+              landmarks: [...landmarkStatesByName.values()].map(state => ({
+                name: state.config.name,
+                model: state.config.model,
+                loaded: state.loaded,
+                visible: state.renderVisible,
+                ...state.audit
+              }))
+            });
+
+            this.getStats = () => ({
+              fps: this.fps || 0,
+              loaded: [...landmarkStatesByName.values()].filter(state => state.loaded).length,
+              loading: [...landmarkStatesByName.values()].filter(state => state.loading).length,
+              visible: [...landmarkStatesByName.values()].filter(state => state.renderVisible).length,
+              errors: [...landmarkStatesByName.values()].filter(state => state.error).length
+            });
+
+            this.onMove = () => this.updateVisibilityAndLoading(false);
+            this.onMoveEnd = () => {
+              for (const state of landmarkStatesByName.values()) state.elevationCacheKey = "";
+              this.updateVisibilityAndLoading(true);
+            };
+            this.onZoom = () => this.updateVisibilityAndLoading(false);
+            this.onZoomEnd = () => this.updateVisibilityAndLoading(true);
+            this.onIdle = () => this.updateVisibilityAndLoading(true);
+            this.onSourceData = event => {
+              if (event?.isSourceLoaded) this.updateVisibilityAndLoading(true);
+            };
+            this.onMouseMove = event => {
+              if (document.body.classList.contains("landmark-edit-mode")) return;
+              const state = this.findNearestAtPoint(event.point, 42);
+              this.setHovered(state?.config?.name || null);
+              if (state) this.map.getCanvas().style.cursor = "pointer";
+              else {
+                const cityLayers = ["Town names", "Capitals", "clickable"].filter(id => this.map.getLayer(id));
+                const overCity = cityLayers.length ? this.map.queryRenderedFeatures(event.point, { layers: cityLayers }).length > 0 : false;
+                if (!overCity) this.map.getCanvas().style.cursor = "";
+              }
+            };
+            this.onClick = event => {
+              const state = this.findNearestAtPoint(event.point, 46);
+              if (!state) return;
+              if (document.body.classList.contains("landmark-edit-mode")) {
+                landmarkEditorSelectName?.(state.config.name);
+                return;
+              }
+              const cityLayers = ["Town names", "Capitals", "clickable"].filter(id => this.map.getLayer(id));
+              if (cityLayers.length && this.map.queryRenderedFeatures(event.point, { layers: cityLayers }).length) return;
+              openKankaPopup({
+                type: "Feature",
+                properties: { Burg: state.config.name },
+                geometry: { type: "Point", coordinates: state.coordinates }
+              });
+            };
+
+            mapInstance.on("move", this.onMove);
             mapInstance.on("moveend", this.onMoveEnd);
-            this.updatePlacement();
+            mapInstance.on("zoom", this.onZoom);
+            mapInstance.on("zoomend", this.onZoomEnd);
+            mapInstance.on("idle", this.onIdle);
+            mapInstance.on("sourcedata", this.onSourceData);
+            mapInstance.on("mousemove", this.onMouseMove);
+            mapInstance.on("click", this.onClick);
+            this.updateVisibilityAndLoading(true);
+            landmarkController = this;
           },
 
           render(gl, args) {
-            if (!this.placement.visible) return;
-            const mainMatrix = args?.defaultProjectionData?.mainMatrix;
-            if (!mainMatrix) return;
-            this.camera.projectionMatrix = new THREE.Matrix4().fromArray(mainMatrix);
+            const matrix = args?.defaultProjectionData?.mainMatrix;
+            if (!matrix) return;
+            this.frameCount++;
+            const now = performance.now();
+            if (now - this.lastFpsAt >= 1000) {
+              this.fps = this.frameCount * 1000 / (now - this.lastFpsAt);
+              this.frameCount = 0;
+              this.lastFpsAt = now;
+            }
+            if (!this.visibleCount) return;
+            this.camera.projectionMatrix = new THREE.Matrix4().fromArray(matrix);
             this.renderer.resetState();
             this.renderer.render(this.scene, this.camera);
           },
 
           onRemove() {
-            if (this.onIdle) this.map.off("idle", this.onIdle);
-            if (this.onMoveEnd) this.map.off("moveend", this.onMoveEnd);
+            for (const [event, handler] of [
+              ["move", this.onMove], ["moveend", this.onMoveEnd],
+              ["zoom", this.onZoom], ["zoomend", this.onZoomEnd],
+              ["idle", this.onIdle], ["sourcedata", this.onSourceData],
+              ["mousemove", this.onMouseMove], ["click", this.onClick]
+            ]) {
+              if (handler) this.map.off(event, handler);
+            }
             this.renderer?.dispose();
+            landmarkController = null;
           }
         };
 
         const beforeId = map.getLayer("Town names") ? "Town names" :
                          map.getLayer("Capitals") ? "Capitals" : undefined;
         map.addLayer(landmarkLayer, beforeId);
-        landmarkLayersByName.set(config.name, landmarkLayer);
-        console.info(`${config.name} 3D landmark installed; waiting for its map feature if not loaded yet.`);
       }
-
-      async function installAllLandmarks() {
-        for (const config of LANDMARKS_3D) {
-          try {
-            await installLandmarkModel(config);
-          } catch (error) {
-            console.warn(`${config.name} 3D-model overgeslagen; kaart blijft werken:`, error);
-          }
-        }
-      }
-
-
 
       function setupLandmarkEditor() {
+        const editorRoot = document.getElementById("landmark-editor");
         const select = document.getElementById("landmark-select");
-        const east = document.getElementById("landmark-east");
-        const north = document.getElementById("landmark-north");
+        const visible = document.getElementById("landmark-visible");
+        const lng = document.getElementById("landmark-lng");
+        const lat = document.getElementById("landmark-lat");
         const rotation = document.getElementById("landmark-rotation");
         const width = document.getElementById("landmark-width");
         const elevation = document.getElementById("landmark-elevation");
-        const step = document.getElementById("landmark-step");
+        const terrainMode = document.getElementById("landmark-terrain-mode");
+        const sampleEast = document.getElementById("landmark-sample-east");
+        const sampleNorth = document.getElementById("landmark-sample-north");
+        const moveStep = document.getElementById("landmark-move-step");
+        const rotationStep = document.getElementById("landmark-rotation-step");
+        const elevationStep = document.getElementById("landmark-elevation-step");
+        const scaleStep = document.getElementById("landmark-scale-step");
         const output = document.getElementById("landmark-export");
-        const editorStatus = document.getElementById("landmark-editor-status");
-        const editorRoot = document.getElementById("landmark-editor");
-        if (!select || !editorRoot) return;
+        const statusEl = document.getElementById("landmark-editor-status");
+        const modelStatus = document.getElementById("landmark-model-status");
+        const importInput = document.getElementById("landmark-import-file");
+        const runtimeStats = document.getElementById("runtime-stats");
+        if (!editorRoot || !select) return;
 
+        select.innerHTML = "";
         for (const config of LANDMARKS_3D) {
-          const opt = document.createElement("option");
-          opt.value = config.name;
-          opt.textContent = config.name;
-          select.appendChild(opt);
+          const option = document.createElement("option");
+          option.value = config.name;
+          option.textContent = config.name;
+          select.appendChild(option);
         }
+
+        const undoStack = [];
+        const redoStack = [];
+        let positionClipboard = null;
+        let editStartSnapshot = null;
 
         function currentConfig() {
-          return LANDMARKS_3D.find(c => c.name === select.value) || LANDMARKS_3D[0];
+          return LANDMARKS_3D.find(config => config.name === select.value) || LANDMARKS_3D[0];
         }
 
-        function configLine(c) {
-          const extras = c.aliases?.length ? `, aliases: ${JSON.stringify(c.aliases)}` : "";
-          return `{ name: ${JSON.stringify(c.name)}, model: ${JSON.stringify(c.model)}, widthMeters: ${Math.round(c.widthMeters)}, rotationDeg: ${Number(c.rotationDeg || 0).toFixed(1)}, eastMeters: ${Math.round(c.eastMeters || 0)}, northMeters: ${Math.round(c.northMeters || 0)}, elevationOffsetMeters: ${Math.round(c.elevationOffsetMeters || 0)}${extras} }`;
+        function currentState() {
+          return landmarkStatesByName.get(currentConfig()?.name);
+        }
+
+        function snapshotAll() {
+          return JSON.stringify({
+            landmarks: LANDMARKS_3D.map(landmarkSerializeConfig),
+            forest: typeof HF_SETTINGS !== "undefined" ? { ...HF_SETTINGS } : undefined
+          });
+        }
+
+        function restoreSnapshot(snapshot) {
+          try {
+            const previousModels = new Map(LANDMARKS_3D.map(config => [config.name, config.model]));
+            applyLandmarkStateObject(JSON.parse(snapshot));
+            for (const config of LANDMARKS_3D) {
+              if (previousModels.get(config.name) !== config.model) landmarkController?.reloadModel(config.name);
+              else landmarkController?.updateLandmark(config.name, true);
+            }
+            landmarkController?.updateVisibilityAndLoading(true);
+            hybridForestController?.scheduleRebuild?.(true, 0);
+            refreshFields();
+          } catch (error) {
+            console.warn("Undo snapshot failed:", error);
+          }
+        }
+
+        function pushUndo(snapshot = snapshotAll()) {
+          undoStack.push(snapshot);
+          if (undoStack.length > 60) undoStack.shift();
+          redoStack.length = 0;
+        }
+
+        function commitChange(mutator, message) {
+          pushUndo();
+          mutator();
+          landmarkController?.updateLandmark(currentConfig().name, true);
+          refreshFields();
+          if (message) statusEl.textContent = message;
+        }
+
+        function configLine(config) {
+          const serial = landmarkSerializeConfig(config);
+          const fields = Object.entries(serial)
+            .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+            .join(", ");
+          return `{ ${fields} }`;
+        }
+
+        function updateMarkers() {
+          landmarkAnchorMarker?.remove();
+          landmarkSampleMarker?.remove();
+          landmarkAnchorMarker = null;
+          landmarkSampleMarker = null;
+          if (!landmarkAnchorVisible || !document.body.classList.contains("landmark-edit-mode")) return;
+          const config = currentConfig();
+          const state = currentState();
+          const anchor = state?.anchorCoordinates;
+          const sample = landmarkController?.getSampleCoordinate(config.name);
+          if (anchor) {
+            const element = document.createElement("div");
+            element.className = "landmark-anchor-marker";
+            element.title = `${config.name} stadsanker`;
+            landmarkAnchorMarker = new maplibregl.Marker({ element, anchor: "center" }).setLngLat(anchor).addTo(map);
+          }
+          if (sample) {
+            const element = document.createElement("div");
+            element.className = "landmark-sample-marker";
+            element.title = `${config.name} hoogtemeetpunt`;
+            landmarkSampleMarker = new maplibregl.Marker({ element, anchor: "center" }).setLngLat(sample).addTo(map);
+          }
+        }
+
+        function refreshModelStatus() {
+          const state = currentState();
+          if (!state) {
+            modelStatus.textContent = "Onbekend";
+            modelStatus.className = "status-chip warning";
+            return;
+          }
+          if (state.error) {
+            modelStatus.textContent = `Fout: ${state.error.message || state.error}`;
+            modelStatus.className = "status-chip error";
+          } else if (state.loading) {
+            modelStatus.textContent = "Model wordt geladen…";
+            modelStatus.className = "status-chip loading";
+          } else if (state.loaded) {
+            modelStatus.textContent = state.renderVisible ? "Geladen en zichtbaar" : "Geladen, buiten beeld";
+            modelStatus.className = "status-chip ok";
+          } else {
+            modelStatus.textContent = "Lazy: nog niet geladen";
+            modelStatus.className = "status-chip";
+          }
         }
 
         function refreshFields() {
-          const c = currentConfig();
-          if (!c) return;
-          east.value = Math.round(c.eastMeters || 0);
-          north.value = Math.round(c.northMeters || 0);
-          rotation.value = Number(c.rotationDeg || 0).toFixed(1);
-          width.value = Math.round(c.widthMeters || 0);
-          elevation.value = Math.round(c.elevationOffsetMeters || 0);
-          output.value = configLine(c);
-          updateAnchor();
+          const config = currentConfig();
+          if (!config) return;
+          const coordinate = landmarkController?.getCoordinate(config.name);
+          visible.checked = config.visible !== false;
+          lng.value = coordinate ? Number(coordinate[0]).toFixed(7) : "";
+          lat.value = coordinate ? Number(coordinate[1]).toFixed(7) : "";
+          rotation.value = Number(config.rotationDeg || 0).toFixed(1);
+          width.value = Math.round(config.widthMeters || 0);
+          elevation.value = Math.round(config.elevationOffsetMeters || 0);
+          terrainMode.value = config.terrainMode || "point";
+          sampleEast.value = Math.round(config.elevationSampleEastMeters || 0);
+          sampleNorth.value = Math.round(config.elevationSampleNorthMeters || 0);
+          output.value = configLine(config);
+          if (landmarkController) {
+            landmarkController.selectedName = config.name;
+            landmarkController.updateVisibilityAndLoading(true);
+          }
+          refreshModelStatus();
+          updateMarkers();
         }
 
         function applyFields() {
-          const c = currentConfig();
-          if (!c) return;
-          const read = (el, fallback) => Number.isFinite(Number(el.value)) ? Number(el.value) : fallback;
-          c.eastMeters = read(east, c.eastMeters || 0);
-          c.northMeters = read(north, c.northMeters || 0);
-          c.rotationDeg = read(rotation, c.rotationDeg || 0);
-          c.widthMeters = Math.max(100, read(width, c.widthMeters || 100));
-          c.elevationOffsetMeters = read(elevation, c.elevationOffsetMeters || 0);
-          const layer = landmarkLayersByName.get(c.name);
-          if (layer?.updatePlacement) layer.updatePlacement();
-          output.value = configLine(c);
-          editorStatus.textContent = `${c.name} live bijgewerkt`;
-          updateAnchor();
+          const config = currentConfig();
+          if (!config) return;
+          const numberOr = (element, fallback) => Number.isFinite(Number(element.value)) ? Number(element.value) : fallback;
+          config.visible = visible.checked;
+          if (Number.isFinite(Number(lng.value)) && Number.isFinite(Number(lat.value))) {
+            config.lng = Number(lng.value);
+            config.lat = Number(lat.value);
+            config.positionMode = "absolute";
+          }
+          config.rotationDeg = numberOr(rotation, config.rotationDeg || 0);
+          config.widthMeters = Math.max(100, numberOr(width, config.widthMeters || 100));
+          config.elevationOffsetMeters = numberOr(elevation, config.elevationOffsetMeters || 0);
+          config.terrainMode = terrainMode.value || "point";
+          config.elevationSampleEastMeters = numberOr(sampleEast, config.elevationSampleEastMeters || 0);
+          config.elevationSampleNorthMeters = numberOr(sampleNorth, config.elevationSampleNorthMeters || 0);
+          landmarkController?.updateLandmark(config.name, true);
+          output.value = configLine(config);
+          statusEl.textContent = `${config.name} live bijgewerkt`;
+          refreshModelStatus();
+          updateMarkers();
         }
 
         function saveAll() {
-          const data = {};
-          for (const c of LANDMARKS_3D) {
-            data[c.name] = {
-              widthMeters: c.widthMeters,
-              rotationDeg: c.rotationDeg || 0,
-              eastMeters: c.eastMeters || 0,
-              northMeters: c.northMeters || 0,
-              elevationOffsetMeters: c.elevationOffsetMeters || 0
-            };
-          }
+          const data = {
+            format: "bigane-landmarks-v2",
+            savedAt: new Date().toISOString(),
+            landmarks: LANDMARKS_3D.map(landmarkSerializeConfig),
+            forest: typeof HF_SETTINGS !== "undefined" ? { ...HF_SETTINGS } : undefined
+          };
           localStorage.setItem(LANDMARK_EDITOR_STORAGE_KEY, JSON.stringify(data));
-          editorStatus.textContent = "Alle landmark-posities lokaal bewaard";
+          statusEl.textContent = "Landmarks en bosinstellingen lokaal bewaard";
+        }
+
+        function downloadJson(filename, data) {
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = filename;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 0);
         }
 
         function exportAllAsJson() {
-          const data = {
-            format: "bigane-landmarks-v1",
+          downloadJson("bigane-landmarks.json", {
+            format: "bigane-landmarks-v2",
             exportedAt: new Date().toISOString(),
-            landmarks: LANDMARKS_3D.map(c => ({
-              name: c.name,
-              model: c.model,
-              widthMeters: Number(c.widthMeters || 0),
-              rotationDeg: Number(c.rotationDeg || 0),
-              eastMeters: Number(c.eastMeters || 0),
-              northMeters: Number(c.northMeters || 0),
-              elevationOffsetMeters: Number(c.elevationOffsetMeters || 0),
-              ...(c.aliases?.length ? { aliases: [...c.aliases] } : {})
-            }))
-          };
-          const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = "bigane-landmarks.json";
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 0);
-          editorStatus.textContent = "JSON met alle landmark-instellingen gedownload";
+            landmarks: LANDMARKS_3D.map(landmarkSerializeConfig),
+            forest: typeof HF_SETTINGS !== "undefined" ? { ...HF_SETTINGS } : undefined
+          });
+          statusEl.textContent = "JSON met absolute posities gedownload";
         }
 
-        function loadSaved() {
+        async function importJsonFile(file) {
           try {
-            const raw = localStorage.getItem(LANDMARK_EDITOR_STORAGE_KEY);
-            if (!raw) {
-              editorStatus.textContent = "Geen opgeslagen instellingen gevonden";
-              return;
+            const data = JSON.parse(await file.text());
+            pushUndo();
+            const previousModels = new Map(LANDMARKS_3D.map(config => [config.name, config.model]));
+            applyLandmarkStateObject(data);
+            for (const config of LANDMARKS_3D) {
+              if (previousModels.get(config.name) !== config.model) landmarkController?.reloadModel(config.name);
+              else landmarkController?.updateLandmark(config.name, true);
             }
-            const data = JSON.parse(raw);
-            for (const c of LANDMARKS_3D) {
-              const saved = data[c.name];
-              if (!saved) continue;
-              for (const key of ["widthMeters","rotationDeg","eastMeters","northMeters","elevationOffsetMeters"]) {
-                if (Number.isFinite(Number(saved[key]))) c[key] = Number(saved[key]);
-              }
-              landmarkLayersByName.get(c.name)?.updatePlacement?.();
-            }
+            hybridForestController?.scheduleRebuild?.(true, 0);
             refreshFields();
-            editorStatus.textContent = "Opgeslagen instellingen geladen";
+            statusEl.textContent = `${file.name} geïmporteerd`;
           } catch (error) {
-            console.warn("Landmark editor save kon niet geladen worden:", error);
-            editorStatus.textContent = "Kon opgeslagen instellingen niet laden";
+            console.warn("Landmark JSON import failed:", error);
+            statusEl.textContent = `JSON-import mislukt: ${error.message}`;
           }
-        }
-
-        function resetSelected() {
-          const c = currentConfig();
-          const d = landmarkDefaultsByName.get(c.name);
-          if (!c || !d) return;
-          Object.assign(c, d);
-          landmarkLayersByName.get(c.name)?.updatePlacement?.();
-          refreshFields();
-          editorStatus.textContent = `${c.name} teruggezet naar HTML-standaard`;
         }
 
         function focusSelected() {
-          const c = currentConfig();
-          const layer = landmarkLayersByName.get(c.name);
-          const coord = layer?.shiftedCoordinates || layer?.coordinates || findLandmarkCoordinates(c);
-          if (!coord) {
-            editorStatus.textContent = `${c.name}: locatie nog niet geladen`;
+          const config = currentConfig();
+          const coordinate = landmarkController?.getCoordinate(config.name);
+          if (!coordinate) {
+            statusEl.textContent = `${config.name}: kaartlocatie nog niet gevonden`;
             return;
           }
-          map.easeTo({ center: coord, zoom: Math.max(map.getZoom(), 7.0), pitch: Math.max(map.getPitch(), 48), duration: 700 });
+          map.easeTo({
+            center: coordinate,
+            zoom: Math.max(map.getZoom(), 7),
+            pitch: Math.max(map.getPitch(), 48),
+            duration: 700
+          });
         }
 
-        function updateAnchor() {
-          if (landmarkAnchorMarker) {
-            landmarkAnchorMarker.remove();
-            landmarkAnchorMarker = null;
+        function moveConfigByMeters(config, eastMeters, northMeters) {
+          const coordinate = landmarkController?.getCoordinate(config.name);
+          if (!coordinate) return;
+          const shifted = landmarkShiftLngLat(coordinate, eastMeters, northMeters);
+          config.lng = shifted[0];
+          config.lat = shifted[1];
+          config.positionMode = "absolute";
+        }
+
+        function useAnchorForSelected() {
+          const config = currentConfig();
+          delete config.lng;
+          delete config.lat;
+          config.positionMode = "anchor";
+          const state = currentState();
+          if (state) {
+            state.coordinates = null;
+            state.anchorCoordinates = null;
           }
-          if (!landmarkAnchorVisible) return;
-          const c = currentConfig();
-          const layer = landmarkLayersByName.get(c.name);
-          const coord = layer?.coordinates || findLandmarkCoordinates(c);
-          if (!coord) return;
-          const el = document.createElement("div");
-          el.className = "landmark-anchor-marker";
-          el.title = `${c.name} originele stadscoördinaat`;
-          landmarkAnchorMarker = new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat(coord).addTo(map);
+          landmarkController?.updateLandmark(config.name, true);
+          refreshFields();
         }
 
-        for (const el of [east, north, rotation, width, elevation]) {
-          el.addEventListener("input", applyFields);
-          el.addEventListener("change", applyFields);
+        function resetSelected() {
+          const config = currentConfig();
+          const defaults = landmarkDefaultsByName.get(config.name);
+          if (!defaults) return;
+          commitChange(() => {
+            for (const key of Object.keys(config)) delete config[key];
+            Object.assign(config, JSON.parse(JSON.stringify(defaults)));
+            const state = currentState();
+            if (state) {
+              state.coordinates = null;
+              state.anchorCoordinates = null;
+              state.sampleCoordinates = null;
+              state.elevationCacheKey = "";
+            }
+          }, `${config.name} teruggezet naar HTML-standaard`);
         }
+
+        function undo() {
+          if (!undoStack.length) return;
+          redoStack.push(snapshotAll());
+          restoreSnapshot(undoStack.pop());
+          statusEl.textContent = "Wijziging ongedaan gemaakt";
+        }
+
+        function redo() {
+          if (!redoStack.length) return;
+          undoStack.push(snapshotAll());
+          restoreSnapshot(redoStack.pop());
+          statusEl.textContent = "Wijziging opnieuw toegepast";
+        }
+
+        landmarkEditorSelectName = name => {
+          if (![...select.options].some(option => option.value === name)) return;
+          select.value = name;
+          refreshFields();
+        };
+
+        const liveFields = [visible, lng, lat, rotation, width, elevation, terrainMode, sampleEast, sampleNorth];
+        for (const element of liveFields) {
+          element.addEventListener("focus", () => { editStartSnapshot = snapshotAll(); });
+          element.addEventListener("input", applyFields);
+          element.addEventListener("change", () => {
+            applyFields();
+            if (editStartSnapshot && editStartSnapshot !== snapshotAll()) {
+              undoStack.push(editStartSnapshot);
+              if (undoStack.length > 60) undoStack.shift();
+              redoStack.length = 0;
+            }
+            editStartSnapshot = null;
+          });
+        }
+
         select.addEventListener("change", refreshFields);
         document.getElementById("landmark-focus").addEventListener("click", focusSelected);
         document.getElementById("landmark-save").addEventListener("click", saveAll);
         document.getElementById("landmark-reset").addEventListener("click", resetSelected);
-        document.getElementById("landmark-reload").addEventListener("click", loadSaved);
+        document.getElementById("landmark-undo").addEventListener("click", undo);
+        document.getElementById("landmark-redo").addEventListener("click", redo);
+        document.getElementById("landmark-use-anchor").addEventListener("click", () => {
+          commitChange(useAnchorForSelected, `${currentConfig().name} gebruikt opnieuw het stadsanker`);
+        });
+        document.getElementById("landmark-copy-position").addEventListener("click", () => {
+          const config = currentConfig();
+          const coordinate = landmarkController?.getCoordinate(config.name);
+          if (!coordinate) return;
+          positionClipboard = {
+            lng: coordinate[0], lat: coordinate[1],
+            rotationDeg: config.rotationDeg,
+            elevationOffsetMeters: config.elevationOffsetMeters,
+            terrainMode: config.terrainMode,
+            elevationSampleEastMeters: config.elevationSampleEastMeters,
+            elevationSampleNorthMeters: config.elevationSampleNorthMeters
+          };
+          statusEl.textContent = `${config.name} positie gekopieerd`;
+        });
+        document.getElementById("landmark-paste-position").addEventListener("click", () => {
+          if (!positionClipboard) return;
+          commitChange(() => {
+            const config = currentConfig();
+            Object.assign(config, positionClipboard, { positionMode: "absolute" });
+          }, `Positie geplakt op ${currentConfig().name}`);
+        });
         document.getElementById("landmark-anchor-toggle").addEventListener("click", () => {
           landmarkAnchorVisible = !landmarkAnchorVisible;
-          updateAnchor();
+          updateMarkers();
         });
         document.getElementById("landmark-download-json").addEventListener("click", exportAllAsJson);
+        document.getElementById("landmark-download-audit").addEventListener("click", () => {
+          downloadJson("bigane-glb-audit.json", landmarkController?.getAuditReport() || {});
+          statusEl.textContent = "GLB-audit gedownload";
+        });
+        document.getElementById("landmark-import-json").addEventListener("click", () => importInput.click());
+        importInput.addEventListener("change", () => {
+          const file = importInput.files?.[0];
+          if (file) importJsonFile(file);
+          importInput.value = "";
+        });
         document.getElementById("landmark-copy").addEventListener("click", async () => {
           output.select();
           try {
             await navigator.clipboard.writeText(output.value);
-            editorStatus.textContent = "Config gekopieerd";
+            statusEl.textContent = "Config gekopieerd";
           } catch (_) {
-            editorStatus.textContent = "Config geselecteerd; gebruik Ctrl+C";
+            statusEl.textContent = "Config geselecteerd; gebruik Ctrl+C";
           }
         });
 
         function nudge(key) {
-          const c = currentConfig();
-          const amount = Math.max(10, Number(step.value) || 500);
-          if (key === "w") c.northMeters = (c.northMeters || 0) + amount;
-          if (key === "s") c.northMeters = (c.northMeters || 0) - amount;
-          if (key === "a") c.eastMeters = (c.eastMeters || 0) - amount;
-          if (key === "d") c.eastMeters = (c.eastMeters || 0) + amount;
-          if (key === "q") c.rotationDeg = (c.rotationDeg || 0) - 5;
-          if (key === "e") c.rotationDeg = (c.rotationDeg || 0) + 5;
-          if (key === "r") c.elevationOffsetMeters = (c.elevationOffsetMeters || 0) + Math.max(50, amount / 5);
-          if (key === "f") c.elevationOffsetMeters = (c.elevationOffsetMeters || 0) - Math.max(50, amount / 5);
-          if (key === "+" || key === "=") c.widthMeters = Math.max(100, c.widthMeters * 1.05);
-          if (key === "-" || key === "_") c.widthMeters = Math.max(100, c.widthMeters / 1.05);
-          landmarkLayersByName.get(c.name)?.updatePlacement?.();
-          refreshFields();
+          const config = currentConfig();
+          const move = Math.max(10, Number(moveStep.value) || 500);
+          const rotate = Math.max(0.1, Number(rotationStep.value) || 5);
+          const elevate = Math.max(1, Number(elevationStep.value) || 100);
+          const scalePercent = Math.max(0.1, Number(scaleStep.value) || 5) / 100;
+          commitChange(() => {
+            if (key === "w") moveConfigByMeters(config, 0, move);
+            if (key === "s") moveConfigByMeters(config, 0, -move);
+            if (key === "a") moveConfigByMeters(config, -move, 0);
+            if (key === "d") moveConfigByMeters(config, move, 0);
+            if (key === "q") config.rotationDeg = Number(config.rotationDeg || 0) - rotate;
+            if (key === "e") config.rotationDeg = Number(config.rotationDeg || 0) + rotate;
+            if (key === "r") config.elevationOffsetMeters = Number(config.elevationOffsetMeters || 0) + elevate;
+            if (key === "f") config.elevationOffsetMeters = Number(config.elevationOffsetMeters || 0) - elevate;
+            if (key === "+" || key === "=") config.widthMeters = Math.max(100, config.widthMeters * (1 + scalePercent));
+            if (key === "-" || key === "_") config.widthMeters = Math.max(100, config.widthMeters / (1 + scalePercent));
+          });
         }
 
-        document.addEventListener("keydown", (event) => {
+        document.addEventListener("keydown", event => {
           const tag = document.activeElement?.tagName;
           if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
           const key = event.key.toLowerCase();
-          if (["w","a","s","d","q","e","r","f","+","=","-","_"].includes(key)) {
+          if ((event.ctrlKey || event.metaKey) && key === "z") {
+            event.preventDefault();
+            event.shiftKey ? redo() : undo();
+            return;
+          }
+          if ((event.ctrlKey || event.metaKey) && key === "y") {
+            event.preventDefault();
+            redo();
+            return;
+          }
+          if (["w","a","s","d","q","e","r","f","+","=","-","_"].includes(key) && document.body.classList.contains("landmark-edit-mode")) {
             event.preventDefault();
             nudge(key);
           }
         });
 
-        // Load prior tuning if available, otherwise show HTML defaults.
-        try {
-          const raw = localStorage.getItem(LANDMARK_EDITOR_STORAGE_KEY);
-          if (raw) {
-            const data = JSON.parse(raw);
-            for (const c of LANDMARKS_3D) {
-              const saved = data[c.name];
-              if (!saved) continue;
-              Object.assign(c, saved);
-            }
+        const forestInputs = {
+          treeSize: document.getElementById("forest-tree-size"),
+          threeDStartZoom: document.getElementById("forest-3d-zoom"),
+          outerRadius: document.getElementById("forest-outer-radius"),
+          nearCap: document.getElementById("forest-near-cap"),
+          spriteCap: document.getElementById("forest-sprite-cap"),
+          densityMultiplier: document.getElementById("forest-density")
+        };
+
+        function refreshForestFields() {
+          if (typeof HF_SETTINGS === "undefined") return;
+          for (const [key, element] of Object.entries(forestInputs)) {
+            if (element) element.value = HF_SETTINGS[key];
           }
-        } catch (_) {}
+        }
+
+        function applyForestFields() {
+          if (typeof HF_SETTINGS === "undefined") return;
+          for (const [key, element] of Object.entries(forestInputs)) {
+            if (element && Number.isFinite(Number(element.value))) HF_SETTINGS[key] = Number(element.value);
+          }
+          hfNormalizeSettings();
+          hybridForestController?.scheduleRebuild?.(true, 0);
+        }
+
+        for (const element of Object.values(forestInputs)) {
+          if (!element) continue;
+          element.addEventListener("change", () => {
+            pushUndo();
+            applyForestFields();
+            refreshForestFields();
+          });
+        }
+        document.getElementById("forest-reset").addEventListener("click", () => {
+          pushUndo();
+          Object.assign(HF_SETTINGS, HF_DEFAULT_SETTINGS);
+          refreshForestFields();
+          hybridForestController?.scheduleRebuild?.(true, 0);
+        });
+
+        document.getElementById("edit-mode-toggle").addEventListener("click", () => {
+          document.body.classList.toggle("landmark-edit-mode");
+          document.getElementById("edit-mode-toggle").textContent = document.body.classList.contains("landmark-edit-mode") ? "Sluit editor" : "Bewerken";
+          landmarkController?.setHovered?.(null);
+          landmarkController?.updateVisibilityAndLoading(true);
+          updateMarkers();
+        });
+        document.getElementById("landmark-editor-close").addEventListener("click", () => {
+          document.body.classList.remove("landmark-edit-mode");
+          document.getElementById("edit-mode-toggle").textContent = "Bewerken";
+          updateMarkers();
+        });
+
+        setInterval(() => {
+          const landmarkStats = landmarkController?.getStats() || {};
+          const forestStats = hybridForestController?.getStats?.() || {};
+          runtimeStats.textContent = [
+            `FPS ${Number(landmarkStats.fps || 0).toFixed(0)}`,
+            `modellen ${landmarkStats.visible || 0}/${landmarkStats.loaded || 0} geladen`,
+            landmarkStats.loading ? `${landmarkStats.loading} laden` : "",
+            landmarkStats.errors ? `${landmarkStats.errors} fout` : "",
+            `bos ${forestStats.near || 0} 3D + ${forestStats.sprites || 0} sprites`
+          ].filter(Boolean).join(" · ");
+          refreshModelStatus();
+        }, 600);
+
+        refreshForestFields();
         refreshFields();
       }
+
 
       map.on("load", () => {
         status.textContent = "Bigane-style + GitHub terrain werkt. Kanka laden...";
@@ -2381,15 +3314,23 @@
           exaggeration: 1.5
         });
 
+        // Load saved landmark and forest tuning before the render layers start.
+        loadInitialLandmarkState();
+
         try {
           installHybridForestLayer();
         } catch (error) {
           console.warn("Hybride boslaag overgeslagen; kaart blijft werken:", error);
         }
 
-        installAllLandmarks().then(() => {
-          setupLandmarkEditor();
-        });
+        ensureThreeJs()
+          .then(() => {
+            installSharedLandmarkLayer();
+            setupLandmarkEditor();
+          })
+          .catch(error => {
+            console.warn("3D-landmarks overgeslagen; kaart blijft werken:", error);
+          });
 
         // Hillshade from the same DEM.
         if (!map.getLayer("bigane-hillshade")) {
