@@ -295,6 +295,7 @@
     <textarea id="landmark-export" readonly></textarea>
     <div class="mini-row">
       <button type="button" id="landmark-copy">Kopieer</button>
+      <button type="button" id="landmark-download-json">Download JSON</button>
       <button type="button" id="landmark-anchor-toggle">Anker aan/uit</button>
       <button type="button" id="landmark-reload">Herlaad saved</button>
     </div>
@@ -869,16 +870,16 @@
         // docks/quays are intentionally very asymmetrical.
         { name: "Stonefront", model: "./Stonefront_v2_Textured.glb", widthMeters: 36000, rotationDeg: 0, eastMeters: 0, northMeters: 0 },
         { name: "Ehlehuak", model: "./Ehlehuak_v2_MapReady.glb", widthMeters: 43000, rotationDeg: -90, eastMeters: 0, northMeters: 0, aliases: ["Ehuleak", "Ehléhuak", "Ehlehuak", "Ehuleák", "Ehleuak", "Ehleak"] },
-        { name: "Khuktul", model: "./Khuktul_v1_MapReady.glb", widthMeters: 18000, rotationDeg: 90, eastMeters: -18000, northMeters: 4000, aliases: ["Kuktul"] },
-        { name: "Ambrezzo", model: "./Ambrezzo_v2_MapReady.glb", widthMeters: 36000, rotationDeg: 195, eastMeters: 1500, northMeters: 3000 },
-        { name: "Yumizen", model: "./Yumizen_v1_MapReady.glb", widthMeters: 35000, rotationDeg: -48, eastMeters: -7500, northMeters: 16500 },
-        { name: "Seawatch", model: "./Keelfort_v2_Compact_MapReady.glb", widthMeters: 24000, rotationDeg: 0, eastMeters: 10000, northMeters: 17500 },
+        { name: "Khuktul", model: "./Khuktul_v1_MapReady.glb", widthMeters: 18000, rotationDeg: 90.0, eastMeters: 1000, northMeters: 4000, elevationOffsetMeters: -900, aliases: ["Kuktul"] },
+        { name: "Ambrezzo", model: "./Ambrezzo_v2_MapReady.glb", widthMeters: 36000, rotationDeg: 185.0, eastMeters: -162210, northMeters: 115200, elevationOffsetMeters: -300 },
+        { name: "Yumizen", model: "./Yumizen_v1_MapReady.glb", widthMeters: 35000, rotationDeg: -43.0, eastMeters: 150, northMeters: 4260, elevationOffsetMeters: 0 },
+        { name: "Seawatch", model: "./Keelfort_v2_Compact_MapReady.glb", widthMeters: 24000, rotationDeg: -35.0, eastMeters: 8500, northMeters: -3500, elevationOffsetMeters: -1500 },
         { name: "Old Hill", model: "./Ruined_Hill_Settlement_v1_MapReady.glb", widthMeters: 29000, rotationDeg: 0, eastMeters: 0, northMeters: 0 },
-        { name: "Ecbashah", model: "./Lake_Jewel_City_v2_Pyramid.glb", widthMeters: 32000, rotationDeg: -90, eastMeters: -6500, northMeters: 12500, aliases: ["Ecbashah", "Ecabashah", "Ecbashahh"] },
-        { name: "Morbus", model: "./Frostfort_v1.glb", widthMeters: 10700, rotationDeg: 0, eastMeters: 22000, northMeters: 0 },
-        { name: "Matronass", model: "./Matronass_v2_BreachedWalls.glb", widthMeters: 42000, rotationDeg: -90, eastMeters: 0, northMeters: 0, elevationOffsetMeters: 1200 },
+        { name: "Ecbashah", model: "./Lake_Jewel_City_v2_Pyramid.glb", widthMeters: 32000, rotationDeg: -90.0, eastMeters: 9310, northMeters: 1280, elevationOffsetMeters: -50, aliases: ["Ecbashah", "Ecabashah", "Ecbashahh"] },
+        { name: "Morbus", model: "./Frostfort_v1.glb", widthMeters: 10700, rotationDeg: -95.0, eastMeters: 4150, northMeters: -9180, elevationOffsetMeters: -200 },
+        { name: "Matronass", model: "./Matronass_v2_BreachedWalls.glb", widthMeters: 42000, rotationDeg: -90.0, eastMeters: 5610, northMeters: 1020, elevationOffsetMeters: 300 },
         { name: "Padin", model: "./Padin_v1_Optimized_Limestone(1).glb", widthMeters: 40000, rotationDeg: 0, eastMeters: 0, northMeters: 0 },
-        { name: "Tillfort", model: "./Tillfort_v3_StonefrontStyle_MapReady_FixedDomes.glb", widthMeters: 40000, rotationDeg: 0, eastMeters: 0, northMeters: 0, aliases: ["Till Fort", "Tilfort"] },
+        { name: "Tillfort", model: "./Tillfort_v3_StonefrontStyle_MapReady_FixedDomes.glb", widthMeters: 40000, rotationDeg: -100.0, eastMeters: -141000, northMeters: -82250, elevationOffsetMeters: -1200, aliases: ["Till Fort", "Tilfort"] },
         { name: "Khypir Tul", model: "./Dwarven_Lighthouse_v2_FixedRoof.glb", widthMeters: 22000, rotationDeg: 180, eastMeters: 0, northMeters: 0, aliases: ["Khypir Tul", "Khypir-Tul", "Khypirtul"] }
       ];
 
@@ -1157,6 +1158,33 @@
           editorStatus.textContent = "Alle landmark-posities lokaal bewaard";
         }
 
+        function exportAllAsJson() {
+          const data = {
+            format: "bigane-landmarks-v1",
+            exportedAt: new Date().toISOString(),
+            landmarks: LANDMARKS_3D.map(c => ({
+              name: c.name,
+              model: c.model,
+              widthMeters: Number(c.widthMeters || 0),
+              rotationDeg: Number(c.rotationDeg || 0),
+              eastMeters: Number(c.eastMeters || 0),
+              northMeters: Number(c.northMeters || 0),
+              elevationOffsetMeters: Number(c.elevationOffsetMeters || 0),
+              ...(c.aliases?.length ? { aliases: [...c.aliases] } : {})
+            }))
+          };
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "bigane-landmarks.json";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 0);
+          editorStatus.textContent = "JSON met alle landmark-instellingen gedownload";
+        }
+
         function loadSaved() {
           try {
             const raw = localStorage.getItem(LANDMARK_EDITOR_STORAGE_KEY);
@@ -1231,6 +1259,7 @@
           landmarkAnchorVisible = !landmarkAnchorVisible;
           updateAnchor();
         });
+        document.getElementById("landmark-download-json").addEventListener("click", exportAllAsJson);
         document.getElementById("landmark-copy").addEventListener("click", async () => {
           output.select();
           try {
