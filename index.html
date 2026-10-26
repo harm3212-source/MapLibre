@@ -889,6 +889,7 @@
       const HF_NEAR_CAP_TOTAL = 10800;
       const HF_SPRITE_CAP_TOTAL = 39000;
       const HF_MAX_CANDIDATES = 80000;
+      const HF_TREE_SIZE_MULTIPLIER = 0.68;
       let hybridForestController = null;
 
       const HF_TYPES = [
@@ -1035,10 +1036,12 @@
       }
 
       function hfNearRadiusForZoom(zoom) {
-        if (zoom < 5.0) return 0;
-        if (zoom < 5.8) return 0.38;
-        if (zoom < 6.8) return 0.64;
-        return 0.92;
+        // Keep the distant forest sprite-only for longer. Real 3D trees
+        // appear only once the user is substantially zoomed in.
+        if (zoom < 6.15) return 0;
+        if (zoom < 6.9) return 0.30;
+        if (zoom < 7.8) return 0.56;
+        return 0.86;
       }
 
       function hfSelectType(biome, random01) {
@@ -1641,7 +1644,7 @@
                   const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4));
                   const type = HF_TYPES[typeIndex];
                   const scale = 0.78 + hfHash(ix, iy, 5) * 0.54;
-                  const height = type.baseHeight * scale;
+                  const height = type.baseHeight * scale * HF_TREE_SIZE_MULTIPLIER;
                   const width = height * type.widthRatio * (0.86 + hfHash(ix, iy, 6) * 0.28);
                   const rotation = hfHash(ix, iy, 7) * Math.PI * 2;
                   const seed = hfHash(ix, iy, 8);
