@@ -1076,18 +1076,18 @@
       const HF_WORLD_METERS = 40075016.68557849;
       const HF_BASE_CELL_METERS = 7000;
       const HF_BASE_CELL_WORLD = HF_BASE_CELL_METERS / HF_WORLD_METERS;
-      const HF_HEIGHTMAP_SIZE = 1024;
+      const HF_HEIGHTMAP_SIZE = 768;
       const HF_MAX_CANDIDATES = 80000;
       const HF_MAX_NEAR_CAP = 18000;
       const HF_MAX_SPRITE_CAP = 60000;
       const HF_DEFAULT_SETTINGS = Object.freeze({
         minZoom: 4.15,
         threeDStartZoom: 5.0,
-        outerRadius: 2.55,
-        fadeStart: 1.48,
+        outerRadius: 2.25,
+        fadeStart: 1.38,
         treeSize: 0.68,
-        nearCap: 10800,
-        spriteCap: 39000,
+        nearCap: 8000,
+        spriteCap: 24000,
         densityMultiplier: 1.0
       });
       const HF_SETTINGS = { ...HF_DEFAULT_SETTINGS };
@@ -1521,7 +1521,12 @@
         const texture = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, texture);
         gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        // Canvas pixels are top-left-origin while the billboard UVs use
+        // (0,0) at the bottom. Flip once at upload so every tree sprite
+        // has its trunk at the terrain and crown above it.
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -1717,6 +1722,10 @@
               };
             });
 
+            // Terrain height rendering is expensive. Cache the height texture and
+            // refresh it only when forest bounds or the DEM actually change.
+            this.heightMapDirty = true;
+
             this.scheduleRebuild = (force = false, delay = 80) => {
               if (force) this.lastBuildKey = "";
               clearTimeout(this.rebuildTimer);
@@ -1735,6 +1744,10 @@
             };
             this.onSourceData = event => {
               const biomeLayer = this.map.getLayer("Biomes");
+              if (event?.sourceId === "bigane-dem") {
+                this.heightMapDirty = true;
+                this.map.triggerRepaint();
+              }
               if (event?.sourceId === biomeLayer?.source && event?.isSourceLoaded) {
                 this.needsRebuild = true;
                 this.scheduleRebuild(true, 130);
@@ -1974,6 +1987,7 @@
             this.heightBounds[1] = frame.y0 - extra;
             this.heightBounds[2] = frame.x1 + extra;
             this.heightBounds[3] = frame.y1 + extra;
+            this.heightMapDirty = true;
             this.lastBuildKey = buildKey;
 
             const nearTotal = this.typeStates.reduce((sum, state) => sum + state.nearCount, 0);
@@ -1995,12 +2009,15 @@
 
           prerender(gl, options) {
             if (!this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) return;
-            options.renderTerrainHeightMap?.({
+            if (!this.heightMapDirty) return;
+            if (!options.renderTerrainHeightMap) return;
+            options.renderTerrainHeightMap({
               texture: this.heightMap,
               width: HF_HEIGHTMAP_SIZE,
               height: HF_HEIGHTMAP_SIZE,
               bounds: this.heightBounds
             });
+            this.heightMapDirty = false;
           },
 
           bindNearAttributes(gl, state) {
