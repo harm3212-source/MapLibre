@@ -1115,43 +1115,112 @@
       function installWaterPolish() {
         try {
           const layers = map.getStyle()?.layers || [];
-          const waterBase = layers.find(layer =>
-            layer?.type === "fill" &&
-            /water|ocean|sea|lake|river/i.test(`${layer.id || ""} ${layer["source-layer"] || ""}`)
-          );
-          if (!waterBase?.source) return;
-          const sourceLayer = waterBase["source-layer"];
-          const common = {
-            source: waterBase.source,
-            ...(sourceLayer ? { "source-layer": sourceLayer } : {}),
-            ...(waterBase.filter ? { filter: waterBase.filter } : {})
-          };
-          const beforeId = map.getLayer("Town names") ? "Town names" : undefined;
-          if (!map.getLayer("bigane-water-depth-tint")) {
-            map.addLayer({
-              id: "bigane-water-depth-tint",
-              type: "fill",
-              ...common,
-              paint: {
-                "fill-color": "#173d59",
-                "fill-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.10, 6, 0.065, 10, 0.025]
-              }
-            }, beforeId);
+          const waterCandidates = layers.filter(layer => {
+            if (!layer?.source) return false;
+            if (!['fill', 'line'].includes(layer.type)) return false;
+            const descriptor = `${layer.id || ''} ${layer['source-layer'] || ''}`;
+            return /water|ocean|sea|lake|river|coast|shore/i.test(descriptor) &&
+                   !/^bigane-water-/i.test(layer.id || '');
+          });
+
+          if (!waterCandidates.length) {
+            console.warn('Geen geschikte water/coast layers gevonden voor shoreline polish.');
+            return;
           }
-          if (!map.getLayer("bigane-water-shoreline")) {
-            map.addLayer({
-              id: "bigane-water-shoreline",
-              type: "line",
-              ...common,
-              paint: {
-                "line-color": "rgba(221,241,244,0.78)",
-                "line-width": ["interpolate", ["linear"], ["zoom"], 2, 0.35, 6, 0.7, 10, 1.15],
-                "line-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.28, 6, 0.48, 10, 0.36]
+
+          const beforeId = map.getLayer('Town names') ? 'Town names' :
+                           map.getLayer('Capitals') ? 'Capitals' : undefined;
+          const usedKeys = new Set();
+          let added = 0;
+
+          for (const layer of waterCandidates) {
+            const sourceLayer = layer['source-layer'];
+            const key = [layer.source, sourceLayer || '', JSON.stringify(layer.filter || null)].join('|');
+            if (usedKeys.has(key)) continue;
+            usedKeys.add(key);
+
+            const common = {
+              source: layer.source,
+              ...(sourceLayer ? { 'source-layer': sourceLayer } : {}),
+              ...(layer.filter ? { filter: layer.filter } : {})
+            };
+
+            // Keep a restrained dark water tint when the source is polygonal.
+            if (layer.type === 'fill') {
+              const tintId = `bigane-water-depth-tint-${added}`;
+              if (!map.getLayer(tintId)) {
+                map.addLayer({
+                  id: tintId,
+                  type: 'fill',
+                  ...common,
+                  paint: {
+                    'fill-color': '#173d59',
+                    'fill-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.085, 6, 0.055, 10, 0.022]
+                  }
+                }, beforeId);
               }
-            }, beforeId);
+            }
+
+            // Wide, soft cyan edge: deliberately visible from overview zooms.
+            const glowId = `bigane-water-shore-glow-${added}`;
+            if (!map.getLayer(glowId)) {
+              map.addLayer({
+                id: glowId,
+                type: 'line',
+                ...common,
+                paint: {
+                  'line-color': '#8fd6dc',
+                  'line-width': ['interpolate', ['linear'], ['zoom'],
+                    2, 0.95,
+                    4, 1.25,
+                    6, 1.65,
+                    8, 2.05,
+                    10, 2.55
+                  ],
+                  'line-opacity': ['interpolate', ['linear'], ['zoom'],
+                    2, 0.42,
+                    5, 0.52,
+                    8, 0.46,
+                    11, 0.34
+                  ],
+                  'line-blur': ['interpolate', ['linear'], ['zoom'], 2, 0.35, 8, 0.55, 11, 0.75]
+                }
+              }, beforeId);
+            }
+
+            // Thin bright inner edge gives the shoreline definition without
+            // turning it into a cartographic border.
+            const edgeId = `bigane-water-shore-edge-${added}`;
+            if (!map.getLayer(edgeId)) {
+              map.addLayer({
+                id: edgeId,
+                type: 'line',
+                ...common,
+                paint: {
+                  'line-color': '#e3f4f2',
+                  'line-width': ['interpolate', ['linear'], ['zoom'],
+                    2, 0.38,
+                    4, 0.48,
+                    6, 0.62,
+                    8, 0.78,
+                    10, 0.95
+                  ],
+                  'line-opacity': ['interpolate', ['linear'], ['zoom'],
+                    2, 0.56,
+                    5, 0.68,
+                    8, 0.60,
+                    11, 0.44
+                  ]
+                }
+              }, beforeId);
+            }
+            added++;
           }
+
+          console.info(`Water shoreline polish: ${added} water/coast source layers gekoppeld.`,
+            waterCandidates.map(layer => `${layer.id} [${layer.type}]`).join(', '));
         } catch (error) {
-          console.warn("Water polish overgeslagen:", error);
+          console.warn('Water polish overgeslagen:', error);
         }
       }
 
@@ -2121,19 +2190,13 @@
                 uv = clamp(uv, vec2(0.0), vec2(1.0));
                 vec2 huv = vec2(uv.x, 1.0 - uv.y);
                 float elevation = texture(u_heightMap, huv).r;
-                float eRight = texture(u_heightMap, clamp(huv + vec2(u_heightTexel.x, 0.0), vec2(0.0), vec2(1.0))).r;
-                float eUp = texture(u_heightMap, clamp(huv + vec2(0.0, u_heightTexel.y), vec2(0.0), vec2(1.0))).r;
-                float pxMeters = max(1.0, (u_heightBounds.z - u_heightBounds.x) * u_heightTexel.x / i_mpu);
-                float pyMeters = max(1.0, (u_heightBounds.w - u_heightBounds.y) * u_heightTexel.y / i_mpu);
-                float slope = length(vec2((eRight - elevation) / pxMeters, (eUp - elevation) / pyMeters));
-                float slopeAlpha = 1.0 - smoothstep(0.48, 1.08, slope);
                 float zMeters = elevation - i_height * 0.055 + a_local.z * i_height;
                 gl_Position = u_matrix * vec4(worldXY, zMeters * i_mpu, 1.0);
                 v_normal = normalize(vec3(rot * a_normal.xy, a_normal.z));
                 v_part = a_part;
                 v_seed = i_seed;
                 float treeLineAlpha = 1.0 - smoothstep(u_treeLineFadeStart, u_treeLineCutoff, elevation);
-                v_alpha = i_alpha * treeLineAlpha * slopeAlpha;
+                v_alpha = i_alpha * treeLineAlpha;
               }
             `, `
               uniform vec3 u_foliageColor;
@@ -2191,18 +2254,12 @@
                 uv = clamp(uv, vec2(0.0), vec2(1.0));
                 vec2 huv = vec2(uv.x, 1.0 - uv.y);
                 float elevation = texture(u_heightMap, huv).r;
-                float eRight = texture(u_heightMap, clamp(huv + vec2(u_heightTexel.x, 0.0), vec2(0.0), vec2(1.0))).r;
-                float eUp = texture(u_heightMap, clamp(huv + vec2(0.0, u_heightTexel.y), vec2(0.0), vec2(1.0))).r;
-                float pxMeters = max(1.0, (u_heightBounds.z - u_heightBounds.x) * u_heightTexel.x / i_mpu);
-                float pyMeters = max(1.0, (u_heightBounds.w - u_heightBounds.y) * u_heightTexel.y / i_mpu);
-                float slope = length(vec2((eRight - elevation) / pxMeters, (eUp - elevation) / pyMeters));
-                float slopeAlpha = 1.0 - smoothstep(0.48, 1.08, slope);
                 float zMeters = elevation - i_height * 0.045 + a_local.z * i_height;
                 gl_Position = u_matrix * vec4(worldXY, zMeters * i_mpu, 1.0);
                 v_uv = a_uv;
                 v_seed = i_seed;
                 float treeLineAlpha = 1.0 - smoothstep(u_treeLineFadeStart, u_treeLineCutoff, elevation);
-                v_alpha = i_alpha * treeLineAlpha * slopeAlpha;
+                v_alpha = i_alpha * treeLineAlpha;
               }
             `, `
               uniform sampler2D u_sprite;
