@@ -1097,9 +1097,9 @@
       // ---------------------------------------------------------------------
       // HYBRID GPU FOREST
       // ---------------------------------------------------------------------
-      // V35: forest placement is derived from the existing Biomes vector layer.
+      // V36: forest placement is derived from the existing Biomes vector layer.
       // Adds treeline/snow exclusion, settlement clearings, sparse grassland
-      // trees and oasis palms near hot-desert wetlands.
+      // trees and oasis palms specifically on hot-desert land near lake shores.
       // Close to the camera: low-poly 3D tree archetypes.
       // Farther away: cheap crossed-plane sprite clusters.
       // Both sample MapLibre's terrain height map on the GPU. A wide padded
@@ -1114,7 +1114,8 @@
       const HF_MAX_SPRITE_CAP = 90000;
       const HF_SETTLEMENT_CLEAR_RADIUS_METERS = 12000;
       const HF_SETTLEMENT_GRID_METERS = 50000;
-      const HF_OASIS_DESERT_PROXIMITY_METERS = 45000;
+      const HF_OASIS_LAKE_SEARCH_METERS = 32000;
+      const HF_OASIS_LAKE_RING_METERS = 18000;
       // The terrain height map used by the forest contains elevation in metres
       // INCLUDING MapLibre terrain exaggeration. These are calibrated together
       // with the adaptive snow layer; until then they disable treeline fading.
@@ -1250,7 +1251,13 @@
           mix: [["deciduous", 0.64], ["savanna", 0.36]]
         }
       };
-      const HF_OASIS_MIX = [["palm", 0.28], ["wetland", 0.52], ["savanna", 0.20]];
+      const HF_OASIS_BIOME = "Oasis lake fringe";
+      HF_BIOMES[HF_OASIS_BIOME] = {
+        // Intentionally sparse: an oasis should read as a palm-lined water source,
+        // not as a tropical forest pasted into the desert.
+        density: 0.22,
+        mix: [["palm", 0.86], ["savanna", 0.14]]
+      };
 
       function hfHash(ix, iy, salt = 0) {
         let h = Math.imul((ix | 0) ^ Math.imul(salt + 1, 374761393), 668265263);
@@ -1317,10 +1324,10 @@
         return fullRadiusMeters * smooth;
       }
 
-      function hfSelectType(biome, random01, oasisLike = false) {
+      function hfSelectType(biome, random01) {
         const config = HF_BIOMES[biome];
         if (!config) return 0;
-        const mix = (oasisLike && biome === "Wetland") ? HF_OASIS_MIX : config.mix;
+        const mix = config.mix;
         let running = 0;
         for (const [typeId, weight] of mix) {
           running += weight;
@@ -1667,6 +1674,76 @@
                  a.y1 + padWorld < b.y0 || a.y0 - padWorld > b.y1);
       }
 
+
+      function hfMakeWaterRing(coords) {
+        if (!Array.isArray(coords) || coords.length < 3) return null;
+        const points = [];
+        let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+        for (const coord of coords) {
+          if (!Array.isArray(coord) || coord.length < 2) continue;
+          const lng = Number(coord[0]), lat = Number(coord[1]);
+          if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+          points.push([(lng + 180) / 360, hfMercY(lat)]);
+          west = Math.min(west, lng); east = Math.max(east, lng);
+          south = Math.min(south, lat); north = Math.max(north, lat);
+        }
+        if (points.length < 3) return null;
+        return {
+          points,
+          bounds: {
+            west, east, south, north,
+            x0: (west + 180) / 360, x1: (east + 180) / 360,
+            y0: hfMercY(north), y1: hfMercY(south)
+          }
+        };
+      }
+
+      function hfFeatureOuterRings(feature) {
+        const g = feature?.geometry;
+        if (!g) return [];
+        if (g.type === "Polygon") return [g.coordinates?.[0]].filter(Boolean);
+        if (g.type === "MultiPolygon") return (g.coordinates || []).map(poly => poly?.[0]).filter(Boolean);
+        return [];
+      }
+
+      function hfFeatureHoleRings(feature) {
+        const g = feature?.geometry;
+        if (!g) return [];
+        if (g.type === "Polygon") return (g.coordinates || []).slice(1);
+        if (g.type === "MultiPolygon") {
+          const rings = [];
+          for (const poly of (g.coordinates || [])) rings.push(...(poly || []).slice(1));
+          return rings;
+        }
+        return [];
+      }
+
+      function hfPointSegmentDistanceSq(px, py, ax, ay, bx, by) {
+        const vx = bx - ax, vy = by - ay;
+        const wx = px - ax, wy = py - ay;
+        const vv = vx * vx + vy * vy;
+        let t = vv > 1e-24 ? (wx * vx + wy * vy) / vv : 0;
+        t = Math.max(0, Math.min(1, t));
+        const dx = px - (ax + t * vx);
+        const dy = py - (ay + t * vy);
+        return dx * dx + dy * dy;
+      }
+
+      function hfDistanceToWaterRingsMeters(x, y, mpu, waterRings) {
+        let bestSq = Infinity;
+        for (const ring of (waterRings || [])) {
+          const pts = ring?.points || [];
+          if (pts.length < 2) continue;
+          for (let i = 1; i < pts.length; i++) {
+            bestSq = Math.min(bestSq, hfPointSegmentDistanceSq(x, y, pts[i-1][0], pts[i-1][1], pts[i][0], pts[i][1]));
+          }
+          if (pts.length > 2) {
+            bestSq = Math.min(bestSq, hfPointSegmentDistanceSq(x, y, pts[pts.length-1][0], pts[pts.length-1][1], pts[0][0], pts[0][1]));
+          }
+        }
+        return Number.isFinite(bestSq) ? Math.sqrt(bestSq) / Math.max(1e-12, mpu) : Infinity;
+      }
+
       function hfCollectSettlementPoints(mapInstance) {
         const layerIds = ["Town names", "Capitals", "clickable"].filter(id => mapInstance.getLayer(id));
         const points = [];
@@ -2009,18 +2086,62 @@
               allEntries.push({ feature, biome, bounds });
             }
 
-            const desertBounds = allEntries
-              .filter(entry => entry.biome === "Hot desert")
-              .map(entry => entry.bounds);
-            const oasisPadWorld = HF_OASIS_DESERT_PROXIMITY_METERS / HF_WORLD_METERS;
+            // Lake-driven oasis detection. First prefer explicit style layers whose
+            // id/source-layer names say "lake". These are queried as rendered
+            // features so the layer's own lake filter is respected.
+            const explicitLakeRings = [];
+            try {
+              const styleLayers = this.map.getStyle()?.layers || [];
+              const lakeLayerIds = styleLayers
+                .filter(layer => layer?.type === "fill" && /lake|lakes|lac/i.test(`${layer.id || ""} ${layer["source-layer"] || ""}`))
+                .map(layer => layer.id);
+              if (lakeLayerIds.length) {
+                const lakeFeatures = this.map.queryRenderedFeatures({ layers: lakeLayerIds }) || [];
+                const lakeSeen = new Set();
+                for (const lake of lakeFeatures) {
+                  if (!lake?.geometry || (lake.geometry.type !== "Polygon" && lake.geometry.type !== "MultiPolygon")) continue;
+                  const b = hfFeatureBounds(lake);
+                  if (!b) continue;
+                  const key = [b.west.toFixed(4), b.east.toFixed(4), b.south.toFixed(4), b.north.toFixed(4)].join(":");
+                  if (lakeSeen.has(key)) continue;
+                  lakeSeen.add(key);
+                  for (const coords of hfFeatureOuterRings(lake)) {
+                    const ring = hfMakeWaterRing(coords);
+                    if (ring) explicitLakeRings.push(ring);
+                  }
+                }
+              }
+            } catch (error) {
+              console.warn("Lake layer lookup failed; falling back to desert polygon holes:", error);
+            }
 
-            return allEntries
-              .filter(entry => Boolean(HF_BIOMES[entry.biome]))
-              .map(entry => ({
-                ...entry,
-                oasisLike: entry.biome === "Wetland" &&
-                  desertBounds.some(desert => hfBoundsNear(entry.bounds, desert, oasisPadWorld))
-              }));
+            // Fallback/augmentation: interior rings in a Hot desert biome are
+            // water holes in the land polygon in many Bigane exports. This lets
+            // desert lakes work even when the style layer has an unexpected id.
+            const desertEntries = allEntries.filter(entry => entry.biome === "Hot desert");
+            const desertHoleRings = [];
+            for (const desert of desertEntries) {
+              for (const coords of hfFeatureHoleRings(desert.feature)) {
+                const ring = hfMakeWaterRing(coords);
+                if (ring) desertHoleRings.push(ring);
+              }
+            }
+            const allLakeRings = [...explicitLakeRings, ...desertHoleRings];
+            const searchPadWorld = HF_OASIS_LAKE_SEARCH_METERS / HF_WORLD_METERS;
+
+            const normalForestEntries = allEntries.filter(entry => Boolean(HF_BIOMES[entry.biome]));
+            const oasisEntries = [];
+            for (const desert of desertEntries) {
+              const nearbyRings = allLakeRings.filter(ring => hfBoundsNear(desert.bounds, ring.bounds, searchPadWorld));
+              if (!nearbyRings.length) continue;
+              oasisEntries.push({
+                ...desert,
+                biome: HF_OASIS_BIOME,
+                waterRings: nearbyRings
+              });
+            }
+
+            return [...normalForestEntries, ...oasisEntries];
           },
 
           activeFrame() {
@@ -2124,10 +2245,17 @@
                   if (!featureContainsCoordinate(entry.feature, [lng, lat])) continue;
 
                   const merc = new maplibregl.MercatorCoordinate(x, y, 0);
-                  if (hfNearSettlement(x, y, merc.meterInMercatorCoordinateUnits(), settlementIndex)) continue;
+                  const localMpu = merc.meterInMercatorCoordinateUnits();
+                  // Oasis palms are generated only on Hot desert land within a
+                  // narrow world-space ring around an actual lake shoreline.
+                  if (entry.biome === HF_OASIS_BIOME) {
+                    const waterDistanceMeters = hfDistanceToWaterRingsMeters(x, y, localMpu, entry.waterRings);
+                    if (waterDistanceMeters > HF_OASIS_LAKE_RING_METERS) continue;
+                  }
+                  if (hfNearSettlement(x, y, localMpu, settlementIndex)) continue;
                   seen.add(key);
 
-                  const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4), entry.oasisLike);
+                  const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4));
                   const type = HF_TYPES[typeIndex];
                   const scale = 0.78 + hfHash(ix, iy, 5) * 0.54;
                   const height = type.baseHeight * scale * HF_SETTINGS.treeSize;
