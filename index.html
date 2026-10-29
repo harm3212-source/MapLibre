@@ -1097,7 +1097,9 @@
       // ---------------------------------------------------------------------
       // HYBRID GPU FOREST
       // ---------------------------------------------------------------------
-      // Forest placement is derived from the existing Biomes vector layer.
+      // V35: forest placement is derived from the existing Biomes vector layer.
+      // Adds treeline/snow exclusion, settlement clearings, sparse grassland
+      // trees and oasis palms near hot-desert wetlands.
       // Close to the camera: low-poly 3D tree archetypes.
       // Farther away: cheap crossed-plane sprite clusters.
       // Both sample MapLibre's terrain height map on the GPU. A wide padded
@@ -1110,6 +1112,14 @@
       const HF_MAX_CANDIDATES = 80000;
       const HF_MAX_NEAR_CAP = 18000;
       const HF_MAX_SPRITE_CAP = 90000;
+      const HF_SETTLEMENT_CLEAR_RADIUS_METERS = 12000;
+      const HF_SETTLEMENT_GRID_METERS = 50000;
+      const HF_OASIS_DESERT_PROXIMITY_METERS = 45000;
+      // The terrain height map used by the forest contains elevation in metres
+      // INCLUDING MapLibre terrain exaggeration. These are calibrated together
+      // with the adaptive snow layer; until then they disable treeline fading.
+      let snowTreeFadeStartExaggerated = 1.0e9;
+      let snowTreeCutoffExaggerated = 1.0e9 + 1.0;
       const HF_DEFAULT_SETTINGS = Object.freeze({
         minZoom: 4.15,
         threeDStartZoom: 5,
@@ -1180,6 +1190,13 @@
           trunk: [0.26, 0.18, 0.11],
           baseHeight: 7900,
           widthRatio: 0.42
+        },
+        {
+          id: "palm",
+          foliage: [0.22, 0.46, 0.19],
+          trunk: [0.42, 0.29, 0.14],
+          baseHeight: 7200,
+          widthRatio: 0.90
         }
       ];
       const HF_SPRITE_PALETTES = {
@@ -1188,7 +1205,8 @@
         tropical:  [[0.15,0.46,0.20],[0.20,0.53,0.24],[0.11,0.39,0.16]],
         deepwood:  [[0.07,0.21,0.10],[0.09,0.25,0.12],[0.045,0.16,0.075]],
         savanna:   [[0.38,0.46,0.17],[0.45,0.52,0.20],[0.31,0.38,0.14]],
-        wetland:   [[0.18,0.34,0.21],[0.22,0.40,0.25],[0.14,0.28,0.17]]
+        wetland:   [[0.18,0.34,0.21],[0.22,0.40,0.25],[0.14,0.28,0.17]],
+        palm:      [[0.22,0.46,0.19],[0.28,0.53,0.22],[0.17,0.38,0.15]]
       };
       const HF_TYPE_INDEX = new Map(HF_TYPES.map((t, i) => [t.id, i]));
 
@@ -1224,8 +1242,15 @@
         "Savanna": {
           density: 0.19,
           mix: [["savanna", 0.92], ["tropical", 0.08]]
+        },
+        // Standard grassland should read as open country, not forest: only a
+        // few scattered trees survive the density test.
+        "Grassland": {
+          density: 0.032,
+          mix: [["deciduous", 0.64], ["savanna", 0.36]]
         }
       };
+      const HF_OASIS_MIX = [["palm", 0.28], ["wetland", 0.52], ["savanna", 0.20]];
 
       function hfHash(ix, iy, salt = 0) {
         let h = Math.imul((ix | 0) ^ Math.imul(salt + 1, 374761393), 668265263);
@@ -1292,15 +1317,16 @@
         return fullRadiusMeters * smooth;
       }
 
-      function hfSelectType(biome, random01) {
+      function hfSelectType(biome, random01, oasisLike = false) {
         const config = HF_BIOMES[biome];
         if (!config) return 0;
+        const mix = (oasisLike && biome === "Wetland") ? HF_OASIS_MIX : config.mix;
         let running = 0;
-        for (const [typeId, weight] of config.mix) {
+        for (const [typeId, weight] of mix) {
           running += weight;
           if (random01 <= running) return HF_TYPE_INDEX.get(typeId) ?? 0;
         }
-        return HF_TYPE_INDEX.get(config.mix[config.mix.length - 1][0]) ?? 0;
+        return HF_TYPE_INDEX.get(mix[mix.length - 1][0]) ?? 0;
       }
 
       function hfCompileProgram(gl, vertexSource, fragmentSource) {
@@ -1413,6 +1439,18 @@
         }
       }
 
+      function hfAddPalmFrond(out, angle, length, halfWidth, z0, droop, part = 1) {
+        const dx = Math.cos(angle), dy = Math.sin(angle);
+        const px = -dy * halfWidth, py = dx * halfWidth;
+        const root = [0, 0, z0];
+        const mx = dx * length * 0.48, my = dy * length * 0.48;
+        const tip = [dx * length, dy * length, z0 - droop];
+        const left = [mx + px, my + py, z0 + 0.035];
+        const right = [mx - px, my - py, z0 + 0.035];
+        hfPushTriangle(out, root, left, tip, part);
+        hfPushTriangle(out, root, tip, right, part);
+      }
+
       function hfTreeGeometry(typeId) {
         const out = [];
         if (typeId === "conifer") {
@@ -1441,6 +1479,12 @@
           hfAddPrism(out, 0.06, 0, 0.58, 6, 0);
           hfAddEllipsoid(out, [0, 0, 0.68], [0.24, 0.22, 0.38], 8, 5, 1, 0.06);
           hfAddEllipsoid(out, [0.02, -0.01, 0.89], [0.17, 0.16, 0.24], 8, 4, 1, 0.05);
+        } else if (typeId === "palm") {
+          hfAddPrism(out, 0.050, 0, 0.78, 7, 0);
+          hfAddEllipsoid(out, [0, 0, 0.80], [0.13, 0.13, 0.11], 7, 3, 1, 0.04);
+          for (let i = 0; i < 8; i++) {
+            hfAddPalmFrond(out, i / 8 * Math.PI * 2, 0.48 + (i % 2) * 0.07, 0.075, 0.84, 0.13 + (i % 3) * 0.025, 1);
+          }
         } else {
           hfAddPrism(out, 0.075, 0, 0.57, 7, 0);
           hfAddEllipsoid(out, [0, 0, 0.75], [0.45, 0.40, 0.31], 8, 4, 1, 0.11);
@@ -1618,6 +1662,71 @@
         return texture;
       }
 
+      function hfBoundsNear(a, b, padWorld) {
+        return !(a.x1 + padWorld < b.x0 || a.x0 - padWorld > b.x1 ||
+                 a.y1 + padWorld < b.y0 || a.y0 - padWorld > b.y1);
+      }
+
+      function hfCollectSettlementPoints(mapInstance) {
+        const layerIds = ["Town names", "Capitals", "clickable"].filter(id => mapInstance.getLayer(id));
+        const points = [];
+        const seen = new Set();
+        for (const layerId of layerIds) {
+          const layer = mapInstance.getLayer(layerId);
+          let features = [];
+          try {
+            const sourceLayer = layer?.["source-layer"] || layer?.sourceLayer;
+            if (layer?.source) {
+              features = mapInstance.querySourceFeatures(layer.source, sourceLayer ? { sourceLayer } : undefined) || [];
+            }
+          } catch (_) {}
+          if (!features.length) {
+            try { features = mapInstance.queryRenderedFeatures({ layers: [layerId] }) || []; } catch (_) {}
+          }
+          for (const feature of features) {
+            if (feature?.geometry?.type !== "Point") continue;
+            const name = feature?.properties?.Burg || feature?.properties?.name || feature?.properties?.Name || "";
+            if (!name) continue;
+            const coords = feature.geometry.coordinates;
+            if (!Array.isArray(coords) || coords.length < 2) continue;
+            const key = `${Number(coords[0]).toFixed(5)}:${Number(coords[1]).toFixed(5)}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const m = maplibregl.MercatorCoordinate.fromLngLat(coords);
+            points.push({ x: m.x, y: m.y });
+          }
+        }
+        return points;
+      }
+
+      function hfBuildSettlementIndex(points) {
+        const cellWorld = HF_SETTLEMENT_GRID_METERS / HF_WORLD_METERS;
+        const buckets = new Map();
+        for (const p of points) {
+          const gx = Math.floor(p.x / cellWorld), gy = Math.floor(p.y / cellWorld);
+          const key = `${gx}:${gy}`;
+          if (!buckets.has(key)) buckets.set(key, []);
+          buckets.get(key).push(p);
+        }
+        return { cellWorld, buckets };
+      }
+
+      function hfNearSettlement(x, y, mpu, index) {
+        if (!index?.buckets?.size) return false;
+        const gx = Math.floor(x / index.cellWorld), gy = Math.floor(y / index.cellWorld);
+        for (let ox = -1; ox <= 1; ox++) {
+          for (let oy = -1; oy <= 1; oy++) {
+            const bucket = index.buckets.get(`${gx + ox}:${gy + oy}`);
+            if (!bucket) continue;
+            for (const p of bucket) {
+              const distanceMeters = Math.hypot(x - p.x, y - p.y) / Math.max(1e-12, mpu);
+              if (distanceMeters < HF_SETTLEMENT_CLEAR_RADIUS_METERS) return true;
+            }
+          }
+        }
+        return false;
+      }
+
       function installHybridForestLayer() {
         if (map.getLayer(HF_LAYER_ID)) return;
 
@@ -1645,6 +1754,8 @@
               uniform mat4 u_matrix;
               uniform vec4 u_heightBounds;
               uniform sampler2D u_heightMap;
+              uniform float u_treeLineFadeStart;
+              uniform float u_treeLineCutoff;
               in vec3 a_local;
               in vec3 a_normal;
               in float a_part;
@@ -1674,7 +1785,8 @@
                 v_normal = normalize(vec3(rot * a_normal.xy, a_normal.z));
                 v_part = a_part;
                 v_seed = i_seed;
-                v_alpha = i_alpha;
+                float treeLineAlpha = 1.0 - smoothstep(u_treeLineFadeStart, u_treeLineCutoff, elevation);
+                v_alpha = i_alpha * treeLineAlpha;
               }
             `, `
               uniform vec3 u_foliageColor;
@@ -1705,6 +1817,8 @@
               uniform mat4 u_matrix;
               uniform vec4 u_heightBounds;
               uniform sampler2D u_heightMap;
+              uniform float u_treeLineFadeStart;
+              uniform float u_treeLineCutoff;
               uniform float u_bearing;
               in vec3 a_local;
               in vec2 a_uv;
@@ -1732,7 +1846,8 @@
                 gl_Position = u_matrix * vec4(worldXY, zMeters * i_mpu, 1.0);
                 v_uv = a_uv;
                 v_seed = i_seed;
-                v_alpha = i_alpha;
+                float treeLineAlpha = 1.0 - smoothstep(u_treeLineFadeStart, u_treeLineCutoff, elevation);
+                v_alpha = i_alpha * treeLineAlpha;
               }
             `, `
               uniform sampler2D u_sprite;
@@ -1756,6 +1871,8 @@
               matrix: gl.getUniformLocation(this.nearProgram, "u_matrix"),
               bounds: gl.getUniformLocation(this.nearProgram, "u_heightBounds"),
               heightMap: gl.getUniformLocation(this.nearProgram, "u_heightMap"),
+              treeLineFadeStart: gl.getUniformLocation(this.nearProgram, "u_treeLineFadeStart"),
+              treeLineCutoff: gl.getUniformLocation(this.nearProgram, "u_treeLineCutoff"),
               foliage: gl.getUniformLocation(this.nearProgram, "u_foliageColor"),
               trunk: gl.getUniformLocation(this.nearProgram, "u_trunkColor")
             };
@@ -1763,6 +1880,8 @@
               matrix: gl.getUniformLocation(this.spriteProgram, "u_matrix"),
               bounds: gl.getUniformLocation(this.spriteProgram, "u_heightBounds"),
               heightMap: gl.getUniformLocation(this.spriteProgram, "u_heightMap"),
+              treeLineFadeStart: gl.getUniformLocation(this.spriteProgram, "u_treeLineFadeStart"),
+              treeLineCutoff: gl.getUniformLocation(this.spriteProgram, "u_treeLineCutoff"),
               sprite: gl.getUniformLocation(this.spriteProgram, "u_sprite"),
               bearing: gl.getUniformLocation(this.spriteProgram, "u_bearing")
             };
@@ -1867,11 +1986,11 @@
                 raw = this.map.queryRenderedFeatures({ layers: ["Biomes"] }) || [];
               } catch (_) {}
             }
-            const features = [];
+
+            const allEntries = [];
             const seenFeatures = new Set();
             for (const feature of raw) {
               const biome = feature?.properties?.Biome || "";
-              if (!HF_BIOMES[biome]) continue;
               const geometry = feature?.geometry;
               if (!geometry || (geometry.type !== "Polygon" && geometry.type !== "MultiPolygon")) continue;
               const bounds = hfFeatureBounds(feature);
@@ -1887,9 +2006,21 @@
               ].join("|");
               if (seenFeatures.has(featureKey)) continue;
               seenFeatures.add(featureKey);
-              features.push({ feature, biome, bounds });
+              allEntries.push({ feature, biome, bounds });
             }
-            return features;
+
+            const desertBounds = allEntries
+              .filter(entry => entry.biome === "Hot desert")
+              .map(entry => entry.bounds);
+            const oasisPadWorld = HF_OASIS_DESERT_PROXIMITY_METERS / HF_WORLD_METERS;
+
+            return allEntries
+              .filter(entry => Boolean(HF_BIOMES[entry.biome]))
+              .map(entry => ({
+                ...entry,
+                oasisLike: entry.biome === "Wetland" &&
+                  desertBounds.some(desert => hfBoundsNear(entry.bounds, desert, oasisPadWorld))
+              }));
           },
 
           activeFrame() {
@@ -1933,6 +2064,8 @@
             const nearRadiusMeters = hfNearRadiusMetersForZoom(zoom);
             const frame = this.activeFrame();
             const centerMpu = frame.c.meterInMercatorCoordinateUnits();
+            const settlementPoints = hfCollectSettlementPoints(this.map);
+            const settlementIndex = hfBuildSettlementIndex(settlementPoints);
             const buildKey = [
               Math.floor(frame.x0 / HF_BASE_CELL_WORLD),
               Math.ceil(frame.x1 / HF_BASE_CELL_WORLD),
@@ -1943,7 +2076,8 @@
               Math.round(nearRadiusMeters),
               HF_SETTINGS.threeDStartZoom.toFixed(2),
               HF_SETTINGS.minZoom.toFixed(2),
-              features.length
+              features.length,
+              settlementPoints.length
             ].join(":");
             if (buildKey === this.lastBuildKey) return;
 
@@ -1988,10 +2122,12 @@
 
                   const lng = hfLng(x), lat = hfLat(y);
                   if (!featureContainsCoordinate(entry.feature, [lng, lat])) continue;
-                  seen.add(key);
 
                   const merc = new maplibregl.MercatorCoordinate(x, y, 0);
-                  const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4));
+                  if (hfNearSettlement(x, y, merc.meterInMercatorCoordinateUnits(), settlementIndex)) continue;
+                  seen.add(key);
+
+                  const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4), entry.oasisLike);
                   const type = HF_TYPES[typeIndex];
                   const scale = 0.78 + hfHash(ix, iy, 5) * 0.54;
                   const height = type.baseHeight * scale * HF_SETTINGS.treeSize;
@@ -2231,6 +2367,8 @@
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
               gl.uniform1i(this.nearLocations.heightMap, 0);
+              gl.uniform1f(this.nearLocations.treeLineFadeStart, snowTreeFadeStartExaggerated);
+              gl.uniform1f(this.nearLocations.treeLineCutoff, snowTreeCutoffExaggerated);
               gl.disable(gl.BLEND);
               gl.depthMask(true);
 
@@ -2249,6 +2387,8 @@
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
             gl.uniform1i(this.spriteLocations.heightMap, 0);
+            gl.uniform1f(this.spriteLocations.treeLineFadeStart, snowTreeFadeStartExaggerated);
+            gl.uniform1f(this.spriteLocations.treeLineCutoff, snowTreeCutoffExaggerated);
             gl.activeTexture(gl.TEXTURE1);
             gl.uniform1i(this.spriteLocations.sprite, 1);
             gl.uniform1f(this.spriteLocations.bearing, this.map.getBearing());
@@ -3479,10 +3619,10 @@
           "interpolate", ["linear"], ["elevation"],
           -100000, ["rgba", 246, 250, 255, 0.0],
           start,   ["rgba", 246, 250, 255, 0.0],
-          light,   ["rgba", 247, 251, 255, 0.10],
-          medium,  ["rgba", 248, 252, 255, 0.25],
-          heavy,   ["rgba", 250, 253, 255, 0.46],
-          peak,    ["rgba", 253, 254, 255, 0.68]
+          light,   ["rgba", 247, 251, 255, 0.12],
+          medium,  ["rgba", 248, 252, 255, 0.30],
+          heavy,   ["rgba", 250, 253, 255, 0.52],
+          peak,    ["rgba", 253, 254, 255, 0.72]
         ]);
         console.info("Adaptive snow DEM stops:", { start, light, medium, heavy, peak });
       }
@@ -3523,29 +3663,35 @@
         }
 
         elevations.sort((a, b) => a - b);
-        const q88 = percentile(elevations, 0.88);
-        const q93 = percentile(elevations, 0.93);
+        const q77 = percentile(elevations, 0.77);
+        const q80 = percentile(elevations, 0.80);
+        const q86 = percentile(elevations, 0.86);
+        const q91 = percentile(elevations, 0.91);
         const q96 = percentile(elevations, 0.96);
-        const q985 = percentile(elevations, 0.985);
-        const q998 = percentile(elevations, 0.998);
+        const q995 = percentile(elevations, 0.995);
         const max = elevations[elevations.length - 1];
 
-        // A percentile-based curve is robust to Bigane's custom DEM formula:
-        // only the upper mountain tail can become snowy, regardless of the
-        // absolute encoded heights. Keep the stops strictly increasing.
-        let start = q88;
-        let light = Math.max(q93, start + 1);
-        let medium = Math.max(q96, light + 1);
-        let heavy = Math.max(q985, medium + 1);
-        let peak = Math.max(q998, heavy + 1);
+        // Snow now starts at roughly the upper 20% of the loaded land-height
+        // distribution. The forest shader uses the same calibration: trees thin
+        // from q77 and are fully gone by the q80 snow line.
+        let start = q80;
+        let light = Math.max(q86, start + 1);
+        let medium = Math.max(q91, light + 1);
+        let heavy = Math.max(q96, medium + 1);
+        let peak = Math.max(q995, heavy + 1);
         if (peak > max) peak = max;
         if (peak <= heavy) peak = heavy + Math.max(1, (max - heavy) * 0.5);
 
         setSnowReliefStops([start, light, medium, heavy, peak]);
+        snowTreeFadeStartExaggerated = q77 * exaggeration;
+        snowTreeCutoffExaggerated = start * exaggeration;
+        hybridForestController?.map?.triggerRepaint?.();
         snowCalibrated = true;
         console.info("Snow calibrated from loaded Bigane DEM", {
           samples: elevations.length, exaggeration, min: elevations[0], max,
-          q88, q93, q96, q985, q998
+          q77, q80, q86, q91, q96, q995,
+          treeFadeStart: snowTreeFadeStartExaggerated,
+          treeCutoff: snowTreeCutoffExaggerated
         });
       }
 
