@@ -590,7 +590,7 @@
         zoom: 5.4,
         pitch: 0,
         bearing: 0,
-        minZoom: 4.15,
+        minZoom: 1,
         maxZoom: 22,
         maxPitch: 60,
         renderWorldCopies: false
@@ -824,6 +824,15 @@
         }
       }
 
+      function cityHas3DLandmark(cityName) {
+        const wanted = normalizeLocationName(cityName);
+        if (!wanted || typeof LANDMARKS_3D === "undefined") return false;
+        return LANDMARKS_3D.some(config => {
+          const names = [config.name, ...(config.aliases || [])];
+          return names.some(name => normalizeLocationName(name) === wanted);
+        });
+      }
+
       function refreshKankaCityMarkers() {
         if (!kankaLocationsLoaded || refreshingKankaMarkers || !map.loaded()) return;
         refreshingKankaMarkers = true;
@@ -834,6 +843,8 @@
           for (const feature of getVisibleCityFeatures()) {
             const cityName = feature.properties?.Burg;
             if (!cityName) continue;
+            // Cities represented by a 3D landmark do not also need a portrait bubble.
+            if (cityHas3DLandmark(cityName)) continue;
 
             const location = kankaLocationsByName.get(normalizeLocationName(cityName));
             if (!location) continue;
@@ -906,6 +917,25 @@
       function setLayerVisibility(layerId, visible) {
         if (!map.getLayer(layerId)) return;
         map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+      }
+
+      function improveCityLabelReadability() {
+        const configs = [
+          { id: "Town names", color: "#25231f", halo: "rgba(255,252,244,0.97)", width: 2.2, blur: 0.45 },
+          { id: "Capitals", color: "#171512", halo: "rgba(255,250,238,0.99)", width: 2.8, blur: 0.5 }
+        ];
+        for (const cfg of configs) {
+          const layer = map.getLayer(cfg.id);
+          if (!layer || layer.type !== "symbol") continue;
+          try {
+            map.setPaintProperty(cfg.id, "text-color", cfg.color);
+            map.setPaintProperty(cfg.id, "text-halo-color", cfg.halo);
+            map.setPaintProperty(cfg.id, "text-halo-width", cfg.width);
+            map.setPaintProperty(cfg.id, "text-halo-blur", cfg.blur);
+          } catch (error) {
+            console.warn(`Label styling overgeslagen voor ${cfg.id}:`, error);
+          }
+        }
       }
 
       function setupLayerSwitcher() {
@@ -1093,7 +1123,11 @@
       const HF_SETTINGS = { ...HF_DEFAULT_SETTINGS };
       function hfNormalizeSettings() {
         HF_SETTINGS.minZoom = Math.max(2, Math.min(12, Number(HF_SETTINGS.minZoom || HF_DEFAULT_SETTINGS.minZoom)));
-        HF_SETTINGS.threeDStartZoom = Math.max(HF_SETTINGS.minZoom, Math.min(14, Number(HF_SETTINGS.threeDStartZoom || HF_DEFAULT_SETTINGS.threeDStartZoom)));
+        // Keep 3D-startzoom independent. Previously a value such as 4 was silently
+        // clamped up to the generic forest minZoom (4.15).
+        HF_SETTINGS.threeDStartZoom = Math.max(2, Math.min(14, Number(HF_SETTINGS.threeDStartZoom || HF_DEFAULT_SETTINGS.threeDStartZoom)));
+        // The forest layer itself must be active by the time 3D trees are requested.
+        HF_SETTINGS.minZoom = Math.min(HF_SETTINGS.minZoom, HF_SETTINGS.threeDStartZoom);
         HF_SETTINGS.outerRadius = Math.max(1.2, Math.min(4, Number(HF_SETTINGS.outerRadius || HF_DEFAULT_SETTINGS.outerRadius)));
         HF_SETTINGS.fadeStart = Math.max(0.8, Math.min(HF_SETTINGS.outerRadius - 0.05, Number(HF_SETTINGS.fadeStart || HF_DEFAULT_SETTINGS.fadeStart)));
         HF_SETTINGS.treeSize = Math.max(0.1, Math.min(2, Number(HF_SETTINGS.treeSize || HF_DEFAULT_SETTINGS.treeSize)));
@@ -1850,6 +1884,10 @@
               Math.floor(frame.y0 / HF_BASE_CELL_WORLD),
               Math.ceil(frame.y1 / HF_BASE_CELL_WORLD),
               stride,
+              zoom.toFixed(2),
+              nearRadius.toFixed(3),
+              HF_SETTINGS.threeDStartZoom.toFixed(2),
+              HF_SETTINGS.minZoom.toFixed(2),
               features.length
             ].join(":");
             if (buildKey === this.lastBuildKey) return;
@@ -2095,21 +2133,26 @@
             gl.depthFunc(gl.LEQUAL);
             gl.disable(gl.CULL_FACE);
 
-            gl.useProgram(this.nearProgram);
-            gl.uniformMatrix4fv(this.nearLocations.matrix, false, matrix);
-            gl.uniform4fv(this.nearLocations.bounds, this.heightBounds);
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
-            gl.uniform1i(this.nearLocations.heightMap, 0);
-            gl.disable(gl.BLEND);
-            gl.depthMask(true);
+            const currentZoom = this.map.getZoom();
+            const draw3D = currentZoom >= HF_SETTINGS.threeDStartZoom;
 
-            for (const state of this.typeStates) {
-              if (!state.nearCount) continue;
-              gl.uniform3fv(this.nearLocations.foliage, state.type.foliage);
-              gl.uniform3fv(this.nearLocations.trunk, state.type.trunk);
-              this.bindNearAttributes(gl, state);
-              gl.drawArraysInstanced(gl.TRIANGLES, 0, state.nearVertexCount, state.nearCount);
+            if (draw3D) {
+              gl.useProgram(this.nearProgram);
+              gl.uniformMatrix4fv(this.nearLocations.matrix, false, matrix);
+              gl.uniform4fv(this.nearLocations.bounds, this.heightBounds);
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
+              gl.uniform1i(this.nearLocations.heightMap, 0);
+              gl.disable(gl.BLEND);
+              gl.depthMask(true);
+
+              for (const state of this.typeStates) {
+                if (!state.nearCount) continue;
+                gl.uniform3fv(this.nearLocations.foliage, state.type.foliage);
+                gl.uniform3fv(this.nearLocations.trunk, state.type.trunk);
+                this.bindNearAttributes(gl, state);
+                gl.drawArraysInstanced(gl.TRIANGLES, 0, state.nearVertexCount, state.nearCount);
+              }
             }
 
             gl.useProgram(this.spriteProgram);
@@ -3319,6 +3362,7 @@
 
         installBiomeTextures().catch(error => console.warn("Biome textures overgeslagen:", error));
         installBiomeSoftBlend();
+        improveCityLabelReadability();
 
         setupLayerSwitcher();
 
