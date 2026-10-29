@@ -1112,42 +1112,35 @@
       // ---------------------------------------------------------------------
       const ROCK_LAYER_ID = "bigane-highland-rock";
 
-      // V42 water: cached fixed Mercator patches. A worker bakes a visual
-      // distance-to-shore gradient; it is NOT measured bathymetry. No waves,
-      // reflection pass, terrain edits or per-frame generation are involved.
+      // V43 water: an explicit coast/lake mask is derived from Bigane's biome
+      // polygons and actual lake fill features. The GPU shades only masked
+      // water pixels, above base fills but under labels. There is no reliance
+      // on a named ocean-fill layer; oceans may be style background.
+      const BIGANE_WATER_LAYER_ID = 'bigane-water-v43';
+      const BIGANE_WATER_SIZE = 256;
+      const BIGANE_WATER_PAD = 64;
+      const BIGANE_WATER_EARTH = 40075016.68557849;
+      let waterPolishController = null;
+
       function biganeWaterWorker() {
-        const SIZE=256,PAD=48,N=SIZE+2*PAD;
-        const EARTH=40075016.68557849;
-        const mercY=lat=>{const r=Math.max(-85.05112878,Math.min(85.05112878,lat))*Math.PI/180;return(1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2;};
-        const rgb=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t);
-        const smooth=t=>{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);};
-        function distance(mask) {
-          const d=new Float32Array(N*N);const diagonal=Math.SQRT2;
-          for(let i=0;i<d.length;i++)d[i]=mask[i]?0:100000;
-          for(let y=0;y<N;y++)for(let x=0;x<N;x++){
-            const i=y*N+x;let v=d[i];
-            if(x>0)v=Math.min(v,d[i-1]+1);
-            if(y>0){v=Math.min(v,d[i-N]+1);if(x>0)v=Math.min(v,d[i-N-1]+diagonal);if(x<N-1)v=Math.min(v,d[i-N+1]+diagonal);}
-            d[i]=v;
-          }
-          for(let y=N-1;y>=0;y--)for(let x=N-1;x>=0;x--){
-            const i=y*N+x;let v=d[i];
-            if(x<N-1)v=Math.min(v,d[i+1]+1);
-            if(y<N-1){v=Math.min(v,d[i+N]+1);if(x<N-1)v=Math.min(v,d[i+N+1]+diagonal);if(x>0)v=Math.min(v,d[i+N-1]+diagonal);}
-            d[i]=v;
-          }
-          return d;
-        }
-        function polygons(ctx,features,x0,y0,span) {
-          for(const g of features){
-            const polys=g.type==='Polygon'?[g.coordinates]:g.type==='MultiPolygon'?g.coordinates:[];
-            for(const poly of polys){
+        const SIZE = 256, PAD = 64, N = SIZE + 2 * PAD;
+        const EARTH = 40075016.68557849;
+        const mercY = lat => {
+          const rad = Math.max(-85.05112878, Math.min(85.05112878, lat)) * Math.PI / 180;
+          return (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) * 0.5;
+        };
+        function drawPolygons(ctx, shapes, x0, y0, span) {
+          for (const shape of shapes || []) {
+            const polys = shape.type === 'Polygon' ? [shape.coordinates] :
+                          shape.type === 'MultiPolygon' ? shape.coordinates : [];
+            for (const rings of polys) {
               ctx.beginPath();
-              for(const ring of poly){
-                for(let i=0;i<ring.length;i++){
-                  const x=((ring[i][0]+180)/360-x0)/span*SIZE+PAD;
-                  const y=(mercY(ring[i][1])-y0)/span*SIZE+PAD;
-                  if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+              for (const ring of rings) {
+                for (let i=0; i<ring.length; i++) {
+                  const p = ring[i];
+                  const x = ((p[0] + 180) / 360 - x0) / span * SIZE + PAD;
+                  const y = (mercY(p[1]) - y0) / span * SIZE + PAD;
+                  if (i === 0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
                 }
                 ctx.closePath();
               }
@@ -1155,187 +1148,434 @@
             }
           }
         }
-        self.onmessage=async event=>{
-          const job=event.data;
-          try{
-            const span=1/Math.pow(2,job.z),x0=job.x*span,y0=job.y*span;
-            const land=new OffscreenCanvas(N,N),lctx=land.getContext('2d',{willReadFrequently:true});
-            lctx.fillStyle='#ffffff';polygons(lctx,job.land,x0,y0,span);
-            const lakes=new OffscreenCanvas(N,N),kctx=lakes.getContext('2d',{willReadFrequently:true});
-            kctx.fillStyle='#ffffff';polygons(kctx,job.lakes,x0,y0,span);
-            const la=lctx.getImageData(0,0,N,N).data,ka=kctx.getImageData(0,0,N,N).data;
-            const landMask=new Uint8Array(N*N),notLake=new Uint8Array(N*N);
-            for(let i=0;i<landMask.length;i++){
-              landMask[i]=(la[i*4+3]>128 && ka[i*4+3]<128)?1:0;
-              notLake[i]=ka[i*4+3]<128?1:0;
+        function edt(mask) {
+          const dist = new Float32Array(N*N);
+          const D = 1.4142135623730951;
+          for (let i=0; i<dist.length; i++) dist[i] = mask[i] ? 0 : 1e6;
+          for (let y=0; y<N; y++) for (let x=0; x<N; x++) {
+            const k = y*N+x; let d = dist[k];
+            if (x>0) d = Math.min(d,dist[k-1]+1);
+            if (y>0) {
+              d=Math.min(d,dist[k-N]+1);
+              if (x>0) d=Math.min(d,dist[k-N-1]+D);
+              if (x<N-1) d=Math.min(d,dist[k-N+1]+D);
             }
-            const shore=distance(landMask),lakeShore=distance(notLake);
-            const result=new OffscreenCanvas(SIZE,SIZE),ctx=result.getContext('2d');
-            const image=ctx.createImageData(SIZE,SIZE);
+            dist[k]=d;
+          }
+          for (let y=N-1; y>=0; y--) for (let x=N-1; x>=0; x--) {
+            const k=y*N+x; let d=dist[k];
+            if (x<N-1) d=Math.min(d,dist[k+1]+1);
+            if (y<N-1) {
+              d=Math.min(d,dist[k+N]+1);
+              if (x<N-1) d=Math.min(d,dist[k+N+1]+D);
+              if (x>0) d=Math.min(d,dist[k+N-1]+D);
+            }
+            dist[k]=d;
+          }
+          return dist;
+        }
+        self.onmessage = jobEvent => {
+          const job=jobEvent.data;
+          try {
+            const span=1/(2**job.z),x0=job.x*span,y0=job.y*span;
+            const land=new OffscreenCanvas(N,N),lc=land.getContext('2d',{willReadFrequently:true});
+            const lakes=new OffscreenCanvas(N,N),kc=lakes.getContext('2d',{willReadFrequently:true});
+            lc.fillStyle='#fff';kc.fillStyle='#fff';
+            drawPolygons(lc,job.land,x0,y0,span);
+            drawPolygons(kc,job.lakes,x0,y0,span);
+            const la=lc.getImageData(0,0,N,N).data;
+            const ka=kc.getImageData(0,0,N,N).data;
+            const coverage=new Uint8Array(N*N);
+            const landMask=new Uint8Array(N*N);
+            for(let i=0;i<coverage.length;i++) {
+              const insideLand=la[i*4+3]>127;
+              const insideLake=ka[i*4+3]>127;
+              landMask[i]=insideLand && !insideLake ? 1 : 0;
+              coverage[i]=insideLake ? 2 : insideLand ? 0 : 1;
+            }
+            // Enclosed holes in the biome-land union are also lakes. This
+            // covers maps where lakes are omitted from styled water layers.
+            const connected=new Uint8Array(N*N),stack=new Int32Array(N*N);
+            let head=0,tail=0;
+            function seed(i) { if(coverage[i]===1 && !connected[i]) {connected[i]=1;stack[tail++]=i;} }
+            for(let x=0;x<N;x++){seed(x);seed((N-1)*N+x);}
+            for(let y=0;y<N;y++){seed(y*N);seed(y*N+N-1);}
+            while(head<tail) {
+              const i=stack[head++],x=i%N,y=(i/N)|0;
+              if(x>0)seed(i-1);
+              if(x<N-1)seed(i+1);
+              if(y>0)seed(i-N);
+              if(y<N-1)seed(i+N);
+            }
+            for(let i=0;i<coverage.length;i++) if(coverage[i]===1 && !connected[i])coverage[i]=2;
+            const landDist=edt(landMask);
+            const nonLake=new Uint8Array(N*N);
+            for(let i=0;i<nonLake.length;i++)nonLake[i]=coverage[i]!==2?1:0;
+            const lakeDist=edt(nonLake);
+            const pixels=new Uint8Array(SIZE*SIZE*4);
+            let count=0,seaCount=0,lakeCount=0;
             for(let y=0;y<SIZE;y++){
               const wy=y0+(y+0.5)/SIZE*span;
               const lat=Math.atan(Math.sinh(Math.PI*(1-2*wy)));
               const mpp=EARTH*Math.cos(lat)*span/SIZE;
               for(let x=0;x<SIZE;x++){
-                const i=(y+PAD)*N+x+PAD,j=(y*SIZE+x)*4;
-                if(landMask[i])continue;
-                const isLake=ka[i*4+3]>128;
-                const metres=(isLake?lakeShore[i]:shore[i])*mpp;
-                const t=smooth(metres/(isLake?22000:100000));
-                let c=isLake?rgb([137,186,185],[79,133,151],t):rgb([153,201,199],[63,112,144],t);
-                const wx=(x0+(x+0.5)/SIZE*span)*EARTH,worldY=wy*EARTH;
-                // Low contrast, world-anchored static ripple + broad variation.
-                const wave=Math.sin((wx+worldY*0.36)/18000)*Math.cos((worldY-wx*0.21)/27000);
-                const fine=Math.sin((wx*0.65+worldY)/Math.max(2200,mpp*1.7));
-                const signal=(wave*1.5+fine*0.65)*(isLake?0.55:1);
-                c=c.map(v=>v+signal);
-                // A very thin highlight rather than a luminous coastal border.
-                if(!isLake && metres<mpp*1.25){const edge=0.08*(1-metres/(mpp*1.25));c=rgb(c,[218,237,231],edge);}
-                image.data[j]=Math.round(c[0]);image.data[j+1]=Math.round(c[1]);image.data[j+2]=Math.round(c[2]);image.data[j+3]=255;
+                const i=(y+PAD)*N+x+PAD,di=(y*SIZE+x)*4,type=coverage[i];
+                if(!type)continue;
+                const lake=type===2;
+                const metres=(lake?lakeDist[i]:landDist[i])*mpp;
+                const maxDepth=lake?26000:140000;
+                const normalized=Math.min(1,metres/maxDepth);
+                // Fade the ocean overlay into the background far offshore;
+                // the ocean background itself never needs replacing.
+                const outerFade=lake?1:Math.max(0,Math.min(1,(140000-metres)/36000));
+                if(outerFade<=0)continue;
+                pixels[di]=Math.round(normalized*255);
+                pixels[di+1]=lake?255:128;
+                pixels[di+2]=Math.round(Math.min(255,mpp/100*255));
+                pixels[di+3]=Math.round(outerFade*255);
+                count++;if(lake)lakeCount++;else seaCount++;
               }
             }
-            ctx.putImageData(image,0,0);
-            const blob=await result.convertToBlob({type:'image/png'});
-            const buffer=await blob.arrayBuffer();
-            self.postMessage({id:job.id,key:job.key,revision:job.revision,buffer},[buffer]);
-          }catch(error){self.postMessage({id:job.id,error:String(error?.message||error)});}
+            self.postMessage({key:job.key,sig:job.sig,width:SIZE,height:SIZE,
+              count,seaCount,lakeCount,buffer:pixels.buffer},[pixels.buffer]);
+          }catch(error){self.postMessage({key:job.key,sig:job.sig,error:String(error?.message||error)});}
         };
       }
 
-      let waterPolishController=null;
       function installWaterPolish() {
-        if(waterPolishController)return;
-        const originalLayers=(map.getStyle()?.layers||[]).slice();
-        const isWaterFill=l=>l?.type==='fill' && /water|ocean|(^|[ _-])sea|lake|river/i.test(`${l.id||''} ${l['source-layer']||''}`);
-        const waterFills=originalLayers.filter(isWaterFill);
-        const lakeFills=waterFills.filter(l=>/lake|lac/i.test(`${l.id} ${l['source-layer']||''}`));
-        const riverLines=originalLayers.filter(l=>l.type==='line'&&/river/i.test(`${l.id} ${l['source-layer']||''}`));
-        // Prefer inserting immediately above the native water base and BELOW
-        // opaque land. This also guards against incomplete offscreen land data.
-        const firstLand=originalLayers.find(l=>l.type==='fill'&&!isWaterFill(l)&&/biome|sandwich|land|terrain/i.test(l.id));
-        const firstSymbol=originalLayers.find(l=>l.type==='symbol');
-        const beforeId=firstLand?.id||firstSymbol?.id;
-        try{
-          for(const layer of waterFills){
-            const lake=lakeFills.some(l=>l.id===layer.id);
-            map.setPaintProperty(layer.id,'fill-color',lake?'#679da7':'#3f7090');
-            // A water-only pattern gives lakes some structure even in styles
-            // where their native fill is above the cached coastal overlay.
+        if(waterPolishController) return;
+        const styleLayers=(map.getStyle()?.layers||[]).slice();
+        const waterFillPattern=/water|ocean|(^|[ _-])sea|lake|river|reservoir|lac/i;
+        const waterFills=styleLayers.filter(l=>l.type==='fill' && waterFillPattern.test(`${l.id||''} ${l['source-layer']||''}`));
+        const lakeFills=waterFills.filter(l=>/lake|reservoir|lac/i.test(`${l.id||''} ${l['source-layer']||''}`));
+        const lakeLayers=lakeFills.map(l=>l.id).filter(id=>map.getLayer(id));
+        const biomeLayer=map.getLayer('Biomes');
+        if(!biomeLayer?.source){console.warn('Water v43: Biomes source not available');return;}
+
+        // Keep v42's water colours as-is. The new overlay is above fill
+        // layers (including the ocean background and lakes), but below labels.
+        const currentLayers=map.getStyle()?.layers||[];
+        const firstSymbol=currentLayers.find(l=>l.type==='symbol');
+        let insertBefore=firstSymbol?.id;
+        // Never hide behind an opaque fill. For styles without symbols,
+        // put the custom water overlay at the top of the map style.
+        const lastFill=currentLayers.reduce((last,l,i)=>l.type==='fill'?i:last,-1);
+        const symbolIndex=insertBefore?currentLayers.findIndex(l=>l.id===insertBefore):-1;
+        if(symbolIndex>=0 && symbolIndex<=lastFill) {
+          insertBefore=currentLayers.slice(lastFill+1).find(l=>l.type==='symbol')?.id;
+        }
+
+        const VERTEX=`#version 300 es
+          precision highp float;
+          in vec2 a_world;
+          in vec2 a_uv;
+          uniform mat4 u_matrix;
+          out vec2 v_uv;
+          out vec2 v_world;
+          void main(){v_uv=a_uv;v_world=a_world;gl_Position=u_matrix*vec4(a_world,0.0,1.0);}
+        `;
+        const FRAGMENT=`#version 300 es
+          precision highp float;
+          uniform sampler2D u_mask;
+          uniform float u_pitch;
+          uniform float u_bearing;
+          uniform float u_zoom;
+          uniform float u_meters;
+          in vec2 v_uv;
+          in vec2 v_world;
+          out vec4 fragColor;
+          float clamp01(float x){return clamp(x,0.0,1.0);}
+          float ease(float x){x=clamp01(x);return x*x*(3.0-2.0*x);}
+          void main(){
+            vec4 m=texture(u_mask,v_uv);
+            if(m.a<0.008)discard;
+            float lake=step(0.78,m.g);
+            float d=m.r;
+            // Ocean: turquoise along the shore -> blue mid-water -> deep blue.
+            // Inland lakes: a shorter, quieter depth gradient.
+            vec3 seaShallow=vec3(0.478,0.680,0.703);
+            vec3 seaMid=vec3(0.360,0.575,0.647);
+            vec3 seaDeep=vec3(0.247,0.439,0.565);
+            vec3 sea=mix(seaShallow,seaMid,ease(d*2.2));
+            sea=mix(sea,seaDeep,ease((d-0.24)/0.68));
+            vec3 lakeShallow=vec3(0.570,0.766,0.762);
+            vec3 lakeDeep=vec3(0.323,0.552,0.610);
+            vec3 lakeCol=mix(lakeShallow,lakeDeep,ease(d*1.7));
+            vec3 color=mix(sea,lakeCol,lake);
+
+            // Procedural world-fixed ripple normals react to the same light
+            // direction as the Three.js landmarks. No time-based animation.
+            vec2 p=v_world*u_meters*0.000075;
+            float a=dot(p,vec2(1.00,0.38));
+            float b=dot(p,vec2(-0.29,0.96))*2.15;
+            float c=dot(p,vec2(0.72,-0.69))*3.65;
+            float w1=sin(a),w2=cos(b),w3=sin(c);
+            vec2 g=vec2(1.0,0.38)*cos(a)*0.8 +
+                   vec2(-0.29,0.96)*(-sin(b))*0.62 +
+                   vec2(0.72,-0.69)*cos(c)*0.30;
+            float rippleScale=mix(1.0,0.36,lake);
+            vec3 normal=normalize(vec3(g*0.13*rippleScale,1.0));
+            vec3 sun=normalize(vec3(-0.55,-0.70,1.25));
+            vec3 view=normalize(vec3(sin(u_bearing)*sin(u_pitch),
+                                     -cos(u_bearing)*sin(u_pitch),cos(u_pitch)));
+            vec3 halfDir=normalize(sun+view);
+            float diffuse=max(dot(normal,sun),0.0);
+            float spec=pow(max(dot(normal,halfDir),0.0),16.0);
+            // Limit specular to textured wave crests: never a bright flat sheen.
+            float crest=0.35+0.65*clamp01(w1*0.35+w2*0.30+w3*0.20+0.55);
+            float fresnel=pow(1.0-max(dot(normal,view),0.0),3.0);
+            float glint=(spec*0.11*crest + fresnel*0.050)*(1.0-0.45*lake);
+            color+=vec3(glint*0.94,glint,glint*1.04);
+            color*=0.982+0.045*diffuse;
+
+            // One thin bright shoreline and a wider soft turquoise shelf.
+            // Distances are metres, so their widths do not become a fixed
+            // screen-space ellipse; a minimum ~1 pixel keeps coasts readable.
+            float distMeters=d*mix(140000.0,26000.0,lake);
+            float pixelWidth=max(300.0,0.85*mix(4000.0,2200.0,clamp01((u_zoom-3.0)/5.0)));
+            float line=1.0-ease(distMeters/(pixelWidth*1.5));
+            float glow=1.0-ease(distMeters/(pixelWidth*5.8));
+            vec3 shoreline=mix(vec3(0.72,0.90,0.87),vec3(0.82,0.94,0.91),lake);
+            color=mix(color,shoreline,0.26*line+0.075*glow);
+            // Fade gracefully near land tile mask edges. This entire pass
+            // is transparent on the land side, leaving hillshade untouched.
+            fragColor=vec4(clamp(color,0.0,1.0),m.a);
           }
-          const oceanBackground=originalLayers.find(l=>l.type==='background');
-          if(oceanBackground && !waterFills.some(l=>/ocean|sea/i.test(l.id))){
-            const col=String(oceanBackground.paint?.['background-color']||'');
-            // Bigane's sea is often the background behind the biome land union.
-            // Only use that convention when the Biomes land layer exists.
-            if(map.getLayer('Biomes'))map.setPaintProperty(oceanBackground.id,'background-color','#3f7090');
+        `;
+
+        const waterLayer={
+          id:BIGANE_WATER_LAYER_ID,type:'custom',renderingMode:'2d',enabled:true,
+          onAdd(mapObj,gl){
+            this.map=mapObj;this.gl=gl;this.buffers=new Map();
+            const shader=(type,src)=>{
+              const sh=gl.createShader(type);gl.shaderSource(sh,src);gl.compileShader(sh);
+              if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS)){
+                const err=gl.getShaderInfoLog(sh);gl.deleteShader(sh);throw new Error(err);
+              }
+              return sh;
+            };
+            const v=shader(gl.VERTEX_SHADER,VERTEX),f=shader(gl.FRAGMENT_SHADER,FRAGMENT);
+            const prog=gl.createProgram();gl.attachShader(prog,v);gl.attachShader(prog,f);gl.linkProgram(prog);
+            gl.deleteShader(v);gl.deleteShader(f);
+            if(!gl.getProgramParameter(prog,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(prog));
+            this.program=prog;
+            this.locations={
+              a_world:gl.getAttribLocation(prog,'a_world'),a_uv:gl.getAttribLocation(prog,'a_uv'),
+              matrix:gl.getUniformLocation(prog,'u_matrix'),mask:gl.getUniformLocation(prog,'u_mask'),
+              pitch:gl.getUniformLocation(prog,'u_pitch'),bearing:gl.getUniformLocation(prog,'u_bearing'),
+              zoom:gl.getUniformLocation(prog,'u_zoom'),meters:gl.getUniformLocation(prog,'u_meters')
+            };
+            this.vao=gl.createVertexArray();this.vertexBuffer=gl.createBuffer();
+            gl.bindVertexArray(this.vao);gl.bindBuffer(gl.ARRAY_BUFFER,this.vertexBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER,6*4*4,gl.DYNAMIC_DRAW);
+            gl.enableVertexAttribArray(this.locations.a_world);
+            gl.vertexAttribPointer(this.locations.a_world,2,gl.FLOAT,false,16,0);
+            gl.enableVertexAttribArray(this.locations.a_uv);
+            gl.vertexAttribPointer(this.locations.a_uv,2,gl.FLOAT,false,16,8);
+            gl.bindVertexArray(null);gl.bindBuffer(gl.ARRAY_BUFFER,null);
+          },
+          addTile(key,job){
+            if(!this.gl||!this.program)return;
+            const gl=this.gl;
+            const oldActive=gl.getParameter(gl.ACTIVE_TEXTURE);
+            gl.activeTexture(gl.TEXTURE0);
+            const old=gl.getParameter(gl.TEXTURE_BINDING_2D);
+            const prevAlign=gl.getParameter(gl.UNPACK_ALIGNMENT);
+            const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT,1);
+            gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,job.width,job.height,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(job.buffer));
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT,prevAlign);
+            gl.bindTexture(gl.TEXTURE_2D,old);gl.activeTexture(oldActive);
+            const prior=this.buffers.get(key);if(prior)gl.deleteTexture(prior.texture);
+            this.buffers.set(key,{texture:tex,z:job.z,x:job.x,y:job.y,used:performance.now(),sig:job.sig});
+            this.map.triggerRepaint();
+          },
+          deleteTile(key){const t=this.buffers.get(key);if(t&&this.gl)this.gl.deleteTexture(t.texture);this.buffers.delete(key);},
+          render(gl,options){
+            if(!this.enabled||!this.program||!this.buffers.size)return;
+            const matrix=options?.defaultProjectionData?.mainMatrix;
+            if(!matrix)return;
+            const prevProgram=gl.getParameter(gl.CURRENT_PROGRAM),prevVAO=gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+            const prevBuffer=gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+            const prevActive=gl.getParameter(gl.ACTIVE_TEXTURE);
+            gl.activeTexture(gl.TEXTURE0);const prevTexture=gl.getParameter(gl.TEXTURE_BINDING_2D);
+            const oldDepth=gl.isEnabled(gl.DEPTH_TEST),oldBlend=gl.isEnabled(gl.BLEND);
+            const oldDepthMask=gl.getParameter(gl.DEPTH_WRITEMASK);
+            const srcRGB=gl.getParameter(gl.BLEND_SRC_RGB),dstRGB=gl.getParameter(gl.BLEND_DST_RGB);
+            const srcAlpha=gl.getParameter(gl.BLEND_SRC_ALPHA),dstAlpha=gl.getParameter(gl.BLEND_DST_ALPHA);
+            gl.disable(gl.DEPTH_TEST);gl.depthMask(false);gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+            gl.useProgram(this.program);gl.bindVertexArray(this.vao);gl.bindBuffer(gl.ARRAY_BUFFER,this.vertexBuffer);
+            const loc=this.locations;
+            gl.uniformMatrix4fv(loc.matrix,false,matrix);
+            gl.uniform1i(loc.mask,0);
+            gl.uniform1f(loc.pitch,map.getPitch()*Math.PI/180);
+            gl.uniform1f(loc.bearing,map.getBearing()*Math.PI/180);
+            gl.uniform1f(loc.zoom,map.getZoom());
+            gl.uniform1f(loc.meters,BIGANE_WATER_EARTH);
+            const n=Math.pow;
+            for(const t of this.buffers.values()){
+              const span=1/n(2,t.z),x0=t.x*span,y0=t.y*span,x1=x0+span,y1=y0+span;
+              const verts=new Float32Array([
+                x0,y0,0,0, x1,y0,1,0, x0,y1,0,1,
+                x0,y1,0,1, x1,y0,1,0, x1,y1,1,1
+              ]);
+              gl.bufferSubData(gl.ARRAY_BUFFER,0,verts);
+              gl.bindTexture(gl.TEXTURE_2D,t.texture);
+              gl.drawArrays(gl.TRIANGLES,0,6);
+            }
+            gl.bindTexture(gl.TEXTURE_2D,prevTexture);gl.activeTexture(prevActive);
+            gl.bindBuffer(gl.ARRAY_BUFFER,prevBuffer);gl.bindVertexArray(prevVAO);
+            gl.useProgram(prevProgram);
+            gl.depthMask(oldDepthMask);
+            if(oldDepth)gl.enable(gl.DEPTH_TEST);else gl.disable(gl.DEPTH_TEST);
+            if(oldBlend)gl.enable(gl.BLEND);else gl.disable(gl.BLEND);
+            gl.blendFuncSeparate(srcRGB,dstRGB,srcAlpha,dstAlpha);
+          },
+          onRemove(mapObj,gl){
+            for(const key of [...this.buffers.keys()])this.deleteTile(key);
+            if(this.vertexBuffer)gl.deleteBuffer(this.vertexBuffer);
+            if(this.vao)gl.deleteVertexArray(this.vao);
+            if(this.program)gl.deleteProgram(this.program);
+            this.program=null;
           }
-          for(const layer of riverLines){
-            map.setPaintProperty(layer.id,'line-color','#9ccbd0');
-          }
-          // Keep genuine water polygon borders subtle. Never copy shipping
-          // routes or other lines just because their name happens to say sea.
-          waterFills.forEach((layer,i)=>{
-            const id=`bigane-water-shore-v42-${i}`;
-            if(map.getLayer(id))return;
-            map.addLayer({id,type:'line',source:layer.source,
-              ...(layer['source-layer']?{'source-layer':layer['source-layer']}:{}),
-              ...(layer.filter?{filter:layer.filter}:{}),
-              paint:{'line-color':'#c8e5df','line-width':['interpolate',['linear'],['zoom'],2,0.25,7,0.65,11,1.0],
-                'line-opacity':0.30,'line-blur':0.35}},firstSymbol?.id);
-          });
-        }catch(error){console.warn('Water styling:',error);}
+        };
+
+        try{map.addLayer(waterLayer,insertBefore);}catch(error){
+          console.error('Water v43 shader layer failed:',error);return;
+        }
+
+        const lakeOutlineLayers=[];
+        for(let i=0;i<lakeFills.length;i++){
+          const lake=lakeFills[i],id=`bigane-lake-outline-v43-${i}`;
+          try{
+            if(map.getLayer(id))continue;
+            map.addLayer({id,type:'line',source:lake.source,
+              ...(lake['source-layer']?{'source-layer':lake['source-layer']}:{}),
+              ...(lake.filter?{filter:lake.filter}:{}),
+              paint:{'line-color':'#b7ded9','line-opacity':0.53,
+                'line-width':['interpolate',['linear'],['zoom'],2,0.45,5,0.85,8,1.35],
+                'line-blur':0.45}},insertBefore);
+            lakeOutlineLayers.push(id);
+          }catch(error){console.warn('Lake shoreline fallback:',error);}
+        }
+
         if(typeof Worker==='undefined'||typeof OffscreenCanvas==='undefined'){
-          console.warn('Water gradient worker niet beschikbaar; eenvoudige waterkleuren blijven actief.');return;
+          console.warn('Water v43: OffscreenCanvas/Worker missing; lake outlines remain.');
+          waterPolishController={layer:waterLayer,getStats:()=>({active:0,error:'Worker unavailable'})};
+          return;
         }
         const workerURL=URL.createObjectURL(new Blob([`(${biganeWaterWorker.toString()})()`],{type:'text/javascript'}));
         let worker;
-        try{worker=new Worker(workerURL);}catch(error){URL.revokeObjectURL(workerURL);console.warn('Water worker:',error);return;}
+        try{worker=new Worker(workerURL);}catch(error){
+          console.warn('Water v43 worker startup failed:',error);URL.revokeObjectURL(workerURL);return;
+        }
         URL.revokeObjectURL(workerURL);
-        const cache=new Map(),active=new Map(),wanted=new Set();
-        let queue=[],busy=false,nextId=0,timer=null,revision='',removed=false;
-        const worldY=lat=>{const r=Math.max(-85.05112878,Math.min(85.05112878,lat))*Math.PI/180;return(1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2;};
-        const latY=y=>Math.atan(Math.sinh(Math.PI*(1-2*y)))*180/Math.PI;
-        const coords=(z,x,y)=>{const n=2**z;return [[x/n*360-180,latY(y/n)],[(x+1)/n*360-180,latY(y/n)],[(x+1)/n*360-180,latY((y+1)/n)],[x/n*360-180,latY((y+1)/n)]];};
-        const IDs=key=>'bigane-water-tile-'+key.replaceAll('/','-');
-        function removeActive(key){
-          const id=IDs(key);if(map.getLayer(id))map.removeLayer(id);if(map.getSource(id))map.removeSource(id);active.delete(key);
-        }
-        function show(key,item){
-          if(!wanted.has(key)||removed)return;
-          const id=IDs(key);
-          if(!map.getSource(id)){
-            map.addSource(id,{type:'image',url:item.url,coordinates:item.coordinates});
-            map.addLayer({id,type:'raster',source:id,paint:{'raster-opacity':1,'raster-fade-duration':180}},beforeId);
-          }else if(active.get(key)!==item.revision){
-            map.getSource(id).updateImage({url:item.url,coordinates:item.coordinates});
-          }
-          active.set(key,item.revision);item.used=performance.now();
-        }
-        function evict(){
-          const old=[...cache.entries()].filter(([k])=>!wanted.has(k)).sort((a,b)=>a[1].used-b[1].used);
-          while(cache.size>32&&old.length){const [k,item]=old.shift();URL.revokeObjectURL(item.url);cache.delete(k);}
-        }
-        function next(){if(busy||!queue.length||removed)return;busy=true;worker.postMessage(queue.shift());}
-        worker.onmessage=event=>{
-          busy=false;const r=event.data;
-          if(r.error){console.warn('Water tile overgeslagen:',r.error);next();return;}
-          const [z,x,y]=r.key.split('/').map(Number);
-          if(r.revision===revision&&wanted.has(r.key)){
-            const prior=cache.get(r.key);
-            const item={url:URL.createObjectURL(new Blob([r.buffer],{type:'image/png'})),coordinates:coords(z,x,y),revision:r.revision,used:performance.now()};
-            cache.set(r.key,item);show(r.key,item);
-            if(prior)setTimeout(()=>URL.revokeObjectURL(prior.url),5000);
-            evict();
-          }
-          next();
-        };
-        worker.onerror=error=>{busy=false;queue=[];console.warn('Water worker gestopt; basiswater blijft zichtbaar.',error.message);};
-        function geometryEntries(features){
+        let wanted=new Map(),queue=[],busy=false,stopped=false,timer=null,inFlight=null;
+        const cached=new Map(),pending=new Map();
+        const worldY=lat=>{const a=Math.max(-85.05112878,Math.min(85.05112878,lat))*Math.PI/180;
+          return(1-Math.log(Math.tan(a)+1/Math.cos(a))/Math.PI)/2;};
+        function featureEntries(features){
           const seen=new Set(),out=[];
           for(const f of features||[]){
             if(!['Polygon','MultiPolygon'].includes(f.geometry?.type))continue;
             const bounds=hfFeatureBounds(f);if(!bounds)continue;
             const first=f.geometry.type==='Polygon'?f.geometry.coordinates[0]?.[0]:f.geometry.coordinates[0]?.[0]?.[0];
-            const key=[bounds.west,bounds.south,bounds.east,bounds.north,first?.join(','),f.id||''].join('|');
-            if(seen.has(key))continue;seen.add(key);out.push({geometry:f.geometry,bounds,key});
+            const id=[bounds.west.toFixed(5),bounds.east.toFixed(5),bounds.south.toFixed(5),bounds.north.toFixed(5),
+              Number(first?.[0]||0).toFixed(5),Number(first?.[1]||0).toFixed(5),f.id||''].join('|');
+            if(seen.has(id))continue;seen.add(id);out.push({geometry:f.geometry,bounds,id});
           }
           return out;
         }
+        function hash(entries){
+          let h=2166136261;
+          for(const item of entries.map(x=>x.id).sort())for(let i=0;i<item.length;i++){
+            h^=item.charCodeAt(i);h=Math.imul(h,16777619);
+          }
+          return String(h>>>0);
+        }
+        function runNext(){
+          if(stopped||busy||!queue.length)return;
+          const job=queue.shift();
+          if(wanted.get(job.key)!==job.sig){runNext();return;}
+          busy=true;inFlight=job;worker.postMessage(job);
+        }
+        worker.onmessage=event=>{
+          busy=false;inFlight=null;const r=event.data;
+          pending.delete(r.key);
+          if(r.error){console.warn('Water tile v43:',r.key,r.error);runNext();return;}
+          if(wanted.get(r.key)===r.sig && r.count>0 && map.getLayer(BIGANE_WATER_LAYER_ID)){
+            waterLayer.addTile(r.key,{...r,...parseKey(r.key)});
+            cached.set(r.key,{sig:r.sig,used:performance.now()});
+          }
+          runNext();
+        };
+        worker.onerror=e=>{console.warn('Water v43 worker error:',e.message);busy=false;inFlight=null;queue=[];pending.clear();};
+        const parseKey=key=>{const [z,x,y]=key.split('/').map(Number);return {z,x,y};};
         function rebuild(){
-          if(removed||map.isMoving())return;
+          if(stopped||map.isMoving())return;
           const biome=map.getLayer('Biomes');if(!biome?.source)return;
           let land=[],lakes=[];
           try{
-            const sourceLayer=biome.sourceLayer||biome['source-layer'];
-            land=geometryEntries(map.querySourceFeatures(biome.source,sourceLayer?{sourceLayer}:undefined));
-            if(lakeFills.length)lakes=geometryEntries(map.queryRenderedFeatures({layers:lakeFills.map(l=>l.id)}));
-          }catch(error){console.warn('Water mask data:',error);return;}
+            const sl=biome['source-layer']||biome.sourceLayer;
+            land=featureEntries(map.querySourceFeatures(biome.source,sl?{sourceLayer:sl}:undefined));
+            if(lakeLayers.length)lakes=featureEntries(map.queryRenderedFeatures({layers:lakeLayers}));
+          }catch(error){console.warn('Water v43 feature collection:',error);return;}
           if(!land.length)return;
-          let h=2166136261;
-          for(const key of [...land,...lakes].map(e=>e.key).sort()) for(let i=0;i<key.length;i++){h^=key.charCodeAt(i);h=Math.imul(h,16777619);}
-          revision=String(h>>>0);
-          const b=map.getBounds();let z=Math.max(2,Math.min(6,Math.floor(map.getZoom())));
-          const region=level=>{const n=2**level;return {x0:Math.max(0,Math.floor((b.getWest()+180)/360*n)),x1:Math.min(n-1,Math.floor((b.getEast()+180)/360*n)),y0:Math.max(0,Math.floor(worldY(b.getNorth())*n)),y1:Math.min(n-1,Math.floor(worldY(b.getSouth())*n))};};
-          let area=region(z);while((area.x1-area.x0+1)*(area.y1-area.y0+1)>16&&z>0){z--;area=region(z);}
-          wanted.clear();queue=[];
+          const b=map.getBounds();
+          let z=Math.max(2,Math.min(6,Math.floor(map.getZoom())));
+          function region(level){const n=2**level;return {
+            x0:Math.max(0,Math.floor((b.getWest()+180)/360*n)),
+            x1:Math.min(n-1,Math.floor((b.getEast()+180)/360*n)),
+            y0:Math.max(0,Math.floor(worldY(b.getNorth())*n)),
+            y1:Math.min(n-1,Math.floor(worldY(b.getSouth())*n))
+          };}
+          let area=region(z);
+          while((area.x1-area.x0+1)*(area.y1-area.y0+1)>16&&z>1){z--;area=region(z);}
+          // Queued jobs may be replaced by a new pan/zoom selection. Do not
+          // keep them marked pending forever: only the in-flight job survives.
+          pending.clear();
+          if(inFlight)pending.set(inFlight.key,inFlight.sig);
+          const newWanted=new Map(),jobs=[];
           for(let y=area.y0;y<=area.y1;y++)for(let x=area.x0;x<=area.x1;x++){
-            const key=`${z}/${x}/${y}`;wanted.add(key);
-            const cached=cache.get(key);if(cached){show(key,cached);if(cached.revision===revision)continue;}
-            const n=2**z,pad=48/256/n;
-            const box={x0:x/n-pad,x1:(x+1)/n+pad,y0:y/n-pad,y1:(y+1)/n+pad};
-            const near=entries=>entries.filter(e=>hfBoundsNear(e.bounds,box,0)).map(e=>e.geometry);
-            queue.push({id:++nextId,key,revision,z,x,y,land:near(land),lakes:near(lakes)});
+            const key=`${z}/${x}/${y}`;
+            const n=2**z,pad=BIGANE_WATER_PAD/BIGANE_WATER_SIZE/n;
+            const rect={x0:x/n-pad,x1:(x+1)/n+pad,y0:y/n-pad,y1:(y+1)/n+pad};
+            const localLand=land.filter(e=>hfBoundsNear(e.bounds,rect,0));
+            const localLakes=lakes.filter(e=>hfBoundsNear(e.bounds,rect,0));
+            if(!localLand.length)continue;
+            const sig=hash([...localLand,...localLakes]);
+            newWanted.set(key,sig);
+            if(cached.get(key)?.sig===sig && waterLayer.buffers?.has(key))continue;
+            if(pending.get(key)===sig)continue;
+            jobs.push({key,z,x,y,sig,land:localLand.map(e=>e.geometry),lakes:localLakes.map(e=>e.geometry)});
           }
-          for(const key of [...active.keys()])if(!wanted.has(key))removeActive(key);
-          evict();next();
+          wanted=newWanted;
+          queue=jobs;
+          for(const key of [...(waterLayer.buffers?.keys()||[])]){
+            if(!wanted.has(key)){waterLayer.deleteTile(key);cached.delete(key);}
+          }
+          for(const key of [...cached.keys()])if(!wanted.has(key))cached.delete(key);
+          for(const j of jobs)pending.set(j.key,j.sig);
+          runNext();
         }
-        function schedule(){clearTimeout(timer);timer=setTimeout(rebuild,350);}
-        const onSource=e=>{if(e.sourceId===map.getLayer('Biomes')?.source&&e.isSourceLoaded)schedule();};
-        map.on('moveend',schedule);map.on('sourcedata',onSource);map.once('idle',schedule);
-        waterPolishController={refresh:schedule,getStats:()=>({active:active.size,cached:cache.size,queued:queue.length,busy}),
-          dispose(){removed=true;clearTimeout(timer);worker.terminate();map.off('moveend',schedule);map.off('sourcedata',onSource);
-            for(const key of [...active.keys()])removeActive(key);for(const item of cache.values())URL.revokeObjectURL(item.url);}};
-        map.once('remove',()=>waterPolishController?.dispose());schedule();
+        function schedule(){clearTimeout(timer);timer=setTimeout(rebuild,360);}
+        const sourceUpdated=e=>{if(e.sourceId===map.getLayer('Biomes')?.source&&e.isSourceLoaded)schedule();};
+        map.on('moveend',schedule);map.on('sourcedata',sourceUpdated);map.once('idle',schedule);
+        waterPolishController={layer:waterLayer,refresh:schedule,
+          getStats:()=>({active:waterLayer.buffers?.size||0,pending:pending.size,queued:queue.length,
+            busy,lakeSources:lakeLayers.length,coastSource:biomeLayer.source}),
+          dispose(){stopped=true;clearTimeout(timer);worker.terminate();map.off('moveend',schedule);
+            map.off('sourcedata',sourceUpdated);for(const key of [...(waterLayer.buffers?.keys()||[])])waterLayer.deleteTile(key);}
+        };
+        map.once('remove',()=>waterPolishController?.dispose());
+        // Non-destructive diagnostics for testing in the developer console.
+        window.biganeWaterDebug=()=>waterPolishController?.getStats();
+        schedule();
       }
 
       function installLandscapePolish() {
