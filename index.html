@@ -2300,6 +2300,7 @@
         {"name":"Khypir Tul","model":"./Dwarven_Lighthouse_v2_FixedRoof.glb","visible":true,"widthMeters":22000,"rotationDeg":180,"lng":-14.62005615234375,"lat":48.31973404047173,"positionMode":"absolute","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Khypir Tul","Khypir-Tul","Khypirtul"]},
         {"name":"Priddam","model":"./Priddam_MapLibre_Textured.glb","visible":true,"widthMeters":40000,"rotationDeg":180,"eastMeters":-55590,"northMeters":123930,"positionMode":"anchor","elevationOffsetMeters":-4100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Vinboa","model":"./Vinboa_Renaissance_GateRoofs_Fixed.glb","visible":true,"widthMeters":40000,"rotationDeg":-15,"lng":8.983181151128804,"lat":43.93356481107847,"positionMode":"absolute","elevationOffsetMeters":-3450,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Kibumun","model":"./Kibumun_Dwarven_Greenhouse_Farm.glb","visible":true,"widthMeters":32000,"rotationDeg":0,"eastMeters":0,"northMeters":0,"positionMode":"anchor","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Copper","model":"./Copper_MapLibre_Textured.glb","visible":true,"widthMeters":32000,"rotationDeg":0,"lng":-13.5186767578125,"lat":46.77937368205562,"positionMode":"absolute","elevationOffsetMeters":-3300,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0}
       ].map(config => ({
         visible: true,
@@ -3438,6 +3439,136 @@
       }
 
 
+      const SNOW_LAYER_ID = "bigane-snow-overlay";
+      const SNOW_SOURCE_ID = "bigane-snow-source";
+
+      function installSnowOverlay() {
+        if (map.getLayer(SNOW_LAYER_ID)) return;
+        if (!map.getSource("bigane-dem")) return;
+
+        // Snow is rendered ABOVE hillshade so it stays bright instead of turning grey.
+        // The mask is generated in a lightweight custom canvas source from terrain samples
+        // and uses height + local slope to keep steep rock faces less snow-covered.
+        const canvas = document.createElement("canvas");
+        canvas.width = 768;
+        canvas.height = 768;
+        canvas.style.display = "none";
+        document.body.appendChild(canvas);
+        const ctx = canvas.getContext("2d", { alpha: true });
+
+        let lastKey = "";
+        let raf = 0;
+
+        function smoothstep(a, b, x) {
+          const t = Math.max(0, Math.min(1, (x - a) / Math.max(1e-6, b - a)));
+          return t * t * (3 - 2 * t);
+        }
+
+        function rebuildSnow() {
+          raf = 0;
+          if (!map.getTerrain || !map.getTerrain()) return;
+          const b = map.getBounds();
+          const z = map.getZoom();
+          const key = [
+            b.getWest().toFixed(3), b.getSouth().toFixed(3),
+            b.getEast().toFixed(3), b.getNorth().toFixed(3),
+            z.toFixed(2)
+          ].join("|");
+          if (key === lastKey) return;
+          lastKey = key;
+
+          const w = canvas.width, h = canvas.height;
+          const img = ctx.createImageData(w, h);
+          const d = img.data;
+
+          // Sample at a coarse grid and bilinear-fill visually via the canvas scale.
+          const gw = 192, gh = 192;
+          const elev = new Float32Array(gw * gh);
+          const west=b.getWest(), east=b.getEast(), south=b.getSouth(), north=b.getNorth();
+          let minE=Infinity, maxE=-Infinity;
+          for (let gy=0; gy<gh; gy++) {
+            const lat = north + (south-north) * (gy/(gh-1));
+            for (let gx=0; gx<gw; gx++) {
+              const lng = west + (east-west) * (gx/(gw-1));
+              const e = map.queryTerrainElevation([lng,lat], { exaggerated: false });
+              const v = Number.isFinite(e) ? e : 0;
+              elev[gy*gw+gx]=v; minE=Math.min(minE,v); maxE=Math.max(maxE,v);
+            }
+          }
+
+          const range = Math.max(1, maxE-minE);
+          // Dynamic threshold makes snow target only the upper mountain mass in the current view.
+          const snowStart = minE + range * 0.62;
+          const snowFull  = minE + range * 0.84;
+
+          function sampleGrid(ix,iy){
+            ix=Math.max(0,Math.min(gw-1,ix)); iy=Math.max(0,Math.min(gh-1,iy));
+            return elev[iy*gw+ix];
+          }
+
+          const mini=document.createElement("canvas"); mini.width=gw; mini.height=gh;
+          const mctx=mini.getContext("2d",{alpha:true});
+          const mi=mctx.createImageData(gw,gh);
+          for(let gy=0; gy<gh; gy++){
+            for(let gx=0; gx<gw; gx++){
+              const i=(gy*gw+gx)*4;
+              const e=sampleGrid(gx,gy);
+              const dx=Math.abs(sampleGrid(gx+1,gy)-sampleGrid(gx-1,gy));
+              const dy=Math.abs(sampleGrid(gx,gy+1)-sampleGrid(gx,gy-1));
+              const slope=Math.min(1, Math.hypot(dx,dy)/Math.max(40, range*0.055));
+              const heightMask=smoothstep(snowStart,snowFull,e);
+              const slopeKeep=1.0-smoothstep(0.28,0.82,slope);
+              const n=((gx*73856093)^(gy*19349663))>>>0;
+              const noise=0.88 + ((n%1000)/1000)*0.18;
+              let a=Math.max(0,Math.min(1,heightMask*(0.35+0.65*slopeKeep)*noise));
+              if(a<0.035) a=0;
+              // Keep snow bright; only a subtle cool tint in denser snow.
+              mi.data[i]=244; mi.data[i+1]=248; mi.data[i+2]=252; mi.data[i+3]=Math.round(a*245);
+            }
+          }
+          mctx.putImageData(mi,0,0);
+          ctx.clearRect(0,0,w,h);
+          ctx.imageSmoothingEnabled=true;
+          ctx.imageSmoothingQuality="high";
+          ctx.drawImage(mini,0,0,w,h);
+
+          if (map.getSource(SNOW_SOURCE_ID)) {
+            map.getSource(SNOW_SOURCE_ID).setCoordinates([
+              [west,north],[east,north],[east,south],[west,south]
+            ]);
+          }
+        }
+
+        map.addSource(SNOW_SOURCE_ID, {
+          type: "canvas", canvas, animate: false, coordinates: [
+            [map.getBounds().getWest(), map.getBounds().getNorth()],
+            [map.getBounds().getEast(), map.getBounds().getNorth()],
+            [map.getBounds().getEast(), map.getBounds().getSouth()],
+            [map.getBounds().getWest(), map.getBounds().getSouth()]
+          ]
+        });
+
+        const beforeId = map.getLayer("Town names") ? "Town names" : undefined;
+        map.addLayer({
+          id: SNOW_LAYER_ID,
+          type: "raster",
+          source: SNOW_SOURCE_ID,
+          paint: {
+            "raster-opacity": 0.92,
+            "raster-fade-duration": 120
+          }
+        }, beforeId);
+
+        const schedule = () => {
+          if (raf) return;
+          raf = requestAnimationFrame(rebuildSnow);
+        };
+        map.on("moveend", schedule);
+        map.on("zoomend", schedule);
+        map.on("terrain", schedule);
+        setTimeout(schedule, 250);
+      }
+
       map.on("load", () => {
         status.textContent = "Bigane-style + GitHub terrain werkt. Kanka laden...";
 
@@ -3504,6 +3635,8 @@
           }
         }
 
+
+        installSnowOverlay();
 
         for (const layerId of ["Town names", "Capitals", "clickable"]) {
           if (!map.getLayer(layerId)) continue;
