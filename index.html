@@ -3459,16 +3459,113 @@
 
 
       const SNOW_LAYER_ID = "bigane-snow-overlay";
+      let snowCalibrated = false;
+      let snowCalibrationQueued = false;
+
+      function percentile(sorted, p) {
+        if (!sorted.length) return null;
+        const idx = Math.max(0, Math.min(sorted.length - 1, (sorted.length - 1) * p));
+        const lo = Math.floor(idx);
+        const hi = Math.ceil(idx);
+        if (lo === hi) return sorted[lo];
+        const t = idx - lo;
+        return sorted[lo] * (1 - t) + sorted[hi] * t;
+      }
+
+      function setSnowReliefStops(stops) {
+        if (!map.getLayer(SNOW_LAYER_ID)) return;
+        const [start, light, medium, heavy, peak] = stops;
+        map.setPaintProperty(SNOW_LAYER_ID, "color-relief-color", [
+          "interpolate", ["linear"], ["elevation"],
+          -100000, ["rgba", 246, 250, 255, 0.0],
+          start,   ["rgba", 246, 250, 255, 0.0],
+          light,   ["rgba", 247, 251, 255, 0.10],
+          medium,  ["rgba", 248, 252, 255, 0.25],
+          heavy,   ["rgba", 250, 253, 255, 0.46],
+          peak,    ["rgba", 253, 254, 255, 0.68]
+        ]);
+        console.info("Adaptive snow DEM stops:", { start, light, medium, heavy, peak });
+      }
+
+      function calibrateSnowOverlayFromLoadedTerrain() {
+        if (snowCalibrated || !map.getLayer(SNOW_LAYER_ID)) return;
+
+        const bounds = map.getBounds();
+        if (!bounds) return;
+        const west = bounds.getWest();
+        const east = bounds.getEast();
+        const south = bounds.getSouth();
+        const north = bounds.getNorth();
+        const terrain = map.getTerrain?.();
+        const exaggeration = Number(terrain?.exaggeration) > 0 ? Number(terrain.exaggeration) : 1.5;
+        const elevations = [];
+        const cols = 24;
+        const rows = 16;
+
+        for (let y = 0; y < rows; y++) {
+          const fy = (y + 0.5) / rows;
+          const lat = south + (north - south) * fy;
+          for (let x = 0; x < cols; x++) {
+            const fx = (x + 0.5) / cols;
+            const lng = west + (east - west) * fx;
+            const exaggeratedElevation = map.queryTerrainElevation([lng, lat]);
+            if (!Number.isFinite(exaggeratedElevation)) continue;
+            const rawElevation = exaggeratedElevation / exaggeration;
+            // Ignore water / deliberately lowered coast values. We only need the
+            // positive land-height distribution to find the mountain tail.
+            if (rawElevation > 0) elevations.push(rawElevation);
+          }
+        }
+
+        if (elevations.length < 60) {
+          console.info(`Snow calibration postponed: only ${elevations.length} terrain samples ready.`);
+          return;
+        }
+
+        elevations.sort((a, b) => a - b);
+        const q88 = percentile(elevations, 0.88);
+        const q93 = percentile(elevations, 0.93);
+        const q96 = percentile(elevations, 0.96);
+        const q985 = percentile(elevations, 0.985);
+        const q998 = percentile(elevations, 0.998);
+        const max = elevations[elevations.length - 1];
+
+        // A percentile-based curve is robust to Bigane's custom DEM formula:
+        // only the upper mountain tail can become snowy, regardless of the
+        // absolute encoded heights. Keep the stops strictly increasing.
+        let start = q88;
+        let light = Math.max(q93, start + 1);
+        let medium = Math.max(q96, light + 1);
+        let heavy = Math.max(q985, medium + 1);
+        let peak = Math.max(q998, heavy + 1);
+        if (peak > max) peak = max;
+        if (peak <= heavy) peak = heavy + Math.max(1, (max - heavy) * 0.5);
+
+        setSnowReliefStops([start, light, medium, heavy, peak]);
+        snowCalibrated = true;
+        console.info("Snow calibrated from loaded Bigane DEM", {
+          samples: elevations.length, exaggeration, min: elevations[0], max,
+          q88, q93, q96, q985, q998
+        });
+      }
+
+      function queueSnowCalibration() {
+        if (snowCalibrated || snowCalibrationQueued) return;
+        snowCalibrationQueued = true;
+        setTimeout(() => {
+          snowCalibrationQueued = false;
+          calibrateSnowOverlayFromLoadedTerrain();
+        }, 180);
+      }
 
       function installSnowOverlay() {
         if (map.getLayer(SNOW_LAYER_ID)) return;
         if (!map.getSource("bigane-dem")) return;
 
-        // GPU snow directly from the DEM. This avoids the old canvas/timing path:
-        // no queryTerrainElevation sampling, no empty first canvas upload, and no
-        // viewport cache that could permanently lock in an all-transparent mask.
-        // The existing hillshade is left untouched and the snow layer is inserted
-        // above it, immediately below town labels.
+        // Start fully transparent. Once enough DEM tiles are loaded we derive
+        // thresholds from the actual Bigane DEM rather than assuming Earth-like
+        // metre values. The snow remains partly transparent so the unchanged
+        // hillshade beneath it continues to model the mountain relief.
         const snowLayer = {
           id: SNOW_LAYER_ID,
           type: "color-relief",
@@ -3476,15 +3573,8 @@
           paint: {
             "color-relief-color": [
               "interpolate", ["linear"], ["elevation"],
-              -500, ["rgba", 246, 250, 255, 0.0],
-              1600, ["rgba", 246, 250, 255, 0.0],
-              2050, ["rgba", 246, 250, 255, 0.08],
-              2400, ["rgba", 247, 250, 255, 0.22],
-              2800, ["rgba", 248, 251, 255, 0.46],
-              3300, ["rgba", 249, 252, 255, 0.70],
-              3900, ["rgba", 251, 253, 255, 0.86],
-              4700, ["rgba", 253, 254, 255, 0.96],
-              6500, ["rgba", 255, 255, 255, 0.98]
+              -100000, ["rgba", 246, 250, 255, 0.0],
+              1000000, ["rgba", 246, 250, 255, 0.0]
             ],
             "color-relief-opacity": 1.0,
             "resampling": "linear"
@@ -3494,7 +3584,8 @@
         const beforeId = map.getLayer("Town names") ? "Town names" :
                          map.getLayer("Capitals") ? "Capitals" : undefined;
         map.addLayer(snowLayer, beforeId);
-        console.info("GPU snow overlay installed from bigane-dem color-relief.");
+        console.info("Adaptive GPU snow overlay installed; waiting for DEM calibration.");
+        queueSnowCalibration();
       }
 
       map.on("load", () => {
@@ -3579,7 +3670,10 @@
         loadKankaLocationsWithImages();
       });
 
-      map.on("idle", refreshKankaCityMarkers);
+      map.on("idle", () => {
+        queueSnowCalibration();
+        refreshKankaCityMarkers();
+      });
       map.on("zoom", updateKankaMarkerVisuals);
       map.on("zoomend", updateKankaMarkerVisuals);
 
