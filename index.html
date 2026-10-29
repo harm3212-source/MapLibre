@@ -1771,8 +1771,11 @@
             // during pan/zoom was the main performance regression in v18.
             // MapLibre still redraws these existing instances every frame, so
             // they move smoothly with the camera. Only reselect after release.
-            this.onMoveEnd = () => this.scheduleRebuild(false, 20);
-            this.onZoomEnd = () => this.scheduleRebuild(true, 20);
+            this.onMoveEnd = () => this.scheduleRebuild(false, 35);
+            // During wheel/pinch zoom MapLibre keeps rendering the existing buffers.
+            // Do not force a costly candidate rebuild for every small zoom gesture;
+            // after the gesture settles, rebuild only if the viewport/LOD key changed.
+            this.onZoomEnd = () => this.scheduleRebuild(false, 140);
             this.onIdle = () => {
               if (this.needsRebuild || !this.lastBuildKey) this.scheduleRebuild(false, 30);
             };
@@ -1974,6 +1977,7 @@
                     rotation,
                     seed,
                     spriteAlpha,
+                    outerAlpha,
                     nearAlpha,
                     norm
                   });
@@ -1993,16 +1997,32 @@
             for (const c of candidates) {
               const n = nearData[c.typeIndex];
               const s = spriteData[c.typeIndex];
+
+              // A sprite may only fade away when this exact candidate really
+              // receives a 3D instance. Previously nearAlpha was calculated
+              // before applying the global 3D cap. Once that cap filled up,
+              // candidates could lose their sprite without gaining a 3D tree,
+              // producing the visible empty ring between the two LOD zones.
+              let gotNear = false;
               if (c.nearAlpha > 0.02 && nearTotalSelected < HF_SETTINGS.nearCap) {
                 n.push(c.x, c.y, c.mpu, c.width, c.height, c.rotation, c.seed, c.nearAlpha);
                 nearTotalSelected++;
+                gotNear = true;
               }
-              if (c.spriteAlpha > 0.045 && spriteTotalSelected < HF_SETTINGS.spriteCap) {
+
+              // If no 3D instance was allocated, retain the full distant-tree
+              // coverage. If it was allocated, keep a generous crossfade
+              // overlap so there is no visual seam at the LOD boundary.
+              const effectiveSpriteAlpha = gotNear
+                ? Math.max(c.spriteAlpha, c.outerAlpha * (1 - c.nearAlpha) * 1.18)
+                : c.outerAlpha;
+
+              if (effectiveSpriteAlpha > 0.025 && spriteTotalSelected < HF_SETTINGS.spriteCap) {
                 s.push(
                   c.x, c.y, c.mpu,
                   c.width * spriteWidthMultiplier,
                   c.height * spriteHeightMultiplier,
-                  c.rotation, c.seed, c.spriteAlpha
+                  c.rotation, c.seed, Math.min(0.96, effectiveSpriteAlpha)
                 );
                 spriteTotalSelected++;
               }
