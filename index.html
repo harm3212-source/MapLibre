@@ -474,7 +474,7 @@
         </div>
         <div>
           <label for="forest-sprite-cap">Max. sprites</label>
-          <input id="forest-sprite-cap" type="number" step="1000" min="0" max="60000" />
+          <input id="forest-sprite-cap" type="number" step="1000" min="0" max="90000" />
         </div>
       </div>
       <button type="button" id="forest-reset">Herstel bosstandaarden</button>
@@ -1109,7 +1109,7 @@
       const HF_HEIGHTMAP_SIZE = 768;
       const HF_MAX_CANDIDATES = 80000;
       const HF_MAX_NEAR_CAP = 18000;
-      const HF_MAX_SPRITE_CAP = 60000;
+      const HF_MAX_SPRITE_CAP = 90000;
       const HF_DEFAULT_SETTINGS = Object.freeze({
         minZoom: 4.15,
         threeDStartZoom: 5,
@@ -1117,7 +1117,7 @@
         fadeStart: 1.38,
         treeSize: 0.68,
         nearCap: 8000,
-        spriteCap: 24000,
+        spriteCap: 36000,
         densityMultiplier: 1
       });
       const HF_SETTINGS = { ...HF_DEFAULT_SETTINGS };
@@ -1958,7 +1958,7 @@
                   // fully opaque sprite underneath a fully opaque 3D tree.
                   let nearAlpha = 0;
                   if (nearRadius > 0 && norm < nearRadius) {
-                    const transition = Math.min(0.18, nearRadius * 0.45);
+                    const transition = Math.min(0.30, nearRadius * 0.68);
                     const inner = Math.max(0, nearRadius - transition);
                     if (norm <= inner) nearAlpha = 1;
                     else {
@@ -1990,8 +1990,8 @@
             const nearData = HF_TYPES.map(() => []);
             const spriteData = HF_TYPES.map(() => []);
 
-            const spriteWidthMultiplier = zoom < 4.85 ? 2.55 : zoom < 6.25 ? 1.75 : 1.28;
-            const spriteHeightMultiplier = zoom < 4.85 ? 1.16 : zoom < 6.25 ? 1.10 : 1.04;
+            const spriteWidthMultiplier = (zoom < 4.85 ? 2.55 : zoom < 6.25 ? 1.75 : 1.28) * 1.50;
+            const spriteHeightMultiplier = (zoom < 4.85 ? 1.16 : zoom < 6.25 ? 1.10 : 1.04) * 1.50;
             let nearTotalSelected = 0;
             let spriteTotalSelected = 0;
             for (const c of candidates) {
@@ -2013,8 +2013,18 @@
               // If no 3D instance was allocated, retain the full distant-tree
               // coverage. If it was allocated, keep a generous crossfade
               // overlap so there is no visual seam at the LOD boundary.
+              // Softere asymmetrische LOD-overgang: laat 3D eerst opkomen terwijl
+              // de sprite nog vrijwel volledig zichtbaar blijft. Pas nadat de
+              // 3D-boom ongeveer 35% zichtbaar is, begint de sprite langzaam
+              // uit te faden. Dit voorkomt de abrupte "pop" tussen beide LODs.
+              let lodSpriteAlpha = 1;
+              if (gotNear) {
+                const fadeT = Math.max(0, Math.min(1, (c.nearAlpha - 0.35) / 0.65));
+                const smoothFade = fadeT * fadeT * (3 - 2 * fadeT);
+                lodSpriteAlpha = 1 - smoothFade;
+              }
               const effectiveSpriteAlpha = gotNear
-                ? Math.max(c.spriteAlpha, c.outerAlpha * (1 - c.nearAlpha) * 1.18)
+                ? c.outerAlpha * lodSpriteAlpha
                 : c.outerAlpha;
 
               if (effectiveSpriteAlpha > 0.025 && spriteTotalSelected < HF_SETTINGS.spriteCap) {
@@ -2406,6 +2416,9 @@
           for (const key of Object.keys(HF_SETTINGS)) {
             if (Number.isFinite(Number(data.forest[key]))) HF_SETTINGS[key] = Number(data.forest[key]);
           }
+          // Migrateer de oude standaardcap uit v27 naar de nieuwe ruimere cap.
+          // Andere expliciet gekozen waardes blijven intact.
+          if (Number(HF_SETTINGS.spriteCap) === 24000) HF_SETTINGS.spriteCap = 36000;
           hfNormalizeSettings();
         }
       }
