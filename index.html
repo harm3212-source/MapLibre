@@ -1112,116 +1112,230 @@
       // ---------------------------------------------------------------------
       const ROCK_LAYER_ID = "bigane-highland-rock";
 
-      function installWaterPolish() {
-        try {
-          const layers = map.getStyle()?.layers || [];
-          const waterCandidates = layers.filter(layer => {
-            if (!layer?.source) return false;
-            if (!['fill', 'line'].includes(layer.type)) return false;
-            const descriptor = `${layer.id || ''} ${layer['source-layer'] || ''}`;
-            return /water|ocean|sea|lake|river|coast|shore/i.test(descriptor) &&
-                   !/^bigane-water-/i.test(layer.id || '');
-          });
-
-          if (!waterCandidates.length) {
-            console.warn('Geen geschikte water/coast layers gevonden voor shoreline polish.');
-            return;
+      // V42 water: cached fixed Mercator patches. A worker bakes a visual
+      // distance-to-shore gradient; it is NOT measured bathymetry. No waves,
+      // reflection pass, terrain edits or per-frame generation are involved.
+      function biganeWaterWorker() {
+        const SIZE=256,PAD=48,N=SIZE+2*PAD;
+        const EARTH=40075016.68557849;
+        const mercY=lat=>{const r=Math.max(-85.05112878,Math.min(85.05112878,lat))*Math.PI/180;return(1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2;};
+        const rgb=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t);
+        const smooth=t=>{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);};
+        function distance(mask) {
+          const d=new Float32Array(N*N);const diagonal=Math.SQRT2;
+          for(let i=0;i<d.length;i++)d[i]=mask[i]?0:100000;
+          for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+            const i=y*N+x;let v=d[i];
+            if(x>0)v=Math.min(v,d[i-1]+1);
+            if(y>0){v=Math.min(v,d[i-N]+1);if(x>0)v=Math.min(v,d[i-N-1]+diagonal);if(x<N-1)v=Math.min(v,d[i-N+1]+diagonal);}
+            d[i]=v;
           }
-
-          const beforeId = map.getLayer('Town names') ? 'Town names' :
-                           map.getLayer('Capitals') ? 'Capitals' : undefined;
-          const usedKeys = new Set();
-          let added = 0;
-
-          for (const layer of waterCandidates) {
-            const sourceLayer = layer['source-layer'];
-            const key = [layer.source, sourceLayer || '', JSON.stringify(layer.filter || null)].join('|');
-            if (usedKeys.has(key)) continue;
-            usedKeys.add(key);
-
-            const common = {
-              source: layer.source,
-              ...(sourceLayer ? { 'source-layer': sourceLayer } : {}),
-              ...(layer.filter ? { filter: layer.filter } : {})
-            };
-
-            // Keep a restrained dark water tint when the source is polygonal.
-            if (layer.type === 'fill') {
-              const tintId = `bigane-water-depth-tint-${added}`;
-              if (!map.getLayer(tintId)) {
-                map.addLayer({
-                  id: tintId,
-                  type: 'fill',
-                  ...common,
-                  paint: {
-                    'fill-color': '#173d59',
-                    'fill-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.085, 6, 0.055, 10, 0.022]
-                  }
-                }, beforeId);
+          for(let y=N-1;y>=0;y--)for(let x=N-1;x>=0;x--){
+            const i=y*N+x;let v=d[i];
+            if(x<N-1)v=Math.min(v,d[i+1]+1);
+            if(y<N-1){v=Math.min(v,d[i+N]+1);if(x<N-1)v=Math.min(v,d[i+N+1]+diagonal);if(x>0)v=Math.min(v,d[i+N-1]+diagonal);}
+            d[i]=v;
+          }
+          return d;
+        }
+        function polygons(ctx,features,x0,y0,span) {
+          for(const g of features){
+            const polys=g.type==='Polygon'?[g.coordinates]:g.type==='MultiPolygon'?g.coordinates:[];
+            for(const poly of polys){
+              ctx.beginPath();
+              for(const ring of poly){
+                for(let i=0;i<ring.length;i++){
+                  const x=((ring[i][0]+180)/360-x0)/span*SIZE+PAD;
+                  const y=(mercY(ring[i][1])-y0)/span*SIZE+PAD;
+                  if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+                }
+                ctx.closePath();
+              }
+              ctx.fill('evenodd');
+            }
+          }
+        }
+        self.onmessage=async event=>{
+          const job=event.data;
+          try{
+            const span=1/Math.pow(2,job.z),x0=job.x*span,y0=job.y*span;
+            const land=new OffscreenCanvas(N,N),lctx=land.getContext('2d',{willReadFrequently:true});
+            lctx.fillStyle='#ffffff';polygons(lctx,job.land,x0,y0,span);
+            const lakes=new OffscreenCanvas(N,N),kctx=lakes.getContext('2d',{willReadFrequently:true});
+            kctx.fillStyle='#ffffff';polygons(kctx,job.lakes,x0,y0,span);
+            const la=lctx.getImageData(0,0,N,N).data,ka=kctx.getImageData(0,0,N,N).data;
+            const landMask=new Uint8Array(N*N),notLake=new Uint8Array(N*N);
+            for(let i=0;i<landMask.length;i++){
+              landMask[i]=(la[i*4+3]>128 && ka[i*4+3]<128)?1:0;
+              notLake[i]=ka[i*4+3]<128?1:0;
+            }
+            const shore=distance(landMask),lakeShore=distance(notLake);
+            const result=new OffscreenCanvas(SIZE,SIZE),ctx=result.getContext('2d');
+            const image=ctx.createImageData(SIZE,SIZE);
+            for(let y=0;y<SIZE;y++){
+              const wy=y0+(y+0.5)/SIZE*span;
+              const lat=Math.atan(Math.sinh(Math.PI*(1-2*wy)));
+              const mpp=EARTH*Math.cos(lat)*span/SIZE;
+              for(let x=0;x<SIZE;x++){
+                const i=(y+PAD)*N+x+PAD,j=(y*SIZE+x)*4;
+                if(landMask[i])continue;
+                const isLake=ka[i*4+3]>128;
+                const metres=(isLake?lakeShore[i]:shore[i])*mpp;
+                const t=smooth(metres/(isLake?22000:100000));
+                let c=isLake?rgb([137,186,185],[79,133,151],t):rgb([153,201,199],[63,112,144],t);
+                const wx=(x0+(x+0.5)/SIZE*span)*EARTH,worldY=wy*EARTH;
+                // Low contrast, world-anchored static ripple + broad variation.
+                const wave=Math.sin((wx+worldY*0.36)/18000)*Math.cos((worldY-wx*0.21)/27000);
+                const fine=Math.sin((wx*0.65+worldY)/Math.max(2200,mpp*1.7));
+                const signal=(wave*1.5+fine*0.65)*(isLake?0.55:1);
+                c=c.map(v=>v+signal);
+                // A very thin highlight rather than a luminous coastal border.
+                if(!isLake && metres<mpp*1.25){const edge=0.08*(1-metres/(mpp*1.25));c=rgb(c,[218,237,231],edge);}
+                image.data[j]=Math.round(c[0]);image.data[j+1]=Math.round(c[1]);image.data[j+2]=Math.round(c[2]);image.data[j+3]=255;
               }
             }
+            ctx.putImageData(image,0,0);
+            const blob=await result.convertToBlob({type:'image/png'});
+            const buffer=await blob.arrayBuffer();
+            self.postMessage({id:job.id,key:job.key,revision:job.revision,buffer},[buffer]);
+          }catch(error){self.postMessage({id:job.id,error:String(error?.message||error)});}
+        };
+      }
 
-            // Wide, soft cyan edge: deliberately visible from overview zooms.
-            const glowId = `bigane-water-shore-glow-${added}`;
-            if (!map.getLayer(glowId)) {
-              map.addLayer({
-                id: glowId,
-                type: 'line',
-                ...common,
-                paint: {
-                  'line-color': '#8fd6dc',
-                  'line-width': ['interpolate', ['linear'], ['zoom'],
-                    2, 0.95,
-                    4, 1.25,
-                    6, 1.65,
-                    8, 2.05,
-                    10, 2.55
-                  ],
-                  'line-opacity': ['interpolate', ['linear'], ['zoom'],
-                    2, 0.42,
-                    5, 0.52,
-                    8, 0.46,
-                    11, 0.34
-                  ],
-                  'line-blur': ['interpolate', ['linear'], ['zoom'], 2, 0.35, 8, 0.55, 11, 0.75]
-                }
-              }, beforeId);
-            }
-
-            // Thin bright inner edge gives the shoreline definition without
-            // turning it into a cartographic border.
-            const edgeId = `bigane-water-shore-edge-${added}`;
-            if (!map.getLayer(edgeId)) {
-              map.addLayer({
-                id: edgeId,
-                type: 'line',
-                ...common,
-                paint: {
-                  'line-color': '#e3f4f2',
-                  'line-width': ['interpolate', ['linear'], ['zoom'],
-                    2, 0.38,
-                    4, 0.48,
-                    6, 0.62,
-                    8, 0.78,
-                    10, 0.95
-                  ],
-                  'line-opacity': ['interpolate', ['linear'], ['zoom'],
-                    2, 0.56,
-                    5, 0.68,
-                    8, 0.60,
-                    11, 0.44
-                  ]
-                }
-              }, beforeId);
-            }
-            added++;
+      let waterPolishController=null;
+      function installWaterPolish() {
+        if(waterPolishController)return;
+        const originalLayers=(map.getStyle()?.layers||[]).slice();
+        const isWaterFill=l=>l?.type==='fill' && /water|ocean|(^|[ _-])sea|lake|river/i.test(`${l.id||''} ${l['source-layer']||''}`);
+        const waterFills=originalLayers.filter(isWaterFill);
+        const lakeFills=waterFills.filter(l=>/lake|lac/i.test(`${l.id} ${l['source-layer']||''}`));
+        const riverLines=originalLayers.filter(l=>l.type==='line'&&/river/i.test(`${l.id} ${l['source-layer']||''}`));
+        // Prefer inserting immediately above the native water base and BELOW
+        // opaque land. This also guards against incomplete offscreen land data.
+        const firstLand=originalLayers.find(l=>l.type==='fill'&&!isWaterFill(l)&&/biome|sandwich|land|terrain/i.test(l.id));
+        const firstSymbol=originalLayers.find(l=>l.type==='symbol');
+        const beforeId=firstLand?.id||firstSymbol?.id;
+        try{
+          for(const layer of waterFills){
+            const lake=lakeFills.some(l=>l.id===layer.id);
+            map.setPaintProperty(layer.id,'fill-color',lake?'#679da7':'#3f7090');
+            // A water-only pattern gives lakes some structure even in styles
+            // where their native fill is above the cached coastal overlay.
           }
-
-          console.info(`Water shoreline polish: ${added} water/coast source layers gekoppeld.`,
-            waterCandidates.map(layer => `${layer.id} [${layer.type}]`).join(', '));
-        } catch (error) {
-          console.warn('Water polish overgeslagen:', error);
+          const oceanBackground=originalLayers.find(l=>l.type==='background');
+          if(oceanBackground && !waterFills.some(l=>/ocean|sea/i.test(l.id))){
+            const col=String(oceanBackground.paint?.['background-color']||'');
+            // Bigane's sea is often the background behind the biome land union.
+            // Only use that convention when the Biomes land layer exists.
+            if(map.getLayer('Biomes'))map.setPaintProperty(oceanBackground.id,'background-color','#3f7090');
+          }
+          for(const layer of riverLines){
+            map.setPaintProperty(layer.id,'line-color','#9ccbd0');
+          }
+          // Keep genuine water polygon borders subtle. Never copy shipping
+          // routes or other lines just because their name happens to say sea.
+          waterFills.forEach((layer,i)=>{
+            const id=`bigane-water-shore-v42-${i}`;
+            if(map.getLayer(id))return;
+            map.addLayer({id,type:'line',source:layer.source,
+              ...(layer['source-layer']?{'source-layer':layer['source-layer']}:{}),
+              ...(layer.filter?{filter:layer.filter}:{}),
+              paint:{'line-color':'#c8e5df','line-width':['interpolate',['linear'],['zoom'],2,0.25,7,0.65,11,1.0],
+                'line-opacity':0.30,'line-blur':0.35}},firstSymbol?.id);
+          });
+        }catch(error){console.warn('Water styling:',error);}
+        if(typeof Worker==='undefined'||typeof OffscreenCanvas==='undefined'){
+          console.warn('Water gradient worker niet beschikbaar; eenvoudige waterkleuren blijven actief.');return;
         }
+        const workerURL=URL.createObjectURL(new Blob([`(${biganeWaterWorker.toString()})()`],{type:'text/javascript'}));
+        let worker;
+        try{worker=new Worker(workerURL);}catch(error){URL.revokeObjectURL(workerURL);console.warn('Water worker:',error);return;}
+        URL.revokeObjectURL(workerURL);
+        const cache=new Map(),active=new Map(),wanted=new Set();
+        let queue=[],busy=false,nextId=0,timer=null,revision='',removed=false;
+        const worldY=lat=>{const r=Math.max(-85.05112878,Math.min(85.05112878,lat))*Math.PI/180;return(1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2;};
+        const latY=y=>Math.atan(Math.sinh(Math.PI*(1-2*y)))*180/Math.PI;
+        const coords=(z,x,y)=>{const n=2**z;return [[x/n*360-180,latY(y/n)],[(x+1)/n*360-180,latY(y/n)],[(x+1)/n*360-180,latY((y+1)/n)],[x/n*360-180,latY((y+1)/n)]];};
+        const IDs=key=>'bigane-water-tile-'+key.replaceAll('/','-');
+        function removeActive(key){
+          const id=IDs(key);if(map.getLayer(id))map.removeLayer(id);if(map.getSource(id))map.removeSource(id);active.delete(key);
+        }
+        function show(key,item){
+          if(!wanted.has(key)||removed)return;
+          const id=IDs(key);
+          if(!map.getSource(id)){
+            map.addSource(id,{type:'image',url:item.url,coordinates:item.coordinates});
+            map.addLayer({id,type:'raster',source:id,paint:{'raster-opacity':1,'raster-fade-duration':180}},beforeId);
+          }else if(active.get(key)!==item.revision){
+            map.getSource(id).updateImage({url:item.url,coordinates:item.coordinates});
+          }
+          active.set(key,item.revision);item.used=performance.now();
+        }
+        function evict(){
+          const old=[...cache.entries()].filter(([k])=>!wanted.has(k)).sort((a,b)=>a[1].used-b[1].used);
+          while(cache.size>32&&old.length){const [k,item]=old.shift();URL.revokeObjectURL(item.url);cache.delete(k);}
+        }
+        function next(){if(busy||!queue.length||removed)return;busy=true;worker.postMessage(queue.shift());}
+        worker.onmessage=event=>{
+          busy=false;const r=event.data;
+          if(r.error){console.warn('Water tile overgeslagen:',r.error);next();return;}
+          const [z,x,y]=r.key.split('/').map(Number);
+          if(r.revision===revision&&wanted.has(r.key)){
+            const prior=cache.get(r.key);
+            const item={url:URL.createObjectURL(new Blob([r.buffer],{type:'image/png'})),coordinates:coords(z,x,y),revision:r.revision,used:performance.now()};
+            cache.set(r.key,item);show(r.key,item);
+            if(prior)setTimeout(()=>URL.revokeObjectURL(prior.url),5000);
+            evict();
+          }
+          next();
+        };
+        worker.onerror=error=>{busy=false;queue=[];console.warn('Water worker gestopt; basiswater blijft zichtbaar.',error.message);};
+        function geometryEntries(features){
+          const seen=new Set(),out=[];
+          for(const f of features||[]){
+            if(!['Polygon','MultiPolygon'].includes(f.geometry?.type))continue;
+            const bounds=hfFeatureBounds(f);if(!bounds)continue;
+            const first=f.geometry.type==='Polygon'?f.geometry.coordinates[0]?.[0]:f.geometry.coordinates[0]?.[0]?.[0];
+            const key=[bounds.west,bounds.south,bounds.east,bounds.north,first?.join(','),f.id||''].join('|');
+            if(seen.has(key))continue;seen.add(key);out.push({geometry:f.geometry,bounds,key});
+          }
+          return out;
+        }
+        function rebuild(){
+          if(removed||map.isMoving())return;
+          const biome=map.getLayer('Biomes');if(!biome?.source)return;
+          let land=[],lakes=[];
+          try{
+            const sourceLayer=biome.sourceLayer||biome['source-layer'];
+            land=geometryEntries(map.querySourceFeatures(biome.source,sourceLayer?{sourceLayer}:undefined));
+            if(lakeFills.length)lakes=geometryEntries(map.queryRenderedFeatures({layers:lakeFills.map(l=>l.id)}));
+          }catch(error){console.warn('Water mask data:',error);return;}
+          if(!land.length)return;
+          let h=2166136261;
+          for(const key of [...land,...lakes].map(e=>e.key).sort()) for(let i=0;i<key.length;i++){h^=key.charCodeAt(i);h=Math.imul(h,16777619);}
+          revision=String(h>>>0);
+          const b=map.getBounds();let z=Math.max(2,Math.min(6,Math.floor(map.getZoom())));
+          const region=level=>{const n=2**level;return {x0:Math.max(0,Math.floor((b.getWest()+180)/360*n)),x1:Math.min(n-1,Math.floor((b.getEast()+180)/360*n)),y0:Math.max(0,Math.floor(worldY(b.getNorth())*n)),y1:Math.min(n-1,Math.floor(worldY(b.getSouth())*n))};};
+          let area=region(z);while((area.x1-area.x0+1)*(area.y1-area.y0+1)>16&&z>0){z--;area=region(z);}
+          wanted.clear();queue=[];
+          for(let y=area.y0;y<=area.y1;y++)for(let x=area.x0;x<=area.x1;x++){
+            const key=`${z}/${x}/${y}`;wanted.add(key);
+            const cached=cache.get(key);if(cached){show(key,cached);if(cached.revision===revision)continue;}
+            const n=2**z,pad=48/256/n;
+            const box={x0:x/n-pad,x1:(x+1)/n+pad,y0:y/n-pad,y1:(y+1)/n+pad};
+            const near=entries=>entries.filter(e=>hfBoundsNear(e.bounds,box,0)).map(e=>e.geometry);
+            queue.push({id:++nextId,key,revision,z,x,y,land:near(land),lakes:near(lakes)});
+          }
+          for(const key of [...active.keys()])if(!wanted.has(key))removeActive(key);
+          evict();next();
+        }
+        function schedule(){clearTimeout(timer);timer=setTimeout(rebuild,350);}
+        const onSource=e=>{if(e.sourceId===map.getLayer('Biomes')?.source&&e.isSourceLoaded)schedule();};
+        map.on('moveend',schedule);map.on('sourcedata',onSource);map.once('idle',schedule);
+        waterPolishController={refresh:schedule,getStats:()=>({active:active.size,cached:cache.size,queued:queue.length,busy}),
+          dispose(){removed=true;clearTimeout(timer);worker.terminate();map.off('moveend',schedule);map.off('sourcedata',onSource);
+            for(const key of [...active.keys()])removeActive(key);for(const item of cache.values())URL.revokeObjectURL(item.url);}};
+        map.once('remove',()=>waterPolishController?.dispose());schedule();
       }
 
       function installLandscapePolish() {
@@ -1289,8 +1403,8 @@
       // Adds treeline/snow exclusion, settlement clearings, sparse grassland
       // trees, oasis palms on hot-desert lake shores, and a warmer-climate
       // palm distribution in tropical forests / wetlands / savanna near water.
-      // Close to the camera: low-poly 3D tree archetypes.
-      // Farther away: cheap crossed-plane sprite clusters.
+      // Close: detailed trees; middle: simplified groups with individual roots.
+      // Far: opaque cutout impostors; very small, flat groups use one grove image.
       // Both sample MapLibre's terrain height map on the GPU. A wide padded
       // viewport and an alpha fade keep the active forest boundary out of sight.
       const HF_LAYER_ID = "bigane-hybrid-forest";
@@ -1722,6 +1836,50 @@
         return new Float32Array(out);
       }
 
+      function hfSimpleTreeGeometry(typeId) {
+        const out = [];
+        if (typeId === "conifer") {
+          hfAddPrism(out, 0.065, 0, 0.70, 4, 0);
+          hfAddCone(out, 0.43, 0.18, 0.65, 5, 1);
+          hfAddCone(out, 0.34, 0.43, 0.83, 5, 1);
+          hfAddCone(out, 0.24, 0.66, 1.02, 5, 1);
+        } else if (typeId === "tropical") {
+          hfAddPrism(out, 0.075, 0, 0.58, 4, 0, -0.02, 0);
+          hfAddEllipsoid(out, [0, 0, 0.76], [0.48, 0.42, 0.28], 5, 2, 1, 0.10);
+          hfAddEllipsoid(out, [-0.22, 0.04, 0.72], [0.34, 0.31, 0.24], 5, 2, 1, 0.12);
+          hfAddEllipsoid(out, [0.24, -0.04, 0.75], [0.35, 0.30, 0.25], 5, 2, 1, 0.12);
+          hfAddEllipsoid(out, [0.06, 0.09, 0.93], [0.30, 0.28, 0.20], 5, 2, 1, 0.10);
+        } else if (typeId === "deepwood") {
+          hfAddPrism(out, 0.105, 0, 0.56, 4, 0, 0.01, -0.01);
+          hfAddEllipsoid(out, [0, 0, 0.73], [0.48, 0.44, 0.32], 5, 2, 1, 0.17);
+          hfAddEllipsoid(out, [-0.25, -0.03, 0.73], [0.34, 0.33, 0.27], 5, 2, 1, 0.17);
+          hfAddEllipsoid(out, [0.25, 0.07, 0.78], [0.36, 0.31, 0.28], 5, 2, 1, 0.17);
+          hfAddEllipsoid(out, [0.02, -0.04, 0.98], [0.31, 0.29, 0.21], 5, 2, 1, 0.15);
+        } else if (typeId === "savanna") {
+          hfAddPrism(out, 0.075, 0, 0.66, 4, 0);
+          hfAddEllipsoid(out, [0, 0, 0.79], [0.57, 0.47, 0.15], 6, 2, 1, 0.08);
+          hfAddEllipsoid(out, [-0.20, 0.02, 0.82], [0.34, 0.30, 0.12], 5, 2, 1, 0.08);
+          hfAddEllipsoid(out, [0.22, -0.02, 0.82], [0.35, 0.29, 0.12], 5, 2, 1, 0.08);
+        } else if (typeId === "wetland") {
+          hfAddPrism(out, 0.06, 0, 0.58, 4, 0);
+          hfAddEllipsoid(out, [0, 0, 0.68], [0.24, 0.22, 0.38], 5, 3, 1, 0.06);
+          hfAddEllipsoid(out, [0.02, -0.01, 0.89], [0.17, 0.16, 0.24], 5, 2, 1, 0.05);
+        } else if (typeId === "palm") {
+          hfAddPrism(out, 0.050, 0, 0.78, 4, 0);
+          hfAddEllipsoid(out, [0, 0, 0.80], [0.13, 0.13, 0.11], 5, 2, 1, 0.04);
+          for (let i = 0; i < 8; i++) {
+            hfAddPalmFrond(out, i / 8 * Math.PI * 2, 0.48 + (i % 2) * 0.07, 0.075, 0.84, 0.13 + (i % 3) * 0.025, 1);
+          }
+        } else {
+          hfAddPrism(out, 0.075, 0, 0.57, 4, 0);
+          hfAddEllipsoid(out, [0, 0, 0.75], [0.45, 0.40, 0.31], 5, 2, 1, 0.11);
+          hfAddEllipsoid(out, [-0.20, 0.04, 0.77], [0.32, 0.30, 0.25], 5, 2, 1, 0.11);
+          hfAddEllipsoid(out, [0.22, -0.04, 0.80], [0.34, 0.29, 0.26], 5, 2, 1, 0.11);
+          hfAddEllipsoid(out, [0.02, 0.02, 0.98], [0.28, 0.27, 0.20], 5, 2, 1, 0.10);
+        }
+        return new Float32Array(out);
+      }
+
       function hfSpriteGeometry() {
         // One camera-facing billboard. The texture itself is generated from the
         // exact same low-poly geometry as the near 3D archetype.
@@ -1740,151 +1898,74 @@
       }
 
 
-      function hfAlphaBleedCanvas(canvas, passes = 8) {
-        const ctx = canvas.getContext("2d", { willReadFrequently: true });
-        if (!ctx) return canvas;
-        const w = canvas.width;
-        const h = canvas.height;
-        const image = ctx.getImageData(0, 0, w, h);
-        const data = image.data;
-
-        // Extend the RGB colour of opaque tree pixels into transparent pixels,
-        // but keep alpha at zero. Linear filtering and generated mipmaps then
-        // sample tree colour at the silhouette instead of a bright/empty fringe.
-        for (let pass = 0; pass < passes; pass++) {
-          const src = new Uint8ClampedArray(data);
-          let changed = false;
-          for (let y = 0; y < h; y++) {
-            for (let x = 0; x < w; x++) {
-              const i = (y * w + x) * 4;
-              if (src[i + 3] !== 0) continue;
-              let r = 0, g = 0, b = 0, n = 0;
-              for (let oy = -1; oy <= 1; oy++) {
-                for (let ox = -1; ox <= 1; ox++) {
-                  if (ox === 0 && oy === 0) continue;
-                  const nx = x + ox;
-                  const ny = y + oy;
-                  if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-                  const j = (ny * w + nx) * 4;
-                  // In later passes, a transparent neighbour may already have
-                  // bled RGB but alpha remains zero, so use non-black RGB too.
-                  if (src[j + 3] === 0 && src[j] === 0 && src[j + 1] === 0 && src[j + 2] === 0) continue;
-                  r += src[j]; g += src[j + 1]; b += src[j + 2]; n++;
-                }
-              }
-              if (n) {
-                data[i] = Math.round(r / n);
-                data[i + 1] = Math.round(g / n);
-                data[i + 2] = Math.round(b / n);
-                data[i + 3] = 0;
-                changed = true;
-              }
+      function hfMakeAtlas(type, grove=false) {
+        const tileSize=256;
+        const atlas=document.createElement('canvas');atlas.width=tileSize*4;atlas.height=tileSize;
+        const context=atlas.getContext('2d');
+        const geometry=hfTreeGeometry(type.id);
+        const light=[-0.55,-0.70,1.25], lightLength=Math.hypot(...light);
+        // Four views of the same model rather than unrelated painted shapes.
+        const roots=grove ? [
+          {x:-0.50,y:-0.30,s:0.93,r:0.55}, {x:0.48,y:-0.28,s:0.84,r:1.15},
+          {x:-0.45,y:0.33,s:1.03,r:-0.35}, {x:0.47,y:0.30,s:0.96,r:0.12}
+        ] : [{x:0,y:0,s:1,r:0.55}];
+        for(let view=0;view<4;view++) {
+          const angle=view*Math.PI/2;
+          const right=[Math.cos(angle),Math.sin(angle)];
+          const forward=[-Math.sin(angle),Math.cos(angle)];
+          const triangles=[];
+          for(const root of roots) for(let i=0;i<geometry.length;i+=21) {
+            const points=[];let depth=0;const cs=Math.cos(root.r),sn=Math.sin(root.r);
+            for(let v=0;v<3;v++) {
+              const k=i+v*7;
+              const x=root.x+(geometry[k]*cs-geometry[k+1]*sn)*root.s;
+              const y=root.y+(geometry[k]*sn+geometry[k+1]*cs)*root.s;
+              const z=geometry[k+2]*root.s;
+              const d=x*forward[0]+y*forward[1];
+              points.push([x*right[0]+y*right[1],z+d*0.15]);depth+=d;
             }
+            const nx=geometry[i+3]*cs-geometry[i+4]*sn;
+            const ny=geometry[i+3]*sn+geometry[i+4]*cs;
+            const nz=geometry[i+5];
+            const shade=0.58+0.42*Math.max(0,(nx*light[0]+ny*light[1]+nz*light[2])/lightLength);
+            triangles.push({points,depth:depth/3,shade,part:geometry[i+6]});
           }
-          if (!changed) break;
-        }
-        ctx.putImageData(image, 0, 0);
-        return canvas;
-      }
-
-      function hfMakeSpriteCanvas(type) {
-        const canvas = document.createElement("canvas");
-        canvas.width = 256;
-        canvas.height = 256;
-        const context = canvas.getContext("2d");
-        context.clearRect(0, 0, canvas.width, canvas.height);
-        context.imageSmoothingEnabled = true;
-
-        const geometry = hfTreeGeometry(type.id);
-        const triangles = [];
-        const trees = [
-          { dx: 0.00, dy: 0.00, scale: 1.00, angle: 0.55, tint: 1.00 },
-          { dx: -0.43, dy: -0.03, scale: 0.72, angle: 1.15, tint: 0.92 },
-          { dx: 0.43, dy: 0.02, scale: 0.68, angle: -0.35, tint: 1.07 }
-        ];
-
-        for (const tree of trees) {
-          const cs = Math.cos(tree.angle), sn = Math.sin(tree.angle);
-          for (let offset = 0; offset < geometry.length; offset += 21) {
-            const points = [];
-            let averageDepth = 0;
-            let part = 0;
-            let normal = [0, 0, 1];
-            for (let vertex = 0; vertex < 3; vertex++) {
-              const base = offset + vertex * 7;
-              const x = geometry[base + 0];
-              const y = geometry[base + 1];
-              const z = geometry[base + 2];
-              const rotatedX = x * cs - y * sn;
-              const depth = x * sn + y * cs;
-              points.push({
-                x: tree.dx + rotatedX * tree.scale,
-                y: tree.dy + (z + depth * 0.10) * tree.scale
-              });
-              averageDepth += depth;
-              if (vertex === 0) {
-                normal = [geometry[base + 3], geometry[base + 4], geometry[base + 5]];
-                part = geometry[base + 6];
-              }
-            }
-            triangles.push({ points, depth: averageDepth / 3 + tree.dy, part, normal, tint: tree.tint });
+          let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+          for(const t of triangles) for(const [x,y] of t.points){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);}
+          const mx=12,my=10;
+          const sx=(tileSize-2*mx)/(maxX-minX),sy=(tileSize-2*my)/(maxY-minY);
+          triangles.sort((a,b)=>b.depth-a.depth);
+          context.save();context.beginPath();context.rect(view*tileSize,0,tileSize,tileSize);context.clip();
+          for(const t of triangles) {
+            const color=(t.part<0.5?type.trunk:type.foliage).map(n=>n*t.shade);
+            context.fillStyle=context.strokeStyle=hfColorCss(color,1);
+            context.lineWidth=0.65;context.lineJoin='round';
+            context.beginPath();
+            t.points.forEach(([x,y],i)=>{
+              const px=view*tileSize+mx+(x-minX)*sx,py=tileSize-my-(y-minY)*sy;
+              if(i===0)context.moveTo(px,py);else context.lineTo(px,py);
+            });
+            context.closePath();context.fill();context.stroke();
           }
+          context.restore();
         }
-
-        const allPoints = triangles.flatMap(triangle => triangle.points);
-        const minX = Math.min(...allPoints.map(point => point.x));
-        const maxX = Math.max(...allPoints.map(point => point.x));
-        const minY = Math.min(...allPoints.map(point => point.y));
-        const maxY = Math.max(...allPoints.map(point => point.y));
-        const margin = 14;
-        const scale = Math.min(
-          (canvas.width - margin * 2) / Math.max(0.001, maxX - minX),
-          (canvas.height - margin * 2) / Math.max(0.001, maxY - minY)
-        );
-        const toCanvas = point => ({
-          x: margin + (point.x - minX) * scale,
-          y: canvas.height - margin - (point.y - minY) * scale
-        });
-        const light = [-0.45, -0.60, 1.25];
-        const lightLength = Math.hypot(...light);
-        triangles.sort((a, b) => a.depth - b.depth);
-
-        for (const triangle of triangles) {
-          const n = triangle.normal;
-          const nLength = Math.hypot(n[0], n[1], n[2]) || 1;
-          const diffuse = 0.58 + 0.42 * Math.max(0,
-            (n[0] * light[0] + n[1] * light[1] + n[2] * light[2]) / (nLength * lightLength)
-          );
-          const source = triangle.part < 0.5 ? type.trunk : type.foliage;
-          const rgb = source.map(value => Math.max(0, Math.min(1, value * diffuse * triangle.tint)));
-          context.fillStyle = hfColorCss(rgb, 1);
-          const p0 = toCanvas(triangle.points[0]);
-          const p1 = toCanvas(triangle.points[1]);
-          const p2 = toCanvas(triangle.points[2]);
-          context.beginPath();
-          context.moveTo(p0.x, p0.y);
-          context.lineTo(p1.x, p1.y);
-          context.lineTo(p2.x, p2.y);
-          context.closePath();
-          context.fill();
-        }
-        return hfAlphaBleedCanvas(canvas, 8);
+        return atlas;
       }
 
       function hfCreateTexture(gl, canvas) {
-        const texture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, texture);
-        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-        // Canvas pixels are top-left-origin while the billboard UVs use
-        // (0,0) at the bottom. Flip once at upload so every tree sprite
-        // has its trunk at the terrain and crown above it.
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        const texture=gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D,texture);
+        const oldPre=gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
+        const oldFlip=gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,oldPre);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,oldFlip);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
         gl.generateMipmap(gl.TEXTURE_2D);
         return texture;
       }
@@ -1954,6 +2035,12 @@
         for (const ring of (waterRings || [])) {
           const pts = ring?.points || [];
           if (pts.length < 2) continue;
+          const bounds=ring.bounds;
+          if(bounds){
+            const dx=Math.max(bounds.x0-x,0,x-bounds.x1);
+            const dy=Math.max(bounds.y0-y,0,y-bounds.y1);
+            if(dx*dx+dy*dy>=bestSq)continue;
+          }
           for (let i = 1; i < pts.length; i++) {
             bestSq = Math.min(bestSq, hfPointSegmentDistanceSq(x, y, pts[i-1][0], pts[i-1][1], pts[i][0], pts[i][1]));
           }
@@ -2135,6 +2222,156 @@
         return 1;
       }
 
+      // V42: opaque, world-stable tree LOD. A tree is either present or absent;
+      // screen-pixel dithering and translucent tree interiors are never used.
+      const HF_GROUP_SIZE = 4;
+      const HF_DATA_WIDTH = 256;
+      const HF3D_COMMON = `
+        uniform mat4 u_matrix;
+        uniform vec4 u_heightBounds;
+        uniform highp sampler2D u_heightMap;
+        uniform highp sampler2D u_roots;
+        uniform vec2 u_viewSize;
+        uniform float u_zoom;
+        uniform float u_startZoom;
+        uniform float u_treeLineFadeStart;
+        uniform float u_treeLineCutoff;
+        uniform int u_mode;
+        struct Tree {
+          vec2 xy; float mpu; float width;
+          float height; float rotation; float seed; float valid;
+          float high; float near; float reserved1; float reserved2;
+        };
+        vec4 rootTexel(int n) { return texelFetch(u_roots, ivec2(n % 256, n / 256), 0); }
+        Tree readTree(int slot) {
+          int n = (gl_InstanceID * 4 + slot) * 3;
+          vec4 a = rootTexel(n), b = rootTexel(n+1), c = rootTexel(n+2);
+          return Tree(a.xy,a.z,a.w,b.x,b.y,b.z,b.w,c.x,c.y,c.z,c.w);
+        }
+        float rootElevation(Tree t) {
+          vec2 uv = (t.xy-u_heightBounds.xy)/(u_heightBounds.zw-u_heightBounds.xy);
+          return texture(u_heightMap,vec2(clamp(uv.x,0.0,1.0),1.0-clamp(uv.y,0.0,1.0))).r;
+        }
+        float stableRandom(float seed, float salt) {
+          return fract(seed * 173.37 + salt * 0.61803398875);
+        }
+        bool keepTree(Tree t, float h) {
+          float coverage = 1.0-smoothstep(u_treeLineFadeStart,u_treeLineCutoff,h);
+          return t.valid > 0.5 && stableRandom(t.seed,13.0) < coverage;
+        }
+        float screenHeight(Tree t, float h) {
+          vec4 p = u_matrix*vec4(t.xy,h*t.mpu,1.0);
+          if (p.w<=0.0) return 0.0;
+          // Vertical projection alone vanishes in a top-down view. Include the
+          // horizontal crown, which still occupies visible pixels from above.
+          vec4 q = u_matrix*vec4(t.xy,(h+t.height)*t.mpu,1.0);
+          vec4 r = u_matrix*vec4(t.xy+vec2(t.width*t.mpu,0.0),h*t.mpu,1.0);
+          vec4 s = u_matrix*vec4(t.xy+vec2(0.0,t.width*t.mpu),h*t.mpu,1.0);
+          vec2 pp = p.xy/p.w;
+          float vertical = q.w>0.0 ? length((q.xy/q.w-pp)*u_viewSize*0.5) : 0.0;
+          float horizontal = max(length((r.xy/max(r.w,1e-8)-pp)*u_viewSize*0.5),
+                                 length((s.xy/max(s.w,1e-8)-pp)*u_viewSize*0.5));
+          return max(vertical,horizontal);
+        }
+        int selectedLOD(Tree t,float h) {
+          if (u_zoom<u_startZoom || t.near<0.5) return 2;
+          float px = screenHeight(t,h);
+          float highLimit = mix(28.0,40.0,stableRandom(t.seed,3.0));
+          float midLimit = mix(7.0,11.0,stableRandom(t.seed,6.0));
+          if (t.high>0.5 && px>=highLimit) return 0;
+          if (px>=midLimit) return 1;
+          return 2;
+        }
+      `;
+
+      function hfMakeGroupedGeometry(geometry, isSprite=false) {
+        const stride = isSprite ? 5 : 7;
+        const result = new Float32Array(geometry.length/stride*(stride+1)*HF_GROUP_SIZE);
+        let p=0;
+        for(let slot=0;slot<HF_GROUP_SIZE;slot++) {
+          for(let i=0;i<geometry.length;i+=stride) {
+            for(let k=0;k<stride;k++) result[p++]=geometry[i+k];
+            result[p++]=slot;
+          }
+        }
+        return result;
+      }
+
+      function hfPackRootGroups(candidates) {
+        // Group existing roots, not new randomly placed copies. Coast edges,
+        // town clearings and the chosen biome mix therefore remain intact.
+        const buckets=new Map();
+        for(const t of candidates) {
+          const key=`${Math.floor(t.ix/(t.stride*2))}:${Math.floor(t.iy/(t.stride*2))}`;
+          if(!buckets.has(key)) buckets.set(key,[]);
+          buckets.get(key).push(t);
+        }
+        const groups=[];
+        for(const roots of buckets.values()) {
+          roots.sort((a,b)=>a.iy-b.iy || a.ix-b.ix);
+          for(let i=0;i<roots.length;i+=4) groups.push(roots.slice(i,i+4));
+        }
+        const rows=Math.max(1,Math.ceil(groups.length*4*3/HF_DATA_WIDTH));
+        const data=new Float32Array(HF_DATA_WIDTH*rows*4);
+        let index=0;
+        for(const group of groups) for(let slot=0;slot<4;slot++) {
+          const c=group[slot];
+          if(c) data.set([c.x,c.y,c.mpu,c.width,c.height,c.rotation,c.seed,1,
+                          c.highEligible?1:0,c.nearEligible?1:0,0,0],index);
+          index+=12;
+        }
+        return {data,rows,count:groups.length,trees:candidates.length};
+      }
+
+      function hfCreateRootTexture(gl) {
+        const tex=gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D,tex);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+        return tex;
+      }
+
+      function hfUploadRootGroups(gl,draw,candidates) {
+        const packed=hfPackRootGroups(candidates);
+        gl.bindTexture(gl.TEXTURE_2D,draw.roots);
+        const oldPre=gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
+        const oldFlip=gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,HF_DATA_WIDTH,packed.rows,0,gl.RGBA,gl.FLOAT,packed.data);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,oldPre);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,oldFlip);
+        draw.count=packed.count;
+        draw.trees=packed.trees;
+      }
+
+      function hfCreateDraw(gl,geometry,isSprite=false) {
+        const packed=hfMakeGroupedGeometry(geometry,isSprite);
+        const vao=gl.createVertexArray(), buffer=gl.createBuffer();
+        const oldVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+        gl.bindVertexArray(vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+        gl.bufferData(gl.ARRAY_BUFFER,packed,gl.STATIC_DRAW);
+        const stride=(isSprite?6:8)*4;
+        const attrs=isSprite?[[0,3,0],[1,2,3*4],[3,1,5*4]]:[[0,3,0],[1,3,3*4],[2,1,6*4],[3,1,7*4]];
+        for(const [loc,size,offset] of attrs) {
+          gl.enableVertexAttribArray(loc);
+          gl.vertexAttribPointer(loc,size,gl.FLOAT,false,stride,offset);
+          gl.vertexAttribDivisor(loc,0);
+        }
+        gl.bindVertexArray(oldVao);
+        return {vao,buffer,roots:hfCreateRootTexture(gl),count:0,trees:0,vertices:packed.length/(stride/4)};
+      }
+
+      function hfProgramLocations(gl,program,sprite=false) {
+        const names=['u_matrix','u_heightBounds','u_heightMap','u_roots','u_viewSize','u_zoom','u_startZoom',
+          'u_treeLineFadeStart','u_treeLineCutoff','u_mode','u_foliageColor','u_trunkColor'];
+        if(sprite) names.push('u_sprite','u_grove','u_bearing','u_pitch');
+        return Object.fromEntries(names.map(n=>[n,gl.getUniformLocation(program,n)]));
+      }
+
       function installHybridForestLayer() {
         if (map.getLayer(HF_LAYER_ID)) return;
 
@@ -2150,235 +2387,174 @@
           heightBounds: new Float32Array([0, 0, 1, 1]),
 
           onAdd(mapInstance, gl) {
-            this.map = mapInstance;
-            if (!(gl instanceof WebGL2RenderingContext)) {
-              throw new Error("De hybride boslaag vereist WebGL2.");
-            }
-            this.enabled = document.getElementById("toggle-forests")?.checked !== false;
-            gl.getExtension("EXT_color_buffer_float");
-            this.floatLinear = Boolean(gl.getExtension("OES_texture_float_linear"));
-
-            this.nearProgram = hfCompileProgram(gl, `
-              uniform mat4 u_matrix;
-              uniform vec4 u_heightBounds;
-              uniform sampler2D u_heightMap;
-              uniform float u_treeLineFadeStart;
-              uniform float u_treeLineCutoff;
-              uniform vec2 u_heightTexel;
-              in vec3 a_local;
-              in vec3 a_normal;
-              in float a_part;
-              in vec2 i_position;
-              in float i_mpu;
-              in float i_width;
-              in float i_height;
-              in float i_rotation;
-              in float i_seed;
-              in float i_alpha;
+            this.map=mapInstance; this.gl=gl;
+            if(!(gl instanceof WebGL2RenderingContext)) throw new Error('De boslaag vereist WebGL2.');
+            if(!gl.getExtension('EXT_color_buffer_float')) throw new Error('Geen float terrain-heightmap ondersteuning.');
+            this.floatLinear=Boolean(gl.getExtension('OES_texture_float_linear'));
+            this.containmentCache=new Map();
+            this.enabled=document.getElementById('toggle-forests')?.checked!==false;
+            this.nearProgram=hfCompileProgram(gl,HF3D_COMMON+`
+              layout(location=0) in vec3 a_local;
+              layout(location=1) in vec3 a_normal;
+              layout(location=2) in float a_part;
+              layout(location=3) in float a_slot;
               out vec3 v_normal;
-              out float v_part;
-              out float v_seed;
-              out float v_alpha;
-
+              flat out float v_seed;
+              flat out float v_part;
               void main() {
-                float cs = cos(i_rotation);
-                float sn = sin(i_rotation);
-                mat2 rot = mat2(cs, -sn, sn, cs);
-                vec2 localXY = rot * (a_local.xy * i_width);
-                vec2 worldXY = i_position + localXY * i_mpu;
-                vec2 uv = (i_position - u_heightBounds.xy) / (u_heightBounds.zw - u_heightBounds.xy);
-                uv = clamp(uv, vec2(0.0), vec2(1.0));
-                vec2 huv = vec2(uv.x, 1.0 - uv.y);
-                float elevation = texture(u_heightMap, huv).r;
-                float zMeters = elevation - i_height * 0.055 + a_local.z * i_height;
-                gl_Position = u_matrix * vec4(worldXY, zMeters * i_mpu, 1.0);
-                v_normal = normalize(vec3(rot * a_normal.xy, a_normal.z));
-                v_part = a_part;
-                v_seed = i_seed;
-                float treeLineAlpha = 1.0 - smoothstep(u_treeLineFadeStart, u_treeLineCutoff, elevation);
-                v_alpha = i_alpha * treeLineAlpha;
+                Tree t=readTree(int(a_slot+0.5));
+                float h=rootElevation(t);
+                if(!keepTree(t,h) || selectedLOD(t,h)!=u_mode) {
+                  gl_Position=vec4(2.0,2.0,2.0,1.0); return;
+                }
+                float cs=cos(t.rotation), sn=sin(t.rotation);
+                mat2 rot=mat2(cs,sn,-sn,cs);
+                vec2 xy=t.xy+rot*a_local.xy*t.width*t.mpu;
+                float z=h+(-0.035+a_local.z)*t.height;
+                gl_Position=u_matrix*vec4(xy,z*t.mpu,1.0);
+                v_normal=normalize(vec3(rot*a_normal.xy/t.width,a_normal.z/t.height));
+                v_part=a_part; v_seed=t.seed;
               }
-            `, `
+            `,`
               uniform vec3 u_foliageColor;
               uniform vec3 u_trunkColor;
               in vec3 v_normal;
-              in float v_part;
-              in float v_seed;
-              in float v_alpha;
+              flat in float v_seed;
+              flat in float v_part;
               out vec4 fragColor;
-
-              float dither(vec2 position) {
-                return fract(52.9829189 * fract(dot(position, vec2(0.06711056, 0.00583715))));
-              }
-
               void main() {
-                if (v_alpha < 0.999 && dither(gl_FragCoord.xy) > v_alpha) discard;
-                vec3 lightDir = normalize(vec3(-0.55, -0.70, 1.25));
-                float diffuse = 0.54 + 0.46 * max(dot(normalize(v_normal), lightDir), 0.0);
-                float variation = fract(v_seed * 17.731) - 0.5;
-                vec3 foliage = u_foliageColor * (1.0 + variation * 0.22);
-                vec3 trunk = u_trunkColor * (1.0 + variation * 0.12);
-                vec3 base = mix(trunk, foliage, step(0.5, v_part));
-                fragColor = vec4(base * diffuse, 1.0);
+                vec3 light=normalize(vec3(-0.55,-0.70,1.25));
+                float shade=0.58+0.42*max(dot(normalize(v_normal),light),0.0);
+                float variation=1.0+(fract(v_seed*17.731)-0.5)*0.15;
+                vec3 color=mix(u_trunkColor,u_foliageColor,step(0.5,v_part));
+                fragColor=vec4(color*shade*variation,1.0);
               }
             `);
-
-            this.spriteProgram = hfCompileProgram(gl, `
-              uniform mat4 u_matrix;
-              uniform vec4 u_heightBounds;
-              uniform sampler2D u_heightMap;
-              uniform float u_treeLineFadeStart;
-              uniform float u_treeLineCutoff;
-              uniform vec2 u_heightTexel;
+            this.spriteProgram=hfCompileProgram(gl,HF3D_COMMON+`
               uniform float u_bearing;
-              in vec3 a_local;
-              in vec2 a_uv;
-              in vec2 i_position;
-              in float i_mpu;
-              in float i_width;
-              in float i_height;
-              in float i_rotation;
-              in float i_seed;
-              in float i_alpha;
+              uniform float u_pitch;
+              layout(location=0) in vec3 a_local;
+              layout(location=1) in vec2 a_uv;
+              layout(location=3) in float a_slot;
               out vec2 v_uv;
-              out float v_seed;
-              out float v_alpha;
-
+              flat out float v_seed;
+              flat out float v_grove;
               void main() {
-                float angle = radians(u_bearing);
-                vec2 right = vec2(cos(angle), sin(angle));
-                float widthJitter = 0.985 + 0.015 * sin(i_rotation * 3.0);
-                vec2 localXY = right * (a_local.x * i_width * widthJitter);
-                vec2 worldXY = i_position + localXY * i_mpu;
-                vec2 uv = (i_position - u_heightBounds.xy) / (u_heightBounds.zw - u_heightBounds.xy);
-                uv = clamp(uv, vec2(0.0), vec2(1.0));
-                vec2 huv = vec2(uv.x, 1.0 - uv.y);
-                float elevation = texture(u_heightMap, huv).r;
-                float zMeters = elevation - i_height * 0.045 + a_local.z * i_height;
-                gl_Position = u_matrix * vec4(worldXY, zMeters * i_mpu, 1.0);
-                v_uv = a_uv;
-                v_seed = i_seed;
-                float treeLineAlpha = 1.0 - smoothstep(u_treeLineFadeStart, u_treeLineCutoff, elevation);
-                v_alpha = i_alpha * treeLineAlpha;
+                int slot=int(a_slot+0.5);
+                Tree t=readTree(slot);
+                float elevation=rootElevation(t);
+                if(!keepTree(t,elevation) || selectedLOD(t,elevation)!=2) {
+                  gl_Position=vec4(2.0,2.0,2.0,1.0); return;
+                }
+                float b=radians(u_bearing), pitch=radians(u_pitch);
+                vec2 right=vec2(cos(b),sin(b));
+                vec3 up=vec3(sin(b)*cos(pitch),-cos(b)*cos(pitch),sin(pitch));
+                bool combine=true;
+                vec2 center=vec2(0.0);
+                float minElevation=1e20,maxElevation=-1e20,meanHeight=0.0;
+                float meanWidth=0.0;
+                for(int k=0;k<4;k++) {
+                  Tree q=readTree(k); float h=rootElevation(q);
+                  combine=combine && keepTree(q,h) && selectedLOD(q,h)==2 && screenHeight(q,h)<6.0;
+                  center+=q.xy*0.25;
+                  meanHeight+=q.height*0.25;
+                  meanWidth+=q.width*0.25;
+                  minElevation=min(minElevation,h); maxElevation=max(maxElevation,h);
+                }
+                combine=combine && (maxElevation-minElevation)<meanHeight*0.20;
+                float maxDistance=0.0;
+                for(int k=0;k<4;k++) {
+                  Tree q=readTree(k);
+                  maxDistance=max(maxDistance,length(q.xy-center)/max(t.mpu,1e-12));
+                }
+                combine=combine && maxDistance<meanHeight*2.2;
+                v_grove=combine?1.0:0.0;
+                if(combine && slot!=0) {gl_Position=vec4(2.0,2.0,2.0,1.0);return;}
+                vec2 position=t.xy;
+                float w=t.width*1.25;
+                float h=t.height*1.13;
+                float farScale=mix(1.0,1.5,1.0-smoothstep(3.0,12.0,screenHeight(t,elevation)));
+                if(combine) {
+                  position=center; elevation=minElevation;
+                  // One four-tree image only for tiny, nearly level groups.
+                  // Sloping groups retain separate rooted billboards.
+                  w=maxDistance*2.0+meanWidth*1.25;
+                  h=meanHeight*1.25+(maxElevation-minElevation)+maxDistance*0.40;
+                  farScale=1.0;
+                }
+                w*=farScale; h*=farScale;
+                vec3 offset=vec3(right*(a_local.x*w),0.0)+up*((a_local.z-0.5)*h);
+                vec2 xy=position+offset.xy*t.mpu;
+                float z=elevation+h*0.48+offset.z;
+                gl_Position=u_matrix*vec4(xy,z*t.mpu,1.0);
+                v_uv=a_uv; v_seed=t.seed;
               }
-            `, `
+            `,`
               uniform sampler2D u_sprite;
+              uniform sampler2D u_grove;
+              uniform float u_bearing;
               in vec2 v_uv;
-              in float v_seed;
-              in float v_alpha;
+              flat in float v_seed;
+              flat in float v_grove;
               out vec4 fragColor;
-
               void main() {
-                vec4 texel = texture(u_sprite, v_uv);
-                float alpha = texel.a * v_alpha;
-                if (alpha < 0.075) discard;
-                float variation = 0.94 + (fract(v_seed * 11.917) - 0.5) * 0.12;
-                // Texture upload is premultiplied-alpha; keep the instance fade
-                // premultiplied as well so filtered edges cannot turn pale.
-                fragColor = vec4(texel.rgb * variation * v_alpha, alpha);
+                float view=mod(floor((u_bearing+45.0)/90.0)+4.0,4.0);
+                vec2 atlasUV=vec2((view+clamp(v_uv.x,0.002,0.998))/4.0,clamp(v_uv.y,0.002,0.998));
+                vec4 texel=v_grove>0.5?texture(u_grove,atlasUV):texture(u_sprite,atlasUV);
+                // Cut only the silhouette. Never fade the whole tree or write
+                // semi-transparent crown pixels into the terrain depth buffer.
+                if(texel.a<0.36) discard;
+                vec3 rgb=texel.rgb/max(texel.a,0.001);
+                float variation=1.0+(fract(v_seed*17.731)-0.5)*0.15;
+                fragColor=vec4(rgb*variation,1.0);
               }
             `);
-
-            this.nearLocations = {
-              matrix: gl.getUniformLocation(this.nearProgram, "u_matrix"),
-              bounds: gl.getUniformLocation(this.nearProgram, "u_heightBounds"),
-              heightMap: gl.getUniformLocation(this.nearProgram, "u_heightMap"),
-              treeLineFadeStart: gl.getUniformLocation(this.nearProgram, "u_treeLineFadeStart"),
-              treeLineCutoff: gl.getUniformLocation(this.nearProgram, "u_treeLineCutoff"),
-              heightTexel: gl.getUniformLocation(this.nearProgram, "u_heightTexel"),
-              foliage: gl.getUniformLocation(this.nearProgram, "u_foliageColor"),
-              trunk: gl.getUniformLocation(this.nearProgram, "u_trunkColor")
-            };
-            this.spriteLocations = {
-              matrix: gl.getUniformLocation(this.spriteProgram, "u_matrix"),
-              bounds: gl.getUniformLocation(this.spriteProgram, "u_heightBounds"),
-              heightMap: gl.getUniformLocation(this.spriteProgram, "u_heightMap"),
-              treeLineFadeStart: gl.getUniformLocation(this.spriteProgram, "u_treeLineFadeStart"),
-              treeLineCutoff: gl.getUniformLocation(this.spriteProgram, "u_treeLineCutoff"),
-              sprite: gl.getUniformLocation(this.spriteProgram, "u_sprite"),
-              bearing: gl.getUniformLocation(this.spriteProgram, "u_bearing")
-            };
-
-            this.heightMap = gl.createTexture();
-            gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
-            gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, HF_HEIGHTMAP_SIZE, HF_HEIGHTMAP_SIZE);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, this.floatLinear ? gl.LINEAR : gl.NEAREST);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, this.floatLinear ? gl.LINEAR : gl.NEAREST);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-            this.spriteGeometry = gl.createBuffer();
-            const spriteGeometry = hfSpriteGeometry();
-            this.spriteVertexCount = spriteGeometry.length / 5;
-            gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteGeometry);
-            gl.bufferData(gl.ARRAY_BUFFER, spriteGeometry, gl.STATIC_DRAW);
-
-            this.typeStates = HF_TYPES.map(type => {
-              const nearGeometry = hfTreeGeometry(type.id);
-              const nearGeometryBuffer = gl.createBuffer();
-              gl.bindBuffer(gl.ARRAY_BUFFER, nearGeometryBuffer);
-              gl.bufferData(gl.ARRAY_BUFFER, nearGeometry, gl.STATIC_DRAW);
-
-              const nearInstanceBuffer = gl.createBuffer();
-              gl.bindBuffer(gl.ARRAY_BUFFER, nearInstanceBuffer);
-              gl.bufferData(gl.ARRAY_BUFFER, HF_MAX_NEAR_CAP * 8 * 4, gl.DYNAMIC_DRAW);
-
-              const spriteInstanceBuffer = gl.createBuffer();
-              gl.bindBuffer(gl.ARRAY_BUFFER, spriteInstanceBuffer);
-              gl.bufferData(gl.ARRAY_BUFFER, HF_MAX_SPRITE_CAP * 8 * 4, gl.DYNAMIC_DRAW);
-
-              return {
-                type,
-                nearGeometryBuffer,
-                nearVertexCount: nearGeometry.length / 7,
-                nearInstanceBuffer,
-                nearCount: 0,
-                spriteInstanceBuffer,
-                spriteCount: 0,
-                spriteTexture: hfCreateTexture(gl, hfMakeSpriteCanvas(type))
-              };
-            });
-
-            // Terrain height rendering is expensive. Cache the height texture and
-            // refresh it only when forest bounds or the DEM actually change.
-            this.heightMapDirty = true;
-
-            this.scheduleRebuild = (force = false, delay = 80) => {
-              if (force) this.lastBuildKey = "";
+            this.nearLocations=hfProgramLocations(gl,this.nearProgram);
+            this.spriteLocations=hfProgramLocations(gl,this.spriteProgram,true);
+            this.heightMap=gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D,this.heightMap);
+            gl.texStorage2D(gl.TEXTURE_2D,1,gl.RGBA32F,HF_HEIGHTMAP_SIZE,HF_HEIGHTMAP_SIZE);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,this.floatLinear?gl.LINEAR:gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,this.floatLinear?gl.LINEAR:gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+            this.typeStates=HF_TYPES.map(type=>({
+              type,
+              high:hfCreateDraw(gl,hfTreeGeometry(type.id)),
+              mid:hfCreateDraw(gl,hfSimpleTreeGeometry(type.id)),
+              far:hfCreateDraw(gl,hfSpriteGeometry(),true),
+              spriteTexture:hfCreateTexture(gl,hfMakeAtlas(type,false)),
+              groveTexture:hfCreateTexture(gl,hfMakeAtlas(type,true))
+            }));
+            this.heightMapDirty=true; this.heightReady=false;
+            this.scheduleRebuild=(force=false,delay=160)=>{
+              if(force) this.lastBuildKey='';
               clearTimeout(this.rebuildTimer);
-              this.rebuildTimer = setTimeout(() => this.rebuild(gl), delay);
+              this.rebuildTimer=setTimeout(()=>{
+                if(this.map.isMoving?.()) {this.needsRebuild=true;return;}
+                try {this.rebuild(gl);} catch(error) {console.warn('Forest refresh failed:',error);}
+              },delay);
             };
-
-            // Keep the current, generously buffered forest instance set while
-            // the camera is moving. Rebuilding tens of thousands of candidates
-            // during pan/zoom was the main performance regression in v18.
-            // MapLibre still redraws these existing instances every frame, so
-            // they move smoothly with the camera. Only reselect after release.
-            this.onMoveEnd = () => this.scheduleRebuild(false, 35);
-            // During wheel/pinch zoom MapLibre keeps rendering the existing buffers.
-            // Do not force a costly candidate rebuild for every small zoom gesture;
-            // after the gesture settles, rebuild only if the viewport/LOD key changed.
-            this.onZoomEnd = () => this.scheduleRebuild(false, 140);
-            this.onIdle = () => {
-              if (this.needsRebuild || !this.lastBuildKey) this.scheduleRebuild(false, 30);
-            };
-            this.onSourceData = event => {
-              const biomeLayer = this.map.getLayer("Biomes");
-              if (event?.sourceId === "bigane-dem") {
-                this.heightMapDirty = true;
-                this.map.triggerRepaint();
-              }
-              if (event?.sourceId === biomeLayer?.source && event?.isSourceLoaded) {
-                this.needsRebuild = true;
-                this.scheduleRebuild(true, 130);
+            this.onMoveEnd=()=>{this.heightMapDirty=true;this.scheduleRebuild(false,160);};
+            this.onZoomEnd=()=>{this.heightMapDirty=true;this.scheduleRebuild(false,200);};
+            // Only the height texture changes while moving, at a bounded rate.
+            // Candidate selection and root buffers are not rebuilt mid-gesture.
+            this.onMove=()=>{this.heightMapDirty=true;};
+            this.onIdle=()=>{if(this.enabled && this.map.getZoom()>=HF_SETTINGS.minZoom && (this.needsRebuild||!this.lastBuildKey))this.scheduleRebuild(false,180);};
+            this.onSourceData=event=>{
+              const biomeLayer=this.map.getLayer('Biomes');
+              if(event?.sourceId==='bigane-dem') this.heightMapDirty=true;
+              if(event?.sourceId===biomeLayer?.source && event.isSourceLoaded) {
+                this.needsRebuild=true; this.scheduleRebuild(true,220);
               }
             };
-            mapInstance.on("moveend", this.onMoveEnd);
-            mapInstance.on("zoomend", this.onZoomEnd);
-            mapInstance.on("idle", this.onIdle);
-            mapInstance.on("sourcedata", this.onSourceData);
-            this.scheduleRebuild(true, 20);
-            hybridForestController = this;
+            mapInstance.on('move',this.onMove);
+            mapInstance.on('moveend',this.onMoveEnd);
+            mapInstance.on('zoomend',this.onZoomEnd);
+            mapInstance.on('idle',this.onIdle);
+            mapInstance.on('sourcedata',this.onSourceData);
+            this.scheduleRebuild(true,30);
+            hybridForestController=this;
           },
 
           collectBiomeFeatures() {
@@ -2419,7 +2595,7 @@
               ].join("|");
               if (seenFeatures.has(featureKey)) continue;
               seenFeatures.add(featureKey);
-              allEntries.push({ feature, biome, bounds });
+              allEntries.push({ feature, biome, bounds, cacheKey: featureKey });
             }
 
             // Lake-driven oasis detection. First prefer explicit style layers whose
@@ -2530,11 +2706,11 @@
           },
 
           rebuild(gl) {
+            const buildStarted=performance.now();
             this.needsRebuild = false;
             if (!this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) {
               for (const state of this.typeStates) {
-                state.nearCount = 0;
-                state.spriteCount = 0;
+                state.high.count=0;state.mid.count=0;state.far.count=0;
               }
               this.lastNearTotal = 0;
               this.lastSpriteTotal = 0;
@@ -2608,7 +2784,21 @@
                   if (norm > 1.30 && hfHash(ix, iy, 71) > 0.56) continue;
                   if (norm > 1.90 && hfHash(ix, iy, 72) > 0.34) continue;
                   const lng = hfLng(x), lat = hfLat(y);
-                  if (!featureContainsCoordinate(entry.feature, [lng, lat])) continue;
+                  // Cache the expensive polygon membership across camera moves.
+                  // The key includes the source fragment, not merely the biome name.
+                  const memoKey=`${entry.cacheKey || entry.biome}:${ix}:${iy}`;
+                  let inside=this.containmentCache.get(memoKey);
+                  if(inside===undefined){
+                    inside=featureContainsCoordinate(entry.feature,[lng,lat]);
+                    this.containmentCache.set(memoKey,inside);
+                    if(this.containmentCache.size>60000){
+                      let remove=10000;
+                      for(const oldKey of this.containmentCache.keys()){
+                        this.containmentCache.delete(oldKey);if(--remove<=0)break;
+                      }
+                    }
+                  }
+                  if(!inside)continue;
 
                   const merc = new maplibregl.MercatorCoordinate(x, y, 0);
                   const localMpu = merc.meterInMercatorCoordinateUnits();
@@ -2634,115 +2824,39 @@
                   const rotation = hfHash(ix, iy, 7) * Math.PI * 2;
                   const seed = hfHash(ix, iy, 8);
 
-                  let outerAlpha;
-                  if (norm <= HF_SETTINGS.fadeStart) {
-                    outerAlpha = 0.91;
-                  } else {
-                    outerAlpha = 0.91 * Math.max(0, (HF_SETTINGS.outerRadius - norm) / (HF_SETTINGS.outerRadius - HF_SETTINGS.fadeStart));
-                  }
-
-                  // True LOD crossfade: a position is no longer rendered as a
-                  // fully opaque sprite underneath a fully opaque 3D tree.
-                  let nearAlpha = 0;
-                  if (nearRadiusMeters > 0) {
-                    const dxMeters = (x - frame.c.x) / Math.max(1e-12, centerMpu);
-                    const dyMeters = (y - frame.c.y) / Math.max(1e-12, centerMpu);
-                    const distanceMeters = Math.hypot(dxMeters, dyMeters);
-                    const transitionMeters = Math.min(150000, nearRadiusMeters * 0.34);
-                    const innerMeters = Math.max(0, nearRadiusMeters - transitionMeters);
-                    if (distanceMeters <= innerMeters) nearAlpha = 1;
-                    else if (distanceMeters < nearRadiusMeters) {
-                      const t = Math.max(0, Math.min(1,
-                        (nearRadiusMeters - distanceMeters) /
-                        Math.max(1, nearRadiusMeters - innerMeters)
-                      ));
-                      nearAlpha = t * t * (3 - 2 * t);
-                    }
-                  }
-                  const spriteAlpha = outerAlpha * (1 - nearAlpha);
-
-                  candidates.push({
-                    x, y,
-                    mpu: merc.meterInMercatorCoordinateUnits(),
-                    typeIndex,
-                    width,
-                    height,
-                    rotation,
-                    seed,
-                    spriteAlpha,
-                    outerAlpha,
-                    nearAlpha,
-                    norm
-                  });
+                  // Thin the outer buffer by whole roots, never by making
+                  // every surviving crown partly transparent.
+                  const keepOuter=norm<=HF_SETTINGS.fadeStart ? 1 : Math.max(0,
+                    (HF_SETTINGS.outerRadius-norm)/(HF_SETTINGS.outerRadius-HF_SETTINGS.fadeStart));
+                  if(hfHash(ix,iy,91)>keepOuter) continue;
+                  candidates.push({x,y,mpu:localMpu,typeIndex,width,height,rotation,seed,norm,ix,iy,stride});
                   if (candidates.length >= HF_MAX_CANDIDATES) break featureLoop;
                 }
               }
             }
 
-            candidates.sort((a, b) => a.norm - b.norm);
-            const nearData = HF_TYPES.map(() => []);
-            const spriteData = HF_TYPES.map(() => []);
-
-            const spriteWidthMultiplier = (zoom < 4.85 ? 2.55 : zoom < 6.25 ? 1.75 : 1.28) * 1.50;
-            const spriteHeightMultiplier = (zoom < 4.85 ? 1.16 : zoom < 6.25 ? 1.10 : 1.04) * 1.50;
-            let nearTotalSelected = 0;
-            let spriteTotalSelected = 0;
-            for (const c of candidates) {
-              const n = nearData[c.typeIndex];
-              const s = spriteData[c.typeIndex];
-
-              // A sprite may only fade away when this exact candidate really
-              // receives a 3D instance. Previously nearAlpha was calculated
-              // before applying the global 3D cap. Once that cap filled up,
-              // candidates could lose their sprite without gaining a 3D tree,
-              // producing the visible empty ring between the two LOD zones.
-              let gotNear = false;
-              if (c.nearAlpha > 0.02 && nearTotalSelected < HF_SETTINGS.nearCap) {
-                n.push(c.x, c.y, c.mpu, c.width, c.height, c.rotation, c.seed, c.nearAlpha);
-                nearTotalSelected++;
-                gotNear = true;
-              }
-
-              // If no 3D instance was allocated, retain the full distant-tree
-              // coverage. If it was allocated, keep a generous crossfade
-              // overlap so there is no visual seam at the LOD boundary.
-              // Softere asymmetrische LOD-overgang: laat 3D eerst opkomen terwijl
-              // de sprite nog vrijwel volledig zichtbaar blijft. Pas nadat de
-              // 3D-boom ongeveer 35% zichtbaar is, begint de sprite langzaam
-              // uit te faden. Dit voorkomt de abrupte "pop" tussen beide LODs.
-              let lodSpriteAlpha = 1;
-              if (gotNear) {
-                const fadeT = Math.max(0, Math.min(1, (c.nearAlpha - 0.35) / 0.65));
-                const smoothFade = fadeT * fadeT * (3 - 2 * fadeT);
-                lodSpriteAlpha = 1 - smoothFade;
-              }
-              const effectiveSpriteAlpha = gotNear
-                ? c.outerAlpha * lodSpriteAlpha
-                : c.outerAlpha;
-
-              if (effectiveSpriteAlpha > 0.025 && spriteTotalSelected < HF_SETTINGS.spriteCap) {
-                s.push(
-                  c.x, c.y, c.mpu,
-                  c.width * spriteWidthMultiplier,
-                  c.height * spriteHeightMultiplier,
-                  c.rotation, c.seed, Math.min(0.96, effectiveSpriteAlpha)
-                );
-                spriteTotalSelected++;
-              }
+            candidates.sort((a,b)=>a.norm-b.norm);
+            const highData=HF_TYPES.map(()=>[]),midData=HF_TYPES.map(()=>[]),farData=HF_TYPES.map(()=>[]);
+            const can3D=zoom>=HF_SETTINGS.threeDStartZoom;
+            // The public 3D budget counts unique tree roots across BOTH 3D tiers.
+            // No per-type quota. High LOD is a subset of those same roots.
+            const max3D=can3D?HF_SETTINGS.nearCap:0;
+            const maxHigh=Math.min(max3D,Math.ceil(max3D*0.35));
+            let nearTotalSelected=0,highTotal=0,spriteTotalSelected=0;
+            const candidateLimit=Math.max(max3D,HF_SETTINGS.spriteCap);
+            for(const c of candidates.slice(0,candidateLimit)) {
+              c.nearEligible=nearTotalSelected<max3D;
+              c.highEligible=c.nearEligible && highTotal<maxHigh;
+              if(c.nearEligible){midData[c.typeIndex].push(c);nearTotalSelected++;}
+              if(c.highEligible){highData[c.typeIndex].push(c);highTotal++;}
+              if(spriteTotalSelected<HF_SETTINGS.spriteCap){farData[c.typeIndex].push(c);spriteTotalSelected++;}
             }
-
-            for (let i = 0; i < this.typeStates.length; i++) {
-              const state = this.typeStates[i];
-              const nearArray = new Float32Array(nearData[i]);
-              const spriteArray = new Float32Array(spriteData[i]);
-              state.nearCount = nearArray.length / 8;
-              state.spriteCount = spriteArray.length / 8;
-              gl.bindBuffer(gl.ARRAY_BUFFER, state.nearInstanceBuffer);
-              if (nearArray.length) gl.bufferSubData(gl.ARRAY_BUFFER, 0, nearArray);
-              gl.bindBuffer(gl.ARRAY_BUFFER, state.spriteInstanceBuffer);
-              if (spriteArray.length) gl.bufferSubData(gl.ARRAY_BUFFER, 0, spriteArray);
+            for(let i=0;i<this.typeStates.length;i++){
+              const state=this.typeStates[i];
+              hfUploadRootGroups(gl,state.high,highData[i]);
+              hfUploadRootGroups(gl,state.mid,midData[i]);
+              hfUploadRootGroups(gl,state.far,farData[i]);
             }
-
             const extra = HF_BASE_CELL_WORLD * 2.6;
             this.heightBounds[0] = frame.x0 - extra;
             this.heightBounds[1] = frame.y0 - extra;
@@ -2751,172 +2865,95 @@
             this.heightMapDirty = true;
             this.lastBuildKey = buildKey;
 
-            const nearTotal = this.typeStates.reduce((sum, state) => sum + state.nearCount, 0);
-            const spriteTotal = this.typeStates.reduce((sum, state) => sum + state.spriteCount, 0);
-            this.lastNearTotal = nearTotal;
-            this.lastSpriteTotal = spriteTotal;
-            this.lastBiomeFeatureCount = features.length;
-            console.info(`Hybrid forest: ${nearTotal}/${HF_SETTINGS.nearCap} 3D trees + ${spriteTotal}/${HF_SETTINGS.spriteCap} sprite clusters from ${features.length} biome polygons. 3D radius ${(nearRadiusMeters/1000).toFixed(0)} km.`);
+            this.lastNearTotal=nearTotalSelected;
+            this.lastHighTotal=highTotal;
+            this.lastSpriteTotal=spriteTotalSelected;
+            this.lastMidGroupTotal=this.typeStates.reduce((n,t)=>n+t.mid.count,0);
+            this.lastFarGroupTotal=this.typeStates.reduce((n,t)=>n+t.far.count,0);
+            this.lastBiomeFeatureCount=features.length;
+            this.lastRebuildMs=Math.round(performance.now()-buildStarted);
+            console.info(`Forest v42: ${nearTotalSelected} 3D roots (${highTotal} detailed), ${this.lastMidGroupTotal} middle batches, ${spriteTotalSelected} sprite roots. Rebuild ${this.lastRebuildMs}ms.`);
             this.map.triggerRepaint();
           },
 
           getStats() {
-            return {
-              near: this.lastNearTotal || 0,
-              sprites: this.lastSpriteTotal || 0,
-              biomes: this.lastBiomeFeatureCount || 0
+            return {near:this.lastNearTotal||0,sprites:this.lastSpriteTotal||0,biomes:this.lastBiomeFeatureCount||0,
+              detailedTrees:this.lastHighTotal||0,clusterBatches:this.lastMidGroupTotal||0,
+              spriteBatches:this.lastFarGroupTotal||0,rebuildMs:this.lastRebuildMs||0};
+          },
+          prerender(gl,options) {
+            if(!this.enabled||this.map.getZoom()<HF_SETTINGS.minZoom||!this.heightMapDirty)return;
+            if(!options.renderTerrainHeightMap)return;
+            const now=performance.now();
+            if(this.heightReady&&this.map.isMoving?.()&&now-(this.lastHeightRefresh||0)<120)return;
+            options.renderTerrainHeightMap({texture:this.heightMap,width:HF_HEIGHTMAP_SIZE,
+              height:HF_HEIGHTMAP_SIZE,bounds:this.heightBounds});
+            this.heightMapDirty=false;this.heightReady=true;this.lastHeightRefresh=now;
+          },
+          render(gl,options) {
+            if(!this.enabled||!this.heightReady||this.map.getZoom()<HF_SETTINGS.minZoom)return;
+            const matrix=options?.defaultProjectionData?.mainMatrix;if(!matrix)return;
+            const previousVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+            const previousActive=gl.getParameter(gl.ACTIVE_TEXTURE);
+            gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);gl.depthMask(true);
+            gl.disable(gl.BLEND);gl.disable(gl.CULL_FACE);
+            const canvas=this.map.getCanvas();
+            const prepare=(program,loc)=>{
+              gl.useProgram(program);
+              gl.uniformMatrix4fv(loc.u_matrix,false,matrix);
+              gl.uniform4fv(loc.u_heightBounds,this.heightBounds);
+              gl.uniform2f(loc.u_viewSize,canvas.clientWidth||canvas.width,canvas.clientHeight||canvas.height);
+              gl.uniform1f(loc.u_zoom,this.map.getZoom());
+              gl.uniform1f(loc.u_startZoom,HF_SETTINGS.threeDStartZoom);
+              gl.uniform1f(loc.u_treeLineFadeStart,snowTreeFadeStartExaggerated);
+              gl.uniform1f(loc.u_treeLineCutoff,snowTreeCutoffExaggerated);
+              gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.heightMap);
+              gl.uniform1i(loc.u_heightMap,0);gl.uniform1i(loc.u_roots,1);
             };
-          },
-
-          prerender(gl, options) {
-            if (!this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) return;
-            if (!this.heightMapDirty) return;
-            if (!options.renderTerrainHeightMap) return;
-            options.renderTerrainHeightMap({
-              texture: this.heightMap,
-              width: HF_HEIGHTMAP_SIZE,
-              height: HF_HEIGHTMAP_SIZE,
-              bounds: this.heightBounds
-            });
-            this.heightMapDirty = false;
-          },
-
-          bindNearAttributes(gl, state) {
-            const local = gl.getAttribLocation(this.nearProgram, "a_local");
-            const normal = gl.getAttribLocation(this.nearProgram, "a_normal");
-            const part = gl.getAttribLocation(this.nearProgram, "a_part");
-            gl.bindBuffer(gl.ARRAY_BUFFER, state.nearGeometryBuffer);
-            const geometryStride = 7 * 4;
-            gl.enableVertexAttribArray(local);
-            gl.vertexAttribPointer(local, 3, gl.FLOAT, false, geometryStride, 0);
-            gl.vertexAttribDivisor(local, 0);
-            gl.enableVertexAttribArray(normal);
-            gl.vertexAttribPointer(normal, 3, gl.FLOAT, false, geometryStride, 3 * 4);
-            gl.vertexAttribDivisor(normal, 0);
-            gl.enableVertexAttribArray(part);
-            gl.vertexAttribPointer(part, 1, gl.FLOAT, false, geometryStride, 6 * 4);
-            gl.vertexAttribDivisor(part, 0);
-
-            gl.bindBuffer(gl.ARRAY_BUFFER, state.nearInstanceBuffer);
-            const instanceStride = 8 * 4;
-            const attributes = [
-              ["i_position", 2, 0],
-              ["i_mpu", 1, 2 * 4],
-              ["i_width", 1, 3 * 4],
-              ["i_height", 1, 4 * 4],
-              ["i_rotation", 1, 5 * 4],
-              ["i_seed", 1, 6 * 4],
-              ["i_alpha", 1, 7 * 4]
-            ];
-            for (const [name, size, offset] of attributes) {
-              const location = gl.getAttribLocation(this.nearProgram, name);
-              gl.enableVertexAttribArray(location);
-              gl.vertexAttribPointer(location, size, gl.FLOAT, false, instanceStride, offset);
-              gl.vertexAttribDivisor(location, 1);
-            }
-          },
-
-          bindSpriteAttributes(gl, state) {
-            const local = gl.getAttribLocation(this.spriteProgram, "a_local");
-            const uv = gl.getAttribLocation(this.spriteProgram, "a_uv");
-            gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteGeometry);
-            const geometryStride = 5 * 4;
-            gl.enableVertexAttribArray(local);
-            gl.vertexAttribPointer(local, 3, gl.FLOAT, false, geometryStride, 0);
-            gl.vertexAttribDivisor(local, 0);
-            gl.enableVertexAttribArray(uv);
-            gl.vertexAttribPointer(uv, 2, gl.FLOAT, false, geometryStride, 3 * 4);
-            gl.vertexAttribDivisor(uv, 0);
-
-            gl.bindBuffer(gl.ARRAY_BUFFER, state.spriteInstanceBuffer);
-            const instanceStride = 8 * 4;
-            const attributes = [
-              ["i_position", 2, 0],
-              ["i_mpu", 1, 2 * 4],
-              ["i_width", 1, 3 * 4],
-              ["i_height", 1, 4 * 4],
-              ["i_rotation", 1, 5 * 4],
-              ["i_seed", 1, 6 * 4],
-              ["i_alpha", 1, 7 * 4]
-            ];
-            for (const [name, size, offset] of attributes) {
-              const location = gl.getAttribLocation(this.spriteProgram, name);
-              gl.enableVertexAttribArray(location);
-              gl.vertexAttribPointer(location, size, gl.FLOAT, false, instanceStride, offset);
-              gl.vertexAttribDivisor(location, 1);
-            }
-          },
-
-          render(gl, options) {
-            if (!this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) return;
-            const matrix = options?.defaultProjectionData?.mainMatrix;
-            if (!matrix) return;
-
-            gl.enable(gl.DEPTH_TEST);
-            gl.depthFunc(gl.LEQUAL);
-            gl.disable(gl.CULL_FACE);
-
-            const currentZoom = this.map.getZoom();
-            const draw3D = currentZoom >= HF_SETTINGS.threeDStartZoom;
-
-            if (draw3D) {
-              gl.useProgram(this.nearProgram);
-              gl.uniformMatrix4fv(this.nearLocations.matrix, false, matrix);
-              gl.uniform4fv(this.nearLocations.bounds, this.heightBounds);
-              gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
-              gl.uniform1i(this.nearLocations.heightMap, 0);
-              gl.uniform1f(this.nearLocations.treeLineFadeStart, snowTreeFadeStartExaggerated);
-              gl.uniform1f(this.nearLocations.treeLineCutoff, snowTreeCutoffExaggerated);
-              gl.uniform2f(this.nearLocations.heightTexel, 1 / HF_HEIGHTMAP_SIZE, 1 / HF_HEIGHTMAP_SIZE);
-              gl.disable(gl.BLEND);
-              gl.depthMask(true);
-
-              for (const state of this.typeStates) {
-                if (!state.nearCount) continue;
-                gl.uniform3fv(this.nearLocations.foliage, state.type.foliage);
-                gl.uniform3fv(this.nearLocations.trunk, state.type.trunk);
-                this.bindNearAttributes(gl, state);
-                gl.drawArraysInstanced(gl.TRIANGLES, 0, state.nearVertexCount, state.nearCount);
+            const draw=(item)=>{
+              if(!item.count)return;
+              gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,item.roots);
+              gl.bindVertexArray(item.vao);
+              gl.drawArraysInstanced(gl.TRIANGLES,0,item.vertices,item.count);
+            };
+            try {
+              if(this.map.getZoom()>=HF_SETTINGS.threeDStartZoom) {
+                prepare(this.nearProgram,this.nearLocations);
+                for(const s of this.typeStates) {
+                  gl.uniform3fv(this.nearLocations.u_foliageColor,s.type.foliage);
+                  gl.uniform3fv(this.nearLocations.u_trunkColor,s.type.trunk);
+                  gl.uniform1i(this.nearLocations.u_mode,0);draw(s.high);
+                  gl.uniform1i(this.nearLocations.u_mode,1);draw(s.mid);
+                }
               }
+              prepare(this.spriteProgram,this.spriteLocations);
+              gl.uniform1f(this.spriteLocations.u_bearing,this.map.getBearing());
+              gl.uniform1f(this.spriteLocations.u_pitch,this.map.getPitch());
+              gl.uniform1i(this.spriteLocations.u_sprite,2);gl.uniform1i(this.spriteLocations.u_grove,3);
+              for(const s of this.typeStates) {
+                gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,s.spriteTexture);
+                gl.activeTexture(gl.TEXTURE3);gl.bindTexture(gl.TEXTURE_2D,s.groveTexture);
+                draw(s.far);
+              }
+            } finally {
+              gl.bindVertexArray(previousVao);gl.activeTexture(previousActive);
+              gl.depthMask(true);gl.useProgram(null);
             }
-
-            gl.useProgram(this.spriteProgram);
-            gl.uniformMatrix4fv(this.spriteLocations.matrix, false, matrix);
-            gl.uniform4fv(this.spriteLocations.bounds, this.heightBounds);
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
-            gl.uniform1i(this.spriteLocations.heightMap, 0);
-            gl.uniform1f(this.spriteLocations.treeLineFadeStart, snowTreeFadeStartExaggerated);
-            gl.uniform1f(this.spriteLocations.treeLineCutoff, snowTreeCutoffExaggerated);
-            gl.uniform2f(this.spriteLocations.heightTexel, 1 / HF_HEIGHTMAP_SIZE, 1 / HF_HEIGHTMAP_SIZE);
-            gl.activeTexture(gl.TEXTURE1);
-            gl.uniform1i(this.spriteLocations.sprite, 1);
-            gl.uniform1f(this.spriteLocations.bearing, this.map.getBearing());
-            gl.enable(gl.BLEND);
-            gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-            gl.depthMask(false);
-
-            for (const state of this.typeStates) {
-              if (!state.spriteCount) continue;
-              gl.bindTexture(gl.TEXTURE_2D, state.spriteTexture);
-              this.bindSpriteAttributes(gl, state);
-              gl.drawArraysInstanced(gl.TRIANGLES, 0, this.spriteVertexCount, state.spriteCount);
-            }
-
-            gl.depthMask(true);
-            gl.disable(gl.BLEND);
-            gl.bindBuffer(gl.ARRAY_BUFFER, null);
-            gl.useProgram(null);
           },
-
-          onRemove() {
+          onRemove(mapInstance,gl) {
             clearTimeout(this.rebuildTimer);
-            if (this.onMoveEnd) this.map.off("moveend", this.onMoveEnd);
-            if (this.onZoomEnd) this.map.off("zoomend", this.onZoomEnd);
-            if (this.onIdle) this.map.off("idle", this.onIdle);
-            if (this.onSourceData) this.map.off("sourcedata", this.onSourceData);
-            hybridForestController = null;
+            for(const [event,handler] of [['move',this.onMove],['moveend',this.onMoveEnd],
+              ['zoomend',this.onZoomEnd],['idle',this.onIdle],['sourcedata',this.onSourceData]]) {
+              if(handler) mapInstance.off(event,handler);
+            }
+            for(const s of this.typeStates||[]) {
+              for(const d of [s.high,s.mid,s.far]) {
+                gl.deleteVertexArray(d.vao);gl.deleteBuffer(d.buffer);gl.deleteTexture(d.roots);
+              }
+              gl.deleteTexture(s.spriteTexture);gl.deleteTexture(s.groveTexture);
+            }
+            gl.deleteProgram(this.nearProgram);gl.deleteProgram(this.spriteProgram);gl.deleteTexture(this.heightMap);
+            hybridForestController=null;
           }
         };
 
