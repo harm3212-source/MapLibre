@@ -1281,14 +1281,15 @@
         return 1;
       }
 
-      function hfNearRadiusForZoom(zoom) {
-        // Sprites carry the distant forest. Real 3D trees phase in from the
-        // configurable start zoom and occupy a larger inner viewport at closer zooms.
+      function hfNearRadiusMetersForZoom(zoom) {
+        // World-space 3D radius: unlike a viewport fraction, this grows on screen
+        // as the user zooms in and avoids a fixed elliptical LOD island.
         const start = Number(HF_SETTINGS.threeDStartZoom || 5.0);
         if (zoom < start) return 0;
-        if (zoom < start + 0.8) return 0.30;
-        if (zoom < start + 1.7) return 0.56;
-        return 0.86;
+        const fullRadiusMeters = 520000;
+        const ramp = Math.max(0, Math.min(1, (zoom - start) / 0.65));
+        const smooth = ramp * ramp * (3 - 2 * ramp);
+        return fullRadiusMeters * smooth;
       }
 
       function hfSelectType(biome, random01) {
@@ -1602,7 +1603,7 @@
       function hfCreateTexture(gl, canvas) {
         const texture = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, texture);
-        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
         // Canvas pixels are top-left-origin while the billboard UVs use
         // (0,0) at the bottom. Flip once at upload so every tree sprite
         // has its trunk at the terrain and crown above it.
@@ -1743,9 +1744,11 @@
               void main() {
                 vec4 texel = texture(u_sprite, v_uv);
                 float alpha = texel.a * v_alpha;
-                if (alpha < 0.055) discard;
+                if (alpha < 0.075) discard;
                 float variation = 0.94 + (fract(v_seed * 11.917) - 0.5) * 0.12;
-                fragColor = vec4(texel.rgb * variation, alpha);
+                // Texture upload is premultiplied-alpha; keep the instance fade
+                // premultiplied as well so filtered edges cannot turn pale.
+                fragColor = vec4(texel.rgb * variation * v_alpha, alpha);
               }
             `);
 
@@ -1927,8 +1930,9 @@
 
             const zoom = this.map.getZoom();
             const stride = hfStrideForZoom(zoom);
-            const nearRadius = hfNearRadiusForZoom(zoom);
+            const nearRadiusMeters = hfNearRadiusMetersForZoom(zoom);
             const frame = this.activeFrame();
+            const centerMpu = frame.c.meterInMercatorCoordinateUnits();
             const buildKey = [
               Math.floor(frame.x0 / HF_BASE_CELL_WORLD),
               Math.ceil(frame.x1 / HF_BASE_CELL_WORLD),
@@ -1936,7 +1940,7 @@
               Math.ceil(frame.y1 / HF_BASE_CELL_WORLD),
               stride,
               zoom.toFixed(2),
-              nearRadius.toFixed(3),
+              Math.round(nearRadiusMeters),
               HF_SETTINGS.threeDStartZoom.toFixed(2),
               HF_SETTINGS.minZoom.toFixed(2),
               features.length
@@ -2005,12 +2009,18 @@
                   // True LOD crossfade: a position is no longer rendered as a
                   // fully opaque sprite underneath a fully opaque 3D tree.
                   let nearAlpha = 0;
-                  if (nearRadius > 0 && norm < nearRadius) {
-                    const transition = Math.min(0.30, nearRadius * 0.68);
-                    const inner = Math.max(0, nearRadius - transition);
-                    if (norm <= inner) nearAlpha = 1;
-                    else {
-                      const t = Math.max(0, Math.min(1, (nearRadius - norm) / Math.max(0.0001, nearRadius - inner)));
+                  if (nearRadiusMeters > 0) {
+                    const dxMeters = (x - frame.c.x) / Math.max(1e-12, centerMpu);
+                    const dyMeters = (y - frame.c.y) / Math.max(1e-12, centerMpu);
+                    const distanceMeters = Math.hypot(dxMeters, dyMeters);
+                    const transitionMeters = Math.min(150000, nearRadiusMeters * 0.34);
+                    const innerMeters = Math.max(0, nearRadiusMeters - transitionMeters);
+                    if (distanceMeters <= innerMeters) nearAlpha = 1;
+                    else if (distanceMeters < nearRadiusMeters) {
+                      const t = Math.max(0, Math.min(1,
+                        (nearRadiusMeters - distanceMeters) /
+                        Math.max(1, nearRadiusMeters - innerMeters)
+                      ));
                       nearAlpha = t * t * (3 - 2 * t);
                     }
                   }
@@ -2111,7 +2121,7 @@
             this.lastNearTotal = nearTotal;
             this.lastSpriteTotal = spriteTotal;
             this.lastBiomeFeatureCount = features.length;
-            console.info(`Hybrid forest: ${nearTotal}/${HF_SETTINGS.nearCap} 3D trees + ${spriteTotal}/${HF_SETTINGS.spriteCap} sprite clusters from ${features.length} biome polygons.`);
+            console.info(`Hybrid forest: ${nearTotal}/${HF_SETTINGS.nearCap} 3D trees + ${spriteTotal}/${HF_SETTINGS.spriteCap} sprite clusters from ${features.length} biome polygons. 3D radius ${(nearRadiusMeters/1000).toFixed(0)} km.`);
             this.map.triggerRepaint();
           },
 
@@ -2243,7 +2253,7 @@
             gl.uniform1i(this.spriteLocations.sprite, 1);
             gl.uniform1f(this.spriteLocations.bearing, this.map.getBearing());
             gl.enable(gl.BLEND);
-            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
             gl.depthMask(false);
 
             for (const state of this.typeStates) {
@@ -2300,7 +2310,7 @@
         {"name":"Khypir Tul","model":"./Dwarven_Lighthouse_v2_FixedRoof.glb","visible":true,"widthMeters":22000,"rotationDeg":180,"lng":-14.62005615234375,"lat":48.31973404047173,"positionMode":"absolute","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Khypir Tul","Khypir-Tul","Khypirtul"]},
         {"name":"Priddam","model":"./Priddam_MapLibre_Textured.glb","visible":true,"widthMeters":40000,"rotationDeg":180,"eastMeters":-55590,"northMeters":123930,"positionMode":"anchor","elevationOffsetMeters":-4100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Vinboa","model":"./Vinboa_Renaissance_GateRoofs_Fixed.glb","visible":true,"widthMeters":40000,"rotationDeg":-15,"lng":8.983181151128804,"lat":43.93356481107847,"positionMode":"absolute","elevationOffsetMeters":-3450,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Kibumun","model":"./Kibumun_Dwarven_Greenhouse_Farm.glb","visible":true,"widthMeters":32000,"rotationDeg":0,"eastMeters":0,"northMeters":0,"positionMode":"anchor","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Kibumun","model":"./Kibumun_Dwarven_Greenhouse_Farm.glb","visible":true,"widthMeters":32000,"rotationDeg":-125,"lng":-15.9397888,"lat":50.0703622,"positionMode":"absolute","elevationOffsetMeters":-3700,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Copper","model":"./Copper_MapLibre_Textured.glb","visible":true,"widthMeters":32000,"rotationDeg":0,"lng":-13.5186767578125,"lat":46.77937368205562,"positionMode":"absolute","elevationOffsetMeters":-3300,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0}
       ].map(config => ({
         visible: true,
@@ -2478,6 +2488,15 @@
             const raw = localStorage.getItem(key);
             if (!raw) continue;
             applyLandmarkStateObject(JSON.parse(raw));
+            // v33 migration: new absolute defaults must beat obsolete anchor-only
+            // records from older localStorage. Once a landmark has an absolute
+            // saved position, that saved value remains authoritative.
+            for (const [name, defaults] of landmarkDefaultsByName) {
+              const current = LANDMARKS_3D.find(item => item.name === name);
+              if (current && landmarkHasAbsolutePosition(defaults) && !landmarkHasAbsolutePosition(current)) {
+                landmarkApplySerialized(current, landmarkSerializeConfig(defaults));
+              }
+            }
             return;
           } catch (error) {
             console.warn(`Kon ${key} niet laden:`, error);
@@ -3440,133 +3459,42 @@
 
 
       const SNOW_LAYER_ID = "bigane-snow-overlay";
-      const SNOW_SOURCE_ID = "bigane-snow-source";
 
       function installSnowOverlay() {
         if (map.getLayer(SNOW_LAYER_ID)) return;
         if (!map.getSource("bigane-dem")) return;
 
-        // Snow is rendered ABOVE hillshade so it stays bright instead of turning grey.
-        // The mask is generated in a lightweight custom canvas source from terrain samples
-        // and uses height + local slope to keep steep rock faces less snow-covered.
-        const canvas = document.createElement("canvas");
-        canvas.width = 768;
-        canvas.height = 768;
-        canvas.style.display = "none";
-        document.body.appendChild(canvas);
-        const ctx = canvas.getContext("2d", { alpha: true });
-
-        let lastKey = "";
-        let raf = 0;
-
-        function smoothstep(a, b, x) {
-          const t = Math.max(0, Math.min(1, (x - a) / Math.max(1e-6, b - a)));
-          return t * t * (3 - 2 * t);
-        }
-
-        function rebuildSnow() {
-          raf = 0;
-          if (!map.getTerrain || !map.getTerrain()) return;
-          const b = map.getBounds();
-          const z = map.getZoom();
-          const key = [
-            b.getWest().toFixed(3), b.getSouth().toFixed(3),
-            b.getEast().toFixed(3), b.getNorth().toFixed(3),
-            z.toFixed(2)
-          ].join("|");
-          if (key === lastKey) return;
-          lastKey = key;
-
-          const w = canvas.width, h = canvas.height;
-          const img = ctx.createImageData(w, h);
-          const d = img.data;
-
-          // Sample at a coarse grid and bilinear-fill visually via the canvas scale.
-          const gw = 192, gh = 192;
-          const elev = new Float32Array(gw * gh);
-          const west=b.getWest(), east=b.getEast(), south=b.getSouth(), north=b.getNorth();
-          let minE=Infinity, maxE=-Infinity;
-          for (let gy=0; gy<gh; gy++) {
-            const lat = north + (south-north) * (gy/(gh-1));
-            for (let gx=0; gx<gw; gx++) {
-              const lng = west + (east-west) * (gx/(gw-1));
-              const e = map.queryTerrainElevation([lng,lat], { exaggerated: false });
-              const v = Number.isFinite(e) ? e : 0;
-              elev[gy*gw+gx]=v; minE=Math.min(minE,v); maxE=Math.max(maxE,v);
-            }
-          }
-
-          const range = Math.max(1, maxE-minE);
-          // Dynamic threshold makes snow target only the upper mountain mass in the current view.
-          const snowStart = minE + range * 0.62;
-          const snowFull  = minE + range * 0.84;
-
-          function sampleGrid(ix,iy){
-            ix=Math.max(0,Math.min(gw-1,ix)); iy=Math.max(0,Math.min(gh-1,iy));
-            return elev[iy*gw+ix];
-          }
-
-          const mini=document.createElement("canvas"); mini.width=gw; mini.height=gh;
-          const mctx=mini.getContext("2d",{alpha:true});
-          const mi=mctx.createImageData(gw,gh);
-          for(let gy=0; gy<gh; gy++){
-            for(let gx=0; gx<gw; gx++){
-              const i=(gy*gw+gx)*4;
-              const e=sampleGrid(gx,gy);
-              const dx=Math.abs(sampleGrid(gx+1,gy)-sampleGrid(gx-1,gy));
-              const dy=Math.abs(sampleGrid(gx,gy+1)-sampleGrid(gx,gy-1));
-              const slope=Math.min(1, Math.hypot(dx,dy)/Math.max(40, range*0.055));
-              const heightMask=smoothstep(snowStart,snowFull,e);
-              const slopeKeep=1.0-smoothstep(0.28,0.82,slope);
-              const n=((gx*73856093)^(gy*19349663))>>>0;
-              const noise=0.88 + ((n%1000)/1000)*0.18;
-              let a=Math.max(0,Math.min(1,heightMask*(0.35+0.65*slopeKeep)*noise));
-              if(a<0.035) a=0;
-              // Keep snow bright; only a subtle cool tint in denser snow.
-              mi.data[i]=244; mi.data[i+1]=248; mi.data[i+2]=252; mi.data[i+3]=Math.round(a*245);
-            }
-          }
-          mctx.putImageData(mi,0,0);
-          ctx.clearRect(0,0,w,h);
-          ctx.imageSmoothingEnabled=true;
-          ctx.imageSmoothingQuality="high";
-          ctx.drawImage(mini,0,0,w,h);
-
-          if (map.getSource(SNOW_SOURCE_ID)) {
-            map.getSource(SNOW_SOURCE_ID).setCoordinates([
-              [west,north],[east,north],[east,south],[west,south]
-            ]);
-          }
-        }
-
-        map.addSource(SNOW_SOURCE_ID, {
-          type: "canvas", canvas, animate: false, coordinates: [
-            [map.getBounds().getWest(), map.getBounds().getNorth()],
-            [map.getBounds().getEast(), map.getBounds().getNorth()],
-            [map.getBounds().getEast(), map.getBounds().getSouth()],
-            [map.getBounds().getWest(), map.getBounds().getSouth()]
-          ]
-        });
-
-        const beforeId = map.getLayer("Town names") ? "Town names" : undefined;
-        map.addLayer({
+        // GPU snow directly from the DEM. This avoids the old canvas/timing path:
+        // no queryTerrainElevation sampling, no empty first canvas upload, and no
+        // viewport cache that could permanently lock in an all-transparent mask.
+        // The existing hillshade is left untouched and the snow layer is inserted
+        // above it, immediately below town labels.
+        const snowLayer = {
           id: SNOW_LAYER_ID,
-          type: "raster",
-          source: SNOW_SOURCE_ID,
+          type: "color-relief",
+          source: "bigane-dem",
           paint: {
-            "raster-opacity": 0.92,
-            "raster-fade-duration": 120
+            "color-relief-color": [
+              "interpolate", ["linear"], ["elevation"],
+              -500, ["rgba", 246, 250, 255, 0.0],
+              1600, ["rgba", 246, 250, 255, 0.0],
+              2050, ["rgba", 246, 250, 255, 0.08],
+              2400, ["rgba", 247, 250, 255, 0.22],
+              2800, ["rgba", 248, 251, 255, 0.46],
+              3300, ["rgba", 249, 252, 255, 0.70],
+              3900, ["rgba", 251, 253, 255, 0.86],
+              4700, ["rgba", 253, 254, 255, 0.96],
+              6500, ["rgba", 255, 255, 255, 0.98]
+            ],
+            "color-relief-opacity": 1.0,
+            "resampling": "linear"
           }
-        }, beforeId);
-
-        const schedule = () => {
-          if (raf) return;
-          raf = requestAnimationFrame(rebuildSnow);
         };
-        map.on("moveend", schedule);
-        map.on("zoomend", schedule);
-        map.on("terrain", schedule);
-        setTimeout(schedule, 250);
+
+        const beforeId = map.getLayer("Town names") ? "Town names" :
+                         map.getLayer("Capitals") ? "Capitals" : undefined;
+        map.addLayer(snowLayer, beforeId);
+        console.info("GPU snow overlay installed from bigane-dem color-relief.");
       }
 
       map.on("load", () => {
