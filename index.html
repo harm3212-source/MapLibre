@@ -921,8 +921,20 @@
 
       function improveCityLabelReadability() {
         const configs = [
-          { id: "Town names", color: "#25231f", halo: "rgba(255,252,244,0.97)", width: 2.2, blur: 0.45 },
-          { id: "Capitals", color: "#171512", halo: "rgba(255,250,238,0.99)", width: 2.8, blur: 0.5 }
+          {
+            id: "Town names",
+            color: "#29251f",
+            halo: "rgba(255,252,244,0.96)",
+            width: ["interpolate", ["linear"], ["zoom"], 2, 2.5, 5, 2.15, 8, 1.55, 12, 1.15],
+            blur:  ["interpolate", ["linear"], ["zoom"], 2, 0.52, 6, 0.38, 10, 0.25]
+          },
+          {
+            id: "Capitals",
+            color: "#55271f",
+            halo: "rgba(255,249,237,0.99)",
+            width: ["interpolate", ["linear"], ["zoom"], 2, 3.2, 5, 2.7, 8, 2.0, 12, 1.45],
+            blur:  ["interpolate", ["linear"], ["zoom"], 2, 0.58, 6, 0.42, 10, 0.28]
+          }
         ];
         for (const cfg of configs) {
           const layer = map.getLayer(cfg.id);
@@ -932,6 +944,7 @@
             map.setPaintProperty(cfg.id, "text-halo-color", cfg.halo);
             map.setPaintProperty(cfg.id, "text-halo-width", cfg.width);
             map.setPaintProperty(cfg.id, "text-halo-blur", cfg.blur);
+            map.setPaintProperty(cfg.id, "text-opacity", ["interpolate", ["linear"], ["zoom"], 2, 0.84, 4, 0.95, 6, 1]);
           } catch (error) {
             console.warn(`Label styling overgeslagen voor ${cfg.id}:`, error);
           }
@@ -1095,9 +1108,115 @@
       }
 
       // ---------------------------------------------------------------------
+      // WATER + LANDSCAPE POLISH
+      // ---------------------------------------------------------------------
+      const ROCK_LAYER_ID = "bigane-highland-rock";
+
+      function installWaterPolish() {
+        try {
+          const layers = map.getStyle()?.layers || [];
+          const waterBase = layers.find(layer =>
+            layer?.type === "fill" &&
+            /water|ocean|sea|lake|river/i.test(`${layer.id || ""} ${layer["source-layer"] || ""}`)
+          );
+          if (!waterBase?.source) return;
+          const sourceLayer = waterBase["source-layer"];
+          const common = {
+            source: waterBase.source,
+            ...(sourceLayer ? { "source-layer": sourceLayer } : {}),
+            ...(waterBase.filter ? { filter: waterBase.filter } : {})
+          };
+          const beforeId = map.getLayer("Town names") ? "Town names" : undefined;
+          if (!map.getLayer("bigane-water-depth-tint")) {
+            map.addLayer({
+              id: "bigane-water-depth-tint",
+              type: "fill",
+              ...common,
+              paint: {
+                "fill-color": "#173d59",
+                "fill-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.10, 6, 0.065, 10, 0.025]
+              }
+            }, beforeId);
+          }
+          if (!map.getLayer("bigane-water-shoreline")) {
+            map.addLayer({
+              id: "bigane-water-shoreline",
+              type: "line",
+              ...common,
+              paint: {
+                "line-color": "rgba(221,241,244,0.78)",
+                "line-width": ["interpolate", ["linear"], ["zoom"], 2, 0.35, 6, 0.7, 10, 1.15],
+                "line-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.28, 6, 0.48, 10, 0.36]
+              }
+            }, beforeId);
+          }
+        } catch (error) {
+          console.warn("Water polish overgeslagen:", error);
+        }
+      }
+
+      function installLandscapePolish() {
+        try {
+          const biomeLayer = map.getLayer("Biomes");
+          if (biomeLayer?.source && !map.getLayer("bigane-landscape-wash")) {
+            map.addLayer({
+              id: "bigane-landscape-wash",
+              type: "fill",
+              source: biomeLayer.source,
+              ...(biomeLayer["source-layer"] ? { "source-layer": biomeLayer["source-layer"] } : {}),
+              paint: {
+                "fill-color": [
+                  "match", ["get", "Biome"],
+                  "Wetland", "rgba(49,92,74,0.12)",
+                  "Hot desert", "rgba(181,132,72,0.09)",
+                  "Cold desert", "rgba(125,115,99,0.07)",
+                  "Grassland", "rgba(150,149,88,0.045)",
+                  "Savanna", "rgba(164,145,70,0.065)",
+                  "Tundra", "rgba(135,145,142,0.08)",
+                  "Glacier", "rgba(218,239,244,0.10)",
+                  "rgba(0,0,0,0)"
+                ],
+                "fill-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.65, 6, 1, 10, 0.72]
+              }
+            }, map.getLayer("bigane-snow-overlay") ? "bigane-snow-overlay" : (map.getLayer("Town names") ? "Town names" : undefined));
+          }
+          if (map.getSource("bigane-dem") && !map.getLayer(ROCK_LAYER_ID)) {
+            map.addLayer({
+              id: ROCK_LAYER_ID,
+              type: "color-relief",
+              source: "bigane-dem",
+              paint: {
+                "color-relief-color": [
+                  "interpolate", ["linear"], ["elevation"],
+                  -100000, ["rgba", 98, 92, 84, 0],
+                  1000000, ["rgba", 98, 92, 84, 0]
+                ],
+                "color-relief-opacity": 1,
+                "resampling": "linear"
+              }
+            }, map.getLayer("bigane-snow-overlay") ? "bigane-snow-overlay" : (map.getLayer("Town names") ? "Town names" : undefined));
+          }
+        } catch (error) {
+          console.warn("Landscape polish overgeslagen:", error);
+        }
+      }
+
+      function setRockReliefStops(start, strong, snowStart) {
+        if (!map.getLayer(ROCK_LAYER_ID)) return;
+        map.setPaintProperty(ROCK_LAYER_ID, "color-relief-color", [
+          "interpolate", ["linear"], ["elevation"],
+          -100000, ["rgba", 105, 97, 87, 0],
+          start, ["rgba", 105, 97, 87, 0],
+          strong, ["rgba", 101, 93, 83, 0.10],
+          snowStart, ["rgba", 112, 108, 101, 0.16],
+          snowStart + 1, ["rgba", 112, 108, 101, 0.05]
+        ]);
+      }
+
+      // ---------------------------------------------------------------------
       // HYBRID GPU FOREST
       // ---------------------------------------------------------------------
-      // V37: forest placement is derived from the existing Biomes vector layer.
+      // V39: forest placement uses a deterministic world-space density field over the existing Biomes vector layer.
       // Adds treeline/snow exclusion, settlement clearings, sparse grassland
       // trees, oasis palms on hot-desert lake shores, and a warmer-climate
       // palm distribution in tropical forests / wetlands / savanna near water.
@@ -1113,14 +1232,13 @@
       const HF_MAX_CANDIDATES = 80000;
       const HF_MAX_NEAR_CAP = 18000;
       const HF_MAX_SPRITE_CAP = 90000;
-      const HF_SETTLEMENT_CLEAR_RADIUS_METERS = 12000;
-      const HF_SETTLEMENT_GRID_METERS = 50000;
+      const HF_SETTLEMENT_GRID_METERS = 60000;
       const HF_OASIS_LAKE_SEARCH_METERS = 32000;
       const HF_OASIS_LAKE_RING_METERS = 18000;
-      const HF_PALM_WARM_LAT_FULL = 18;
-      const HF_PALM_WARM_LAT_ZERO = 35;
       const HF_PALM_WETLAND_LAKE_PROXIMITY_METERS = 26000;
       const HF_PALM_SAVANNA_LAKE_PROXIMITY_METERS = 42000;
+      const HF_WARM_CONTEXT_METERS = 95000;
+      const HF_WATER_INFLUENCE_METERS = 70000;
       // The terrain height map used by the forest contains elevation in metres
       // INCLUDING MapLibre terrain exaggeration. These are calibrated together
       // with the adaptive snow layer; until then they disable treeline fading.
@@ -1271,6 +1389,34 @@
         h = Math.imul(h, 3266489917);
         h ^= h >>> 16;
         return (h >>> 0) / 4294967295;
+      }
+
+      function hfSmooth01(t) { return t * t * (3 - 2 * t); }
+
+      function hfValueNoiseMeters(xMeters, yMeters, scaleMeters, salt) {
+        const gx = xMeters / scaleMeters;
+        const gy = yMeters / scaleMeters;
+        const ix = Math.floor(gx), iy = Math.floor(gy);
+        const fx = hfSmooth01(gx - ix), fy = hfSmooth01(gy - iy);
+        const a = hfHash(ix, iy, salt);
+        const b = hfHash(ix + 1, iy, salt);
+        const c = hfHash(ix, iy + 1, salt);
+        const d = hfHash(ix + 1, iy + 1, salt);
+        const ab = a + (b - a) * fx;
+        const cd = c + (d - c) * fx;
+        return ab + (cd - ab) * fy;
+      }
+
+      function hfForestDensityField(entry, x, y) {
+        const mx = x * HF_WORLD_METERS;
+        const my = y * HF_WORLD_METERS;
+        const broad = hfValueNoiseMeters(mx, my, 175000, 310);
+        const medium = hfValueNoiseMeters(mx, my, 62000, 311);
+        const fine = hfValueNoiseMeters(mx, my, 24000, 312);
+        let value = 0.34 + (0.46 * broad + 0.32 * medium + 0.22 * fine) * 0.92;
+        if (entry.biome === "Grassland" || entry.biome === "Savanna") value *= 0.82 + 0.28 * medium;
+        if (entry.biome === "Deep Wood" || entry.biome === "Tropical rainforest") value *= 0.95 + 0.18 * broad;
+        return Math.max(0.12, Math.min(1.28, value));
       }
 
       function hfMod(value, divisor) {
@@ -1750,14 +1896,6 @@
       }
 
 
-      function hfWarmPalmFactor(lat) {
-        const absLat = Math.abs(Number(lat) || 0);
-        if (absLat <= HF_PALM_WARM_LAT_FULL) return 1;
-        if (absLat >= HF_PALM_WARM_LAT_ZERO) return 0;
-        const t = (HF_PALM_WARM_LAT_ZERO - absLat) / (HF_PALM_WARM_LAT_ZERO - HF_PALM_WARM_LAT_FULL);
-        return t * t * (3 - 2 * t);
-      }
-
       function hfCenterOfBounds(bounds) {
         return {
           x: (bounds.x0 + bounds.x1) * 0.5,
@@ -1767,13 +1905,20 @@
         };
       }
 
-      function hfClamp01(value) {
-        return Math.max(0, Math.min(1, value));
+      function hfClamp01(value) { return Math.max(0, Math.min(1, value)); }
+
+      function hfWarmBiomeContextFactor(entry, allEntries) {
+        if (entry.biome === "Tropical rainforest" || entry.biome === "Tropical seasonal forest") return 1;
+        if (entry.biome === "Savanna") return 0.82;
+        if (entry.biome !== "Wetland") return 0;
+        const pad = HF_WARM_CONTEXT_METERS / HF_WORLD_METERS;
+        const warmBiomes = new Set(["Tropical rainforest", "Tropical seasonal forest", "Savanna", "Hot desert"]);
+        return allEntries.some(other => warmBiomes.has(other.biome) && hfBoundsNear(entry.bounds, other.bounds, pad)) ? 1 : 0;
       }
 
-      function hfPalmMixForEntry(entry, allLakeRings) {
+      function hfPalmMixForEntry(entry, allLakeRings, allEntries) {
         const center = hfCenterOfBounds(entry.bounds);
-        const warmFactor = hfWarmPalmFactor(center.lat);
+        const warmFactor = hfWarmBiomeContextFactor(entry, allEntries);
         if (warmFactor <= 0) return null;
 
         let lakeDistanceMeters = Infinity;
@@ -1785,63 +1930,88 @@
         const savannaWaterFactor = hfClamp01(1 - (lakeDistanceMeters / HF_PALM_SAVANNA_LAKE_PROXIMITY_METERS));
 
         if (entry.biome === "Tropical rainforest") {
-          const palm = 0.05 + 0.10 * warmFactor;
-          return [["tropical", 0.78 - palm * 0.70], ["palm", palm], ["deciduous", 1 - (0.78 - palm * 0.70) - palm]];
+          const palm = 0.13;
+          return [["tropical", 0.69], ["palm", palm], ["deciduous", 0.18]];
         }
         if (entry.biome === "Tropical seasonal forest") {
-          const palm = 0.08 + 0.10 * warmFactor;
-          const tropical = 0.52 - palm * 0.42;
-          const savanna = 0.33 - palm * 0.23;
-          const deciduous = 1 - tropical - savanna - palm;
-          return [["tropical", tropical], ["palm", palm], ["savanna", savanna], ["deciduous", deciduous]];
+          const palm = 0.17;
+          return [["tropical", 0.45], ["palm", palm], ["savanna", 0.26], ["deciduous", 0.12]];
         }
         if (entry.biome === "Wetland") {
-          const palm = 0.05 + 0.11 * warmFactor + 0.08 * wetlandWaterFactor;
-          if (palm < 0.08) return null;
-          const wetland = 0.68 - palm * 0.72;
+          const palm = 0.08 + 0.16 * wetlandWaterFactor;
+          const wetland = 0.68 - palm * 0.62;
           const deciduous = 1 - wetland - palm;
           return [["wetland", wetland], ["palm", palm], ["deciduous", deciduous]];
         }
         if (entry.biome === "Savanna") {
-          const palm = 0.02 + 0.03 * warmFactor + 0.09 * savannaWaterFactor;
-          if (palm < 0.06) return null;
-          const savanna = 0.92 - palm * 0.82;
+          const palm = 0.025 + 0.10 * savannaWaterFactor;
+          const savanna = 0.92 - palm * 0.78;
           const tropical = 1 - savanna - palm;
           return [["savanna", savanna], ["palm", palm], ["tropical", tropical]];
         }
         return null;
       }
 
+      function hfParsePopulation(value) {
+        if (value == null) return 0;
+        const cleaned = String(value).replace(/[^0-9]/g, "");
+        const n = Number(cleaned);
+        return Number.isFinite(n) ? n : 0;
+      }
+
+      function hfStringHashInt(value) {
+        let h = 2166136261;
+        for (const ch of String(value || "")) {
+          h ^= ch.charCodeAt(0);
+          h = Math.imul(h, 16777619);
+        }
+        return h >>> 0;
+      }
+
+      function hfSettlementRadiusMeters(layerId, props) {
+        const population = hfParsePopulation(props?.Population ?? props?.population);
+        if (layerId === "Capitals") return population > 100000 ? 18000 : 15000;
+        if (population >= 100000) return 16000;
+        if (population >= 40000) return 12500;
+        if (population >= 12000) return 9500;
+        if (population >= 3000) return 6500;
+        if (population > 0) return 4300;
+        return layerId === "Town names" ? 6500 : 4000;
+      }
+
       function hfCollectSettlementPoints(mapInstance) {
         const layerIds = ["Town names", "Capitals", "clickable"].filter(id => mapInstance.getLayer(id));
-        const points = [];
-        const seen = new Set();
+        const byKey = new Map();
         for (const layerId of layerIds) {
           const layer = mapInstance.getLayer(layerId);
           let features = [];
           try {
             const sourceLayer = layer?.["source-layer"] || layer?.sourceLayer;
-            if (layer?.source) {
-              features = mapInstance.querySourceFeatures(layer.source, sourceLayer ? { sourceLayer } : undefined) || [];
-            }
+            if (layer?.source) features = mapInstance.querySourceFeatures(layer.source, sourceLayer ? { sourceLayer } : undefined) || [];
           } catch (_) {}
           if (!features.length) {
             try { features = mapInstance.queryRenderedFeatures({ layers: [layerId] }) || []; } catch (_) {}
           }
           for (const feature of features) {
             if (feature?.geometry?.type !== "Point") continue;
-            const name = feature?.properties?.Burg || feature?.properties?.name || feature?.properties?.Name || "";
+            const props = feature.properties || {};
+            const name = props.Burg || props.name || props.Name || "";
             if (!name) continue;
             const coords = feature.geometry.coordinates;
             if (!Array.isArray(coords) || coords.length < 2) continue;
             const key = `${Number(coords[0]).toFixed(5)}:${Number(coords[1]).toFixed(5)}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
             const m = maplibregl.MercatorCoordinate.fromLngLat(coords);
-            points.push({ x: m.x, y: m.y });
+            const candidate = {
+              x: m.x, y: m.y,
+              name,
+              radiusMeters: hfSettlementRadiusMeters(layerId, props),
+              seed: hfStringHashInt(name)
+            };
+            const existing = byKey.get(key);
+            if (!existing || candidate.radiusMeters > existing.radiusMeters) byKey.set(key, candidate);
           }
         }
-        return points;
+        return [...byKey.values()];
       }
 
       function hfBuildSettlementIndex(points) {
@@ -1856,20 +2026,44 @@
         return { cellWorld, buckets };
       }
 
-      function hfNearSettlement(x, y, mpu, index) {
-        if (!index?.buckets?.size) return false;
+      function hfSettlementDensityFactor(x, y, mpu, index) {
+        if (!index?.buckets?.size) return 1;
         const gx = Math.floor(x / index.cellWorld), gy = Math.floor(y / index.cellWorld);
+        let factor = 1;
         for (let ox = -1; ox <= 1; ox++) {
           for (let oy = -1; oy <= 1; oy++) {
             const bucket = index.buckets.get(`${gx + ox}:${gy + oy}`);
             if (!bucket) continue;
             for (const p of bucket) {
-              const distanceMeters = Math.hypot(x - p.x, y - p.y) / Math.max(1e-12, mpu);
-              if (distanceMeters < HF_SETTLEMENT_CLEAR_RADIUS_METERS) return true;
+              const dx = x - p.x, dy = y - p.y;
+              const distanceMeters = Math.hypot(dx, dy) / Math.max(1e-12, mpu);
+              const angle = Math.atan2(dy, dx);
+              const sector = Math.floor(((angle + Math.PI) / (Math.PI * 2)) * 24);
+              const irregular = 0.82 + 0.30 * hfHash(p.seed & 0xffff, sector, 991);
+              const outer = p.radiusMeters * irregular;
+              const inner = outer * 0.56;
+              if (distanceMeters <= inner) return 0;
+              if (distanceMeters < outer) {
+                const t = hfSmooth01((distanceMeters - inner) / Math.max(1, outer - inner));
+                factor = Math.min(factor, 0.08 + 0.92 * t);
+              }
             }
           }
         }
-        return false;
+        return factor;
+      }
+
+      function hfWaterDensityFactor(entry, x, y, mpu) {
+        const rings = entry.nearbyWaterRings || [];
+        if (!rings.length) return 1;
+        const d = hfDistanceToWaterRingsMeters(x, y, mpu, rings);
+        const near = hfClamp01(1 - d / HF_WATER_INFLUENCE_METERS);
+        if (entry.biome === "Savanna") return 0.78 + 0.65 * near;
+        if (entry.biome === "Wetland") return 0.92 + 0.38 * near;
+        if (entry.biome === "Tropical seasonal forest") return 0.92 + 0.22 * near;
+        if (entry.biome === "Tropical rainforest") return 0.96 + 0.16 * near;
+        if (entry.biome === "Grassland") return 0.90 + 0.18 * near;
+        return 1;
       }
 
       function installHybridForestLayer() {
@@ -1901,6 +2095,7 @@
               uniform sampler2D u_heightMap;
               uniform float u_treeLineFadeStart;
               uniform float u_treeLineCutoff;
+              uniform vec2 u_heightTexel;
               in vec3 a_local;
               in vec3 a_normal;
               in float a_part;
@@ -1924,14 +2119,21 @@
                 vec2 worldXY = i_position + localXY * i_mpu;
                 vec2 uv = (i_position - u_heightBounds.xy) / (u_heightBounds.zw - u_heightBounds.xy);
                 uv = clamp(uv, vec2(0.0), vec2(1.0));
-                float elevation = texture(u_heightMap, vec2(uv.x, 1.0 - uv.y)).r;
+                vec2 huv = vec2(uv.x, 1.0 - uv.y);
+                float elevation = texture(u_heightMap, huv).r;
+                float eRight = texture(u_heightMap, clamp(huv + vec2(u_heightTexel.x, 0.0), vec2(0.0), vec2(1.0))).r;
+                float eUp = texture(u_heightMap, clamp(huv + vec2(0.0, u_heightTexel.y), vec2(0.0), vec2(1.0))).r;
+                float pxMeters = max(1.0, (u_heightBounds.z - u_heightBounds.x) * u_heightTexel.x / i_mpu);
+                float pyMeters = max(1.0, (u_heightBounds.w - u_heightBounds.y) * u_heightTexel.y / i_mpu);
+                float slope = length(vec2((eRight - elevation) / pxMeters, (eUp - elevation) / pyMeters));
+                float slopeAlpha = 1.0 - smoothstep(0.48, 1.08, slope);
                 float zMeters = elevation - i_height * 0.055 + a_local.z * i_height;
                 gl_Position = u_matrix * vec4(worldXY, zMeters * i_mpu, 1.0);
                 v_normal = normalize(vec3(rot * a_normal.xy, a_normal.z));
                 v_part = a_part;
                 v_seed = i_seed;
                 float treeLineAlpha = 1.0 - smoothstep(u_treeLineFadeStart, u_treeLineCutoff, elevation);
-                v_alpha = i_alpha * treeLineAlpha;
+                v_alpha = i_alpha * treeLineAlpha * slopeAlpha;
               }
             `, `
               uniform vec3 u_foliageColor;
@@ -1964,6 +2166,7 @@
               uniform sampler2D u_heightMap;
               uniform float u_treeLineFadeStart;
               uniform float u_treeLineCutoff;
+              uniform vec2 u_heightTexel;
               uniform float u_bearing;
               in vec3 a_local;
               in vec2 a_uv;
@@ -1986,13 +2189,20 @@
                 vec2 worldXY = i_position + localXY * i_mpu;
                 vec2 uv = (i_position - u_heightBounds.xy) / (u_heightBounds.zw - u_heightBounds.xy);
                 uv = clamp(uv, vec2(0.0), vec2(1.0));
-                float elevation = texture(u_heightMap, vec2(uv.x, 1.0 - uv.y)).r;
+                vec2 huv = vec2(uv.x, 1.0 - uv.y);
+                float elevation = texture(u_heightMap, huv).r;
+                float eRight = texture(u_heightMap, clamp(huv + vec2(u_heightTexel.x, 0.0), vec2(0.0), vec2(1.0))).r;
+                float eUp = texture(u_heightMap, clamp(huv + vec2(0.0, u_heightTexel.y), vec2(0.0), vec2(1.0))).r;
+                float pxMeters = max(1.0, (u_heightBounds.z - u_heightBounds.x) * u_heightTexel.x / i_mpu);
+                float pyMeters = max(1.0, (u_heightBounds.w - u_heightBounds.y) * u_heightTexel.y / i_mpu);
+                float slope = length(vec2((eRight - elevation) / pxMeters, (eUp - elevation) / pyMeters));
+                float slopeAlpha = 1.0 - smoothstep(0.48, 1.08, slope);
                 float zMeters = elevation - i_height * 0.045 + a_local.z * i_height;
                 gl_Position = u_matrix * vec4(worldXY, zMeters * i_mpu, 1.0);
                 v_uv = a_uv;
                 v_seed = i_seed;
                 float treeLineAlpha = 1.0 - smoothstep(u_treeLineFadeStart, u_treeLineCutoff, elevation);
-                v_alpha = i_alpha * treeLineAlpha;
+                v_alpha = i_alpha * treeLineAlpha * slopeAlpha;
               }
             `, `
               uniform sampler2D u_sprite;
@@ -2018,6 +2228,7 @@
               heightMap: gl.getUniformLocation(this.nearProgram, "u_heightMap"),
               treeLineFadeStart: gl.getUniformLocation(this.nearProgram, "u_treeLineFadeStart"),
               treeLineCutoff: gl.getUniformLocation(this.nearProgram, "u_treeLineCutoff"),
+              heightTexel: gl.getUniformLocation(this.nearProgram, "u_heightTexel"),
               foliage: gl.getUniformLocation(this.nearProgram, "u_foliageColor"),
               trunk: gl.getUniformLocation(this.nearProgram, "u_trunkColor")
             };
@@ -2195,13 +2406,40 @@
               }
             }
             const allLakeRings = [...explicitLakeRings, ...desertHoleRings];
+            const hydroRings = [...allLakeRings];
+            try {
+              const styleLayers = this.map.getStyle()?.layers || [];
+              const hydroLayerIds = styleLayers
+                .filter(layer => layer?.type === "fill" && /water|river|lake|ocean|sea/i.test(`${layer.id || ""} ${layer["source-layer"] || ""}`))
+                .map(layer => layer.id);
+              if (hydroLayerIds.length) {
+                const hydroFeatures = this.map.queryRenderedFeatures({ layers: hydroLayerIds }) || [];
+                const hydroSeen = new Set();
+                for (const feature of hydroFeatures) {
+                  if (!feature?.geometry || (feature.geometry.type !== "Polygon" && feature.geometry.type !== "MultiPolygon")) continue;
+                  const b = hfFeatureBounds(feature);
+                  if (!b) continue;
+                  const key = [b.west.toFixed(4), b.east.toFixed(4), b.south.toFixed(4), b.north.toFixed(4)].join(":");
+                  if (hydroSeen.has(key)) continue;
+                  hydroSeen.add(key);
+                  for (const coords of hfFeatureOuterRings(feature)) {
+                    const ring = hfMakeWaterRing(coords);
+                    if (ring) hydroRings.push(ring);
+                  }
+                }
+              }
+            } catch (error) {
+              console.warn("Hydrology lookup for vegetation skipped:", error);
+            }
             const searchPadWorld = HF_OASIS_LAKE_SEARCH_METERS / HF_WORLD_METERS;
 
+            const waterPadWorld = HF_WATER_INFLUENCE_METERS / HF_WORLD_METERS;
             const normalForestEntries = allEntries
               .filter(entry => Boolean(HF_BIOMES[entry.biome]))
               .map(entry => ({
                 ...entry,
-                mixOverride: hfPalmMixForEntry(entry, allLakeRings)
+                mixOverride: hfPalmMixForEntry(entry, allLakeRings, allEntries),
+                nearbyWaterRings: hydroRings.filter(ring => hfBoundsNear(entry.bounds, ring.bounds, waterPadWorld))
               }));
             const oasisEntries = [];
             for (const desert of desertEntries) {
@@ -2312,20 +2550,23 @@
                   if (norm > HF_SETTINGS.outerRadius) continue;
                   if (norm > 1.30 && hfHash(ix, iy, 71) > 0.56) continue;
                   if (norm > 1.90 && hfHash(ix, iy, 72) > 0.34) continue;
-                  if (hfHash(ix, iy, 3) > Math.min(1, biomeConfig.density * HF_SETTINGS.densityMultiplier)) continue;
-
                   const lng = hfLng(x), lat = hfLat(y);
                   if (!featureContainsCoordinate(entry.feature, [lng, lat])) continue;
 
                   const merc = new maplibregl.MercatorCoordinate(x, y, 0);
                   const localMpu = merc.meterInMercatorCoordinateUnits();
+                  const settlementFactor = hfSettlementDensityFactor(x, y, localMpu, settlementIndex);
+                  if (settlementFactor <= 0) continue;
+                  const densityField = hfForestDensityField(entry, x, y);
+                  const waterFactor = hfWaterDensityFactor(entry, x, y, localMpu);
+                  const candidateDensity = Math.min(1, biomeConfig.density * HF_SETTINGS.densityMultiplier * densityField * waterFactor * settlementFactor);
+                  if (hfHash(ix, iy, 3) > candidateDensity) continue;
                   // Oasis palms are generated only on Hot desert land within a
                   // narrow world-space ring around an actual lake shoreline.
                   if (entry.biome === HF_OASIS_BIOME) {
                     const waterDistanceMeters = hfDistanceToWaterRingsMeters(x, y, localMpu, entry.waterRings);
                     if (waterDistanceMeters > HF_OASIS_LAKE_RING_METERS) continue;
                   }
-                  if (hfNearSettlement(x, y, localMpu, settlementIndex)) continue;
                   seen.add(key);
 
                   const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4), entry.mixOverride);
@@ -2570,6 +2811,7 @@
               gl.uniform1i(this.nearLocations.heightMap, 0);
               gl.uniform1f(this.nearLocations.treeLineFadeStart, snowTreeFadeStartExaggerated);
               gl.uniform1f(this.nearLocations.treeLineCutoff, snowTreeCutoffExaggerated);
+              gl.uniform2f(this.nearLocations.heightTexel, 1 / HF_HEIGHTMAP_SIZE, 1 / HF_HEIGHTMAP_SIZE);
               gl.disable(gl.BLEND);
               gl.depthMask(true);
 
@@ -2590,6 +2832,7 @@
             gl.uniform1i(this.spriteLocations.heightMap, 0);
             gl.uniform1f(this.spriteLocations.treeLineFadeStart, snowTreeFadeStartExaggerated);
             gl.uniform1f(this.spriteLocations.treeLineCutoff, snowTreeCutoffExaggerated);
+            gl.uniform2f(this.spriteLocations.heightTexel, 1 / HF_HEIGHTMAP_SIZE, 1 / HF_HEIGHTMAP_SIZE);
             gl.activeTexture(gl.TEXTURE1);
             gl.uniform1i(this.spriteLocations.sprite, 1);
             gl.uniform1f(this.spriteLocations.bearing, this.map.getBearing());
@@ -2646,7 +2889,7 @@
         {"name":"Ecbashah","model":"./Lake_Jewel_City_v2_Pyramid.glb","visible":true,"widthMeters":32000,"rotationDeg":-90,"eastMeters":9310,"northMeters":1280,"positionMode":"anchor","elevationOffsetMeters":-50,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ecbashah","Ecabashah","Ecbashahh"]},
         {"name":"Morbus","model":"./Frostfort_v1.glb","visible":true,"widthMeters":10700,"rotationDeg":-95,"lng":6.401703351096984,"lat":43.597176534495276,"positionMode":"absolute","elevationOffsetMeters":-200,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Matronass","model":"./Matronass_v2_BreachedWalls.glb","visible":true,"widthMeters":42000,"rotationDeg":-90,"lng":2.2263328002069045,"lat":44.11845427924138,"positionMode":"absolute","elevationOffsetMeters":300,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Padin","model":"./Padin_v1_Optimized_Limestone(1).glb","visible":true,"widthMeters":40000,"rotationDeg":0,"lng":-6.61102294921875,"lat":36.86106592961747,"positionMode":"absolute","elevationOffsetMeters":-450,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Padin","model":"./Padin_v1_Optimized_Limestone(1).glb","visible":true,"widthMeters":40000,"rotationDeg":0,"lng":-6.5885432,"lat":36.8610651,"positionMode":"absolute","elevationOffsetMeters":-4100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Tillfort","model":"./Tillfort_v3_StonefrontStyle_MapReady_FixedDomes.glb","visible":true,"widthMeters":40000,"rotationDeg":-95,"lng":-9.773421528692438,"lat":32.719165367557125,"positionMode":"absolute","elevationOffsetMeters":-1000,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Till Fort","Tilfort"]},
         {"name":"Khypir Tul","model":"./Dwarven_Lighthouse_v2_FixedRoof.glb","visible":true,"widthMeters":22000,"rotationDeg":180,"lng":-14.62005615234375,"lat":48.31973404047173,"positionMode":"absolute","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Khypir Tul","Khypir-Tul","Khypirtul"]},
         {"name":"Priddam","model":"./Priddam_MapLibre_Textured.glb","visible":true,"widthMeters":40000,"rotationDeg":180,"eastMeters":-55590,"northMeters":123930,"positionMode":"anchor","elevationOffsetMeters":-4100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
@@ -2865,6 +3108,9 @@
               antialias: true
             });
             this.renderer.autoClear = false;
+            if (THREE.SRGBColorSpace) this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+            if (THREE.ACESFilmicToneMapping) this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            this.renderer.toneMappingExposure = 1.03;
             this.frameCount = 0;
             this.lastFpsAt = performance.now();
             this.fps = 0;
@@ -3051,6 +3297,17 @@
                     return;
                   }
                   const root = gltf.scene;
+                  root.traverse(object => {
+                    if (!object.isMesh) return;
+                    const materials = Array.isArray(object.material) ? object.material : [object.material];
+                    for (const material of materials) {
+                      if (!material) continue;
+                      if ("roughness" in material && Number.isFinite(material.roughness)) material.roughness = Math.max(0.68, material.roughness);
+                      if ("metalness" in material && Number.isFinite(material.metalness)) material.metalness = Math.min(0.14, material.metalness);
+                      if ("envMapIntensity" in material) material.envMapIntensity = Math.min(Number(material.envMapIntensity || 1), 0.75);
+                      material.needsUpdate = true;
+                    }
+                  });
                   root.updateMatrixWorld(true);
                   const bbox = new THREE.Box3().setFromObject(root);
                   const size = new THREE.Vector3();
@@ -3800,14 +4057,14 @@
 
 
       const SNOW_LAYER_ID = "bigane-snow-overlay";
+      const SNOW_CACHE_KEY = "bigane-global-snow-terrain-v18-v15-z2-v1";
       let snowCalibrated = false;
       let snowCalibrationQueued = false;
 
       function percentile(sorted, p) {
         if (!sorted.length) return null;
         const idx = Math.max(0, Math.min(sorted.length - 1, (sorted.length - 1) * p));
-        const lo = Math.floor(idx);
-        const hi = Math.ceil(idx);
+        const lo = Math.floor(idx), hi = Math.ceil(idx);
         if (lo === hi) return sorted[lo];
         const t = idx - lo;
         return sorted[lo] * (1 - t) + sorted[hi] * t;
@@ -3825,113 +4082,134 @@
           heavy,   ["rgba", 250, 253, 255, 0.52],
           peak,    ["rgba", 253, 254, 255, 0.72]
         ]);
-        console.info("Adaptive snow DEM stops:", { start, light, medium, heavy, peak });
       }
 
-      function calibrateSnowOverlayFromLoadedTerrain() {
-        if (snowCalibrated || !map.getLayer(SNOW_LAYER_ID)) return;
-
-        const bounds = map.getBounds();
-        if (!bounds) return;
-        const west = bounds.getWest();
-        const east = bounds.getEast();
-        const south = bounds.getSouth();
-        const north = bounds.getNorth();
-        const terrain = map.getTerrain?.();
-        const exaggeration = Number(terrain?.exaggeration) > 0 ? Number(terrain.exaggeration) : 1.5;
-        const elevations = [];
-        const cols = 24;
-        const rows = 16;
-
-        for (let y = 0; y < rows; y++) {
-          const fy = (y + 0.5) / rows;
-          const lat = south + (north - south) * fy;
-          for (let x = 0; x < cols; x++) {
-            const fx = (x + 0.5) / cols;
-            const lng = west + (east - west) * fx;
-            const exaggeratedElevation = map.queryTerrainElevation([lng, lat]);
-            if (!Number.isFinite(exaggeratedElevation)) continue;
-            const rawElevation = exaggeratedElevation / exaggeration;
-            // Ignore water / deliberately lowered coast values. We only need the
-            // positive land-height distribution to find the mountain tail.
-            if (rawElevation > 0) elevations.push(rawElevation);
-          }
-        }
-
-        if (elevations.length < 60) {
-          console.info(`Snow calibration postponed: only ${elevations.length} terrain samples ready.`);
-          return;
-        }
-
-        elevations.sort((a, b) => a - b);
-        const q77 = percentile(elevations, 0.77);
-        const q80 = percentile(elevations, 0.80);
-        const q86 = percentile(elevations, 0.86);
-        const q91 = percentile(elevations, 0.91);
-        const q96 = percentile(elevations, 0.96);
-        const q995 = percentile(elevations, 0.995);
-        const max = elevations[elevations.length - 1];
-
-        // Snow now starts at roughly the upper 20% of the loaded land-height
-        // distribution. The forest shader uses the same calibration: trees thin
-        // from q77 and are fully gone by the q80 snow line.
-        let start = q80;
-        let light = Math.max(q86, start + 1);
-        let medium = Math.max(q91, light + 1);
-        let heavy = Math.max(q96, medium + 1);
+      function applyGlobalSnowCalibration(values, sourceLabel = "global DEM") {
+        if (!values?.length || values.length < 100) return false;
+        values.sort((a, b) => a - b);
+        const q65 = percentile(values, 0.65);
+        const q74 = percentile(values, 0.74);
+        const q77 = percentile(values, 0.77);
+        const q80 = percentile(values, 0.80);
+        const q86 = percentile(values, 0.86);
+        const q91 = percentile(values, 0.91);
+        const q96 = percentile(values, 0.96);
+        const q995 = percentile(values, 0.995);
+        const max = values[values.length - 1];
+        const start = q80;
+        const light = Math.max(q86, start + 1);
+        const medium = Math.max(q91, light + 1);
+        const heavy = Math.max(q96, medium + 1);
         let peak = Math.max(q995, heavy + 1);
         if (peak > max) peak = max;
         if (peak <= heavy) peak = heavy + Math.max(1, (max - heavy) * 0.5);
-
         setSnowReliefStops([start, light, medium, heavy, peak]);
+        setRockReliefStops(q65, q74, start);
+        const exaggeration = Number(map.getTerrain?.()?.exaggeration) || 1.5;
         snowTreeFadeStartExaggerated = q77 * exaggeration;
         snowTreeCutoffExaggerated = start * exaggeration;
         hybridForestController?.map?.triggerRepaint?.();
         snowCalibrated = true;
-        console.info("Snow calibrated from loaded Bigane DEM", {
-          samples: elevations.length, exaggeration, min: elevations[0], max,
-          q77, q80, q86, q91, q96, q995,
-          treeFadeStart: snowTreeFadeStartExaggerated,
-          treeCutoff: snowTreeCutoffExaggerated
-        });
+        console.info(`Global snow calibration applied (${sourceLabel})`, { samples: values.length, q65, q74, q77, q80, q86, q91, q96, q995, max });
+        return true;
+      }
+
+      async function decodeTerrainTileForSnow(url, sampleStep = 8) {
+        const response = await fetch(url, { cache: "force-cache" });
+        if (!response.ok) return [];
+        const blob = await response.blob();
+        const bitmap = await createImageBitmap(blob);
+        const canvas = document.createElement("canvas");
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        ctx.drawImage(bitmap, 0, 0);
+        bitmap.close?.();
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        const values = [];
+        for (let y = sampleStep >> 1; y < canvas.height; y += sampleStep) {
+          for (let x = sampleStep >> 1; x < canvas.width; x += sampleStep) {
+            const i = (y * canvas.width + x) * 4;
+            const raw = -10000 + (data[i] * 65536 + data[i + 1] * 256 + data[i + 2]) * 0.1;
+            if (raw > 0 && raw < 50000) values.push(raw);
+          }
+        }
+        return values;
+      }
+
+      async function calibrateSnowOverlayGlobally() {
+        if (snowCalibrated || !map.getLayer(SNOW_LAYER_ID)) return;
+        try {
+          const cached = JSON.parse(localStorage.getItem(SNOW_CACHE_KEY) || "null");
+          if (Array.isArray(cached?.values) && cached.values.length >= 100) {
+            if (applyGlobalSnowCalibration(cached.values.slice(), "cached world DEM")) return;
+          }
+        } catch (_) {}
+
+        const values = [];
+        const z = 2;
+        const tileCount = 1 << z;
+        const jobs = [];
+        for (let x = 0; x < tileCount; x++) {
+          for (let y = 0; y < tileCount; y++) {
+            jobs.push(decodeTerrainTileForSnow(`./terrain-v18-v15-water-buffered-512/${z}/${x}/${y}.png`, 8).catch(() => []));
+          }
+        }
+        const chunks = await Promise.all(jobs);
+        for (const chunk of chunks) values.push(...chunk);
+        if (values.length >= 1000) {
+          // Persist a deterministic subset rather than tens of thousands of values.
+          const stride = Math.max(1, Math.floor(values.length / 6000));
+          const cachedValues = values.filter((_, i) => i % stride === 0).slice(0, 7000);
+          try { localStorage.setItem(SNOW_CACHE_KEY, JSON.stringify({ values: cachedValues })); } catch (_) {}
+          applyGlobalSnowCalibration(values, "z2 world DEM tiles");
+          return;
+        }
+        console.warn("Global DEM snow sampling unavailable; using loaded-terrain fallback.");
+        calibrateSnowOverlayFromLoadedTerrainFallback();
+      }
+
+      function calibrateSnowOverlayFromLoadedTerrainFallback() {
+        if (snowCalibrated || !map.getLayer(SNOW_LAYER_ID)) return;
+        const bounds = map.getBounds();
+        if (!bounds) return;
+        const elevations = [];
+        const exaggeration = Number(map.getTerrain?.()?.exaggeration) || 1.5;
+        for (let y = 0; y < 18; y++) {
+          const fy = (y + 0.5) / 18;
+          const lat = bounds.getSouth() + (bounds.getNorth() - bounds.getSouth()) * fy;
+          for (let x = 0; x < 28; x++) {
+            const fx = (x + 0.5) / 28;
+            const lng = bounds.getWest() + (bounds.getEast() - bounds.getWest()) * fx;
+            const e = map.queryTerrainElevation([lng, lat]);
+            if (Number.isFinite(e) && e > 0) elevations.push(e / exaggeration);
+          }
+        }
+        if (elevations.length >= 100) applyGlobalSnowCalibration(elevations, "viewport fallback");
       }
 
       function queueSnowCalibration() {
         if (snowCalibrated || snowCalibrationQueued) return;
         snowCalibrationQueued = true;
-        setTimeout(() => {
-          snowCalibrationQueued = false;
-          calibrateSnowOverlayFromLoadedTerrain();
-        }, 180);
+        setTimeout(async () => {
+          try { await calibrateSnowOverlayGlobally(); }
+          finally { snowCalibrationQueued = false; }
+        }, 120);
       }
 
       function installSnowOverlay() {
-        if (map.getLayer(SNOW_LAYER_ID)) return;
-        if (!map.getSource("bigane-dem")) return;
-
-        // Start fully transparent. Once enough DEM tiles are loaded we derive
-        // thresholds from the actual Bigane DEM rather than assuming Earth-like
-        // metre values. The snow remains partly transparent so the unchanged
-        // hillshade beneath it continues to model the mountain relief.
-        const snowLayer = {
+        if (map.getLayer(SNOW_LAYER_ID) || !map.getSource("bigane-dem")) return;
+        const beforeId = map.getLayer("Town names") ? "Town names" : (map.getLayer("Capitals") ? "Capitals" : undefined);
+        map.addLayer({
           id: SNOW_LAYER_ID,
           type: "color-relief",
           source: "bigane-dem",
           paint: {
-            "color-relief-color": [
-              "interpolate", ["linear"], ["elevation"],
-              -100000, ["rgba", 246, 250, 255, 0.0],
-              1000000, ["rgba", 246, 250, 255, 0.0]
-            ],
-            "color-relief-opacity": 1.0,
+            "color-relief-color": ["interpolate", ["linear"], ["elevation"], -100000, ["rgba",246,250,255,0], 1000000, ["rgba",246,250,255,0]],
+            "color-relief-opacity": 1,
             "resampling": "linear"
           }
-        };
-
-        const beforeId = map.getLayer("Town names") ? "Town names" :
-                         map.getLayer("Capitals") ? "Capitals" : undefined;
-        map.addLayer(snowLayer, beforeId);
-        console.info("Adaptive GPU snow overlay installed; waiting for DEM calibration.");
+        }, beforeId);
         queueSnowCalibration();
       }
 
@@ -4002,7 +4280,9 @@
         }
 
 
+        installWaterPolish();
         installSnowOverlay();
+        installLandscapePolish();
 
         for (const layerId of ["Town names", "Capitals", "clickable"]) {
           if (!map.getLayer(layerId)) continue;
