@@ -1097,9 +1097,10 @@
       // ---------------------------------------------------------------------
       // HYBRID GPU FOREST
       // ---------------------------------------------------------------------
-      // V36: forest placement is derived from the existing Biomes vector layer.
+      // V37: forest placement is derived from the existing Biomes vector layer.
       // Adds treeline/snow exclusion, settlement clearings, sparse grassland
-      // trees and oasis palms specifically on hot-desert land near lake shores.
+      // trees, oasis palms on hot-desert lake shores, and a warmer-climate
+      // palm distribution in tropical forests / wetlands / savanna near water.
       // Close to the camera: low-poly 3D tree archetypes.
       // Farther away: cheap crossed-plane sprite clusters.
       // Both sample MapLibre's terrain height map on the GPU. A wide padded
@@ -1116,6 +1117,10 @@
       const HF_SETTLEMENT_GRID_METERS = 50000;
       const HF_OASIS_LAKE_SEARCH_METERS = 32000;
       const HF_OASIS_LAKE_RING_METERS = 18000;
+      const HF_PALM_WARM_LAT_FULL = 18;
+      const HF_PALM_WARM_LAT_ZERO = 35;
+      const HF_PALM_WETLAND_LAKE_PROXIMITY_METERS = 26000;
+      const HF_PALM_SAVANNA_LAKE_PROXIMITY_METERS = 42000;
       // The terrain height map used by the forest contains elevation in metres
       // INCLUDING MapLibre terrain exaggeration. These are calibrated together
       // with the adaptive snow layer; until then they disable treeline fading.
@@ -1324,10 +1329,10 @@
         return fullRadiusMeters * smooth;
       }
 
-      function hfSelectType(biome, random01) {
+      function hfSelectType(biome, random01, mixOverride = null) {
         const config = HF_BIOMES[biome];
         if (!config) return 0;
-        const mix = config.mix;
+        const mix = mixOverride || config.mix;
         let running = 0;
         for (const [typeId, weight] of mix) {
           running += weight;
@@ -1744,6 +1749,69 @@
         return Number.isFinite(bestSq) ? Math.sqrt(bestSq) / Math.max(1e-12, mpu) : Infinity;
       }
 
+
+      function hfWarmPalmFactor(lat) {
+        const absLat = Math.abs(Number(lat) || 0);
+        if (absLat <= HF_PALM_WARM_LAT_FULL) return 1;
+        if (absLat >= HF_PALM_WARM_LAT_ZERO) return 0;
+        const t = (HF_PALM_WARM_LAT_ZERO - absLat) / (HF_PALM_WARM_LAT_ZERO - HF_PALM_WARM_LAT_FULL);
+        return t * t * (3 - 2 * t);
+      }
+
+      function hfCenterOfBounds(bounds) {
+        return {
+          x: (bounds.x0 + bounds.x1) * 0.5,
+          y: (bounds.y0 + bounds.y1) * 0.5,
+          lat: (bounds.south + bounds.north) * 0.5,
+          lng: (bounds.west + bounds.east) * 0.5
+        };
+      }
+
+      function hfClamp01(value) {
+        return Math.max(0, Math.min(1, value));
+      }
+
+      function hfPalmMixForEntry(entry, allLakeRings) {
+        const center = hfCenterOfBounds(entry.bounds);
+        const warmFactor = hfWarmPalmFactor(center.lat);
+        if (warmFactor <= 0) return null;
+
+        let lakeDistanceMeters = Infinity;
+        if (allLakeRings?.length) {
+          const merc = new maplibregl.MercatorCoordinate(center.x, center.y, 0);
+          lakeDistanceMeters = hfDistanceToWaterRingsMeters(center.x, center.y, merc.meterInMercatorCoordinateUnits(), allLakeRings);
+        }
+        const wetlandWaterFactor = hfClamp01(1 - (lakeDistanceMeters / HF_PALM_WETLAND_LAKE_PROXIMITY_METERS));
+        const savannaWaterFactor = hfClamp01(1 - (lakeDistanceMeters / HF_PALM_SAVANNA_LAKE_PROXIMITY_METERS));
+
+        if (entry.biome === "Tropical rainforest") {
+          const palm = 0.05 + 0.10 * warmFactor;
+          return [["tropical", 0.78 - palm * 0.70], ["palm", palm], ["deciduous", 1 - (0.78 - palm * 0.70) - palm]];
+        }
+        if (entry.biome === "Tropical seasonal forest") {
+          const palm = 0.08 + 0.10 * warmFactor;
+          const tropical = 0.52 - palm * 0.42;
+          const savanna = 0.33 - palm * 0.23;
+          const deciduous = 1 - tropical - savanna - palm;
+          return [["tropical", tropical], ["palm", palm], ["savanna", savanna], ["deciduous", deciduous]];
+        }
+        if (entry.biome === "Wetland") {
+          const palm = 0.05 + 0.11 * warmFactor + 0.08 * wetlandWaterFactor;
+          if (palm < 0.08) return null;
+          const wetland = 0.68 - palm * 0.72;
+          const deciduous = 1 - wetland - palm;
+          return [["wetland", wetland], ["palm", palm], ["deciduous", deciduous]];
+        }
+        if (entry.biome === "Savanna") {
+          const palm = 0.02 + 0.03 * warmFactor + 0.09 * savannaWaterFactor;
+          if (palm < 0.06) return null;
+          const savanna = 0.92 - palm * 0.82;
+          const tropical = 1 - savanna - palm;
+          return [["savanna", savanna], ["palm", palm], ["tropical", tropical]];
+        }
+        return null;
+      }
+
       function hfCollectSettlementPoints(mapInstance) {
         const layerIds = ["Town names", "Capitals", "clickable"].filter(id => mapInstance.getLayer(id));
         const points = [];
@@ -2129,7 +2197,12 @@
             const allLakeRings = [...explicitLakeRings, ...desertHoleRings];
             const searchPadWorld = HF_OASIS_LAKE_SEARCH_METERS / HF_WORLD_METERS;
 
-            const normalForestEntries = allEntries.filter(entry => Boolean(HF_BIOMES[entry.biome]));
+            const normalForestEntries = allEntries
+              .filter(entry => Boolean(HF_BIOMES[entry.biome]))
+              .map(entry => ({
+                ...entry,
+                mixOverride: hfPalmMixForEntry(entry, allLakeRings)
+              }));
             const oasisEntries = [];
             for (const desert of desertEntries) {
               const nearbyRings = allLakeRings.filter(ring => hfBoundsNear(desert.bounds, ring.bounds, searchPadWorld));
@@ -2255,7 +2328,7 @@
                   if (hfNearSettlement(x, y, localMpu, settlementIndex)) continue;
                   seen.add(key);
 
-                  const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4));
+                  const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4), entry.mixOverride);
                   const type = HF_TYPES[typeIndex];
                   const scale = 0.78 + hfHash(ix, iy, 5) * 0.54;
                   const height = type.baseHeight * scale * HF_SETTINGS.treeSize;
