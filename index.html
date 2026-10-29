@@ -1467,6 +1467,54 @@
         return `rgba(${Math.round(rgb[0] * 255)},${Math.round(rgb[1] * 255)},${Math.round(rgb[2] * 255)},${alpha})`;
       }
 
+
+      function hfAlphaBleedCanvas(canvas, passes = 8) {
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) return canvas;
+        const w = canvas.width;
+        const h = canvas.height;
+        const image = ctx.getImageData(0, 0, w, h);
+        const data = image.data;
+
+        // Extend the RGB colour of opaque tree pixels into transparent pixels,
+        // but keep alpha at zero. Linear filtering and generated mipmaps then
+        // sample tree colour at the silhouette instead of a bright/empty fringe.
+        for (let pass = 0; pass < passes; pass++) {
+          const src = new Uint8ClampedArray(data);
+          let changed = false;
+          for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+              const i = (y * w + x) * 4;
+              if (src[i + 3] !== 0) continue;
+              let r = 0, g = 0, b = 0, n = 0;
+              for (let oy = -1; oy <= 1; oy++) {
+                for (let ox = -1; ox <= 1; ox++) {
+                  if (ox === 0 && oy === 0) continue;
+                  const nx = x + ox;
+                  const ny = y + oy;
+                  if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                  const j = (ny * w + nx) * 4;
+                  // In later passes, a transparent neighbour may already have
+                  // bled RGB but alpha remains zero, so use non-black RGB too.
+                  if (src[j + 3] === 0 && src[j] === 0 && src[j + 1] === 0 && src[j + 2] === 0) continue;
+                  r += src[j]; g += src[j + 1]; b += src[j + 2]; n++;
+                }
+              }
+              if (n) {
+                data[i] = Math.round(r / n);
+                data[i + 1] = Math.round(g / n);
+                data[i + 2] = Math.round(b / n);
+                data[i + 3] = 0;
+                changed = true;
+              }
+            }
+          }
+          if (!changed) break;
+        }
+        ctx.putImageData(image, 0, 0);
+        return canvas;
+      }
+
       function hfMakeSpriteCanvas(type) {
         const canvas = document.createElement("canvas");
         canvas.width = 256;
@@ -1548,7 +1596,7 @@
           context.closePath();
           context.fill();
         }
-        return canvas;
+        return hfAlphaBleedCanvas(canvas, 8);
       }
 
       function hfCreateTexture(gl, canvas) {
