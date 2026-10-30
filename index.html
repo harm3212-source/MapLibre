@@ -338,10 +338,247 @@
     }
 
   </style>
+
+<!-- BIGANE_V49_PASSIVE_LOADER_STYLE_BEGIN -->
+<style id="bg49-progress-style">
+  #bg49-progress, #bg49-progress * { box-sizing: border-box; }
+  #bg49-progress[hidden] { display: none !important; }
+  #bg49-progress {
+    position: fixed; inset: 0; z-index: 10000;
+    display: grid; place-items: center; padding: 24px;
+    overflow: auto; color: #e9ece3;
+    background: radial-gradient(ellipse at 25% 15%, #263d3c 0, #172a2d 45%, #101f24 100%);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    opacity: 1; transition: opacity 160ms ease;
+  }
+  #bg49-progress.bg49-leaving { opacity: 0; pointer-events: none; }
+  #bg49-progress .bg49-card { width: min(100%, 540px); padding: 34px 32px 27px; border: 1px solid #49605b; border-radius: 18px; background: #17292de8; box-shadow: 0 24px 80px #0003; }
+  #bg49-progress .bg49-brand { margin: 0 0 21px; letter-spacing: .26em; font-size: 12px; font-weight: 700; color: #c8d5b0; }
+  #bg49-progress h1 { margin: 0 0 9px; font-size: clamp(23px, 5vw, 30px); line-height: 1.2; font-weight: 600; letter-spacing: -.02em; }
+  #bg49-progress .bg49-intro { color: #b8c6c3; margin: 0 0 26px; }
+  #bg49-progress .bg49-meter-label { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: #bfcdca; margin-bottom: 9px; }
+  #bg49-progress .bg49-track { height: 6px; border-radius: 3px; overflow: hidden; background: #30474a; }
+  #bg49-progress .bg49-fill { height: 100%; width: 0; background: #bfcca6; border-radius: 3px; transition: width 180ms ease; }
+  #bg49-progress .bg49-stages { display: grid; gap: 0; margin: 21px 0; padding: 0; list-style: none; }
+  #bg49-progress .bg49-stage { display: grid; grid-template-columns: 13px minmax(0,1fr) auto; gap: 10px; align-items: center; min-height: 34px; border-bottom: 1px solid #ffffff0c; }
+  #bg49-progress .bg49-dot { display: block; width: 7px; height: 7px; border: 1px solid #76928c; border-radius: 50%; }
+  #bg49-progress .bg49-stage[data-state="ready"] .bg49-dot { background: #b8d6ac; border-color: #b8d6ac; }
+  #bg49-progress .bg49-stage[data-state="warning"] .bg49-dot { background: #e2b37b; border-color: #e2b37b; }
+  #bg49-progress .bg49-stage[data-state="skip"] .bg49-dot { background: #869a96; }
+  #bg49-progress .bg49-label { font-size: 13px; }
+  #bg49-progress .bg49-state { text-align: right; color: #a3b9b4; font-size: 12px; }
+  #bg49-progress .bg49-stage[data-state="warning"] .bg49-state { color: #e2b37b; }
+  #bg49-progress .bg49-note { margin: 0 0 18px; min-height: 40px; color: #acbfba; font-size: 12px; }
+  #bg49-progress #bg49-progress-open { display: block; width: 100%; min-height: 43px; padding: 10px 15px; border: 1px solid #6e8982; border-radius: 8px; background: #263d3e; color: #f0f3e9; font: inherit; font-size: 13px; cursor: pointer; }
+  #bg49-progress #bg49-progress-open:hover { background: #324c4b; }
+  #bg49-progress #bg49-progress-open:focus-visible { outline: 2px solid #d2e3b9; outline-offset: 4px; }
+  #bg49-progress .bg49-footnote { margin: 13px 0 0; color: #8fa8a1; font-size: 11px; text-align: center; }
+  @media (max-width: 480px) {
+    #bg49-progress { padding: 14px; }
+    #bg49-progress .bg49-card { padding: 26px 21px 22px; }
+    #bg49-progress .bg49-label { font-size: 12px; }
+    #bg49-progress .bg49-state { font-size: 11px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #bg49-progress, #bg49-progress .bg49-fill { transition: none; }
+  }
+</style>
+<!-- BIGANE_V49_PASSIVE_LOADER_STYLE_END -->
 </head>
 <body>
   <div id="map"></div>
   <div id="status">Bigane + Kanka initialiseren...</div>
+<!-- BIGANE_V49_PASSIVE_LOADER_BODY_BEGIN -->
+<section id="bg49-progress" aria-labelledby="bg49-progress-title" hidden>
+  <div class="bg49-card">
+    <p class="bg49-brand">BIGANE</p>
+    <h1 id="bg49-progress-title">Je kaart wordt geopend</h1>
+    <p class="bg49-intro">De eerste kaartweergave wordt geladen.</p>
+    <div class="bg49-meter-label"><span>Voortgang per onderdeel</span><span id="bg49-progress-count">0 / 7</span></div>
+    <div class="bg49-track" id="bg49-progress-bar" role="progressbar" aria-label="Opstartonderdelen" aria-valuemin="0" aria-valuemax="7" aria-valuenow="0">
+      <div class="bg49-fill" id="bg49-progress-fill"></div>
+    </div>
+    <ul class="bg49-stages">
+      <li class="bg49-stage" data-stage="base" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Basiskaart</span><span class="bg49-state">Wachten</span></li>
+      <li class="bg49-stage" data-stage="terrain" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Terrein</span><span class="bg49-state">Wachten</span></li>
+      <li class="bg49-stage" data-stage="landscape" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Landschap</span><span class="bg49-state">Wachten</span></li>
+      <li class="bg49-stage" data-stage="water" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Ondiep water</span><span class="bg49-state">Wachten</span></li>
+      <li class="bg49-stage" data-stage="forest" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Bomen</span><span class="bg49-state">Wachten</span></li>
+      <li class="bg49-stage" data-stage="snow" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Sneeuwinstellingen</span><span class="bg49-state">Wachten</span></li>
+      <li class="bg49-stage" data-stage="models" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Nabije 3D-steden</span><span class="bg49-state">Wachten</span></li>
+    </ul>
+    <p class="bg49-note" id="bg49-progress-note" role="status" aria-live="polite">Je kunt de kaart ook alvast openen. Het laden gaat dan gewoon door.</p>
+    <button id="bg49-progress-open" type="button">Kaart alvast openen</button>
+    <p class="bg49-footnote">Kanka-afbeeldingen kunnen na het openen nog laden.</p>
+  </div>
+</section>
+<script id="bg49-progress-script">
+(() => {
+  'use strict';
+  // Presentation only. No network requests, cache/storage writes, map changes,
+  // shader setup, calibration, task rescheduling or forced repaint calls.
+  const root = document.getElementById('bg49-progress');
+  if (!root) return;
+  const button = document.getElementById('bg49-progress-open');
+  const note = document.getElementById('bg49-progress-note');
+  const bar = document.getElementById('bg49-progress-bar');
+  const fill = document.getElementById('bg49-progress-fill');
+  const counter = document.getElementById('bg49-progress-count');
+  const rows = new Map(Array.from(root.querySelectorAll('[data-stage]'), row => [row.dataset.stage, row]));
+  const started = performance.now();
+  const errors = new Set();
+  const unsubscribers = [];
+  let closed = false, attached = false, loaded = false, rendered = false;
+  let map = null, read = null, poll = null, finish = null;
+  let observer = null, readyAt = null, lastCount = -1;
+
+  function setNote(text) { if (note.textContent !== text) note.textContent = text; }
+  function stage(id, state, text) {
+    const row = rows.get(id);
+    if (!row) return;
+    if (row.dataset.state !== state) row.dataset.state = state;
+    const value = row.querySelector('.bg49-state');
+    if (value.textContent !== text) value.textContent = text;
+  }
+  function stopWatching() {
+    clearInterval(poll); poll = null;
+    clearTimeout(finish); finish = null;
+    observer?.disconnect(); observer = null;
+    for (const remove of unsubscribers.splice(0)) {
+      try { remove(); } catch (_) { /* Map may already be disposed. */ }
+    }
+    window.removeEventListener('error', onPageError, true);
+    window.removeEventListener('unhandledrejection', onPageError);
+    button.removeEventListener('click', onOpen);
+    map = null; read = null;
+  }
+  function close() {
+    if (closed) return;
+    closed = true;
+    const hadFocus = root.contains(document.activeElement);
+    stopWatching();
+    root.classList.add('bg49-leaving');
+    root.setAttribute('aria-hidden', 'true');
+    setTimeout(() => {
+      root.remove();
+      document.getElementById('bg49-progress-style')?.remove();
+      if (hadFocus) document.querySelector('#map canvas')?.focus({preventScroll:true});
+    }, 180);
+  }
+  function onOpen() { close(); }
+  function onPageError() {
+    if (!closed) setNote('Een onderdeel meldt een fout. Je kunt de kaart alvast openen; de oorspronkelijke foutmelding blijft beschikbaar.');
+  }
+  function sourceReady(id) {
+    try { return Boolean(map?.getSource(id) && map.isSourceLoaded(id)); }
+    catch (_) { return false; }
+  }
+  function sourceStage(key, id) {
+    if (sourceReady(id)) stage(key, 'ready', 'Gereed');
+    else if (errors.has(id)) stage(key, 'warning', 'Niet geladen');
+    else stage(key, 'pending', 'Laden');
+  }
+  function inspect() {
+    if (closed) return;
+    try {
+      if (map && read) {
+        const state = read(); // Reads existing v49 state; never starts work.
+        loaded = loaded || Boolean(map.loaded());
+        stage('base', loaded ? 'ready' : 'pending', loaded ? 'Gereed' : 'Laden');
+        sourceStage('terrain', 'bigane-dem');
+        const pattern = map.getLayer('Biomes') ? map.getPaintProperty('Biomes', 'fill-pattern') : null;
+        const landscapeReady = Array.isArray(pattern) && pattern.includes('biome-deep-wood');
+        stage('landscape', landscapeReady ? 'ready' : 'pending', landscapeReady ? 'Ingesteld' : 'Laden');
+        if (state.water?.enabled === false) stage('water', 'skip', 'Uitgeschakeld');
+        else if (state.water?.phase === 'error' || errors.has('bigane-water-bands-v49')) stage('water', 'warning', 'Niet geladen');
+        else stage('water', state.water?.phase === 'ready' ? 'ready' : 'pending', state.water?.phase === 'ready' ? 'Gereed' : 'Laden');
+        if (!state.forestRequired) stage('forest', 'skip', 'Niet nodig in dit beeld');
+        else stage('forest', state.forestReady ? 'ready' : 'pending', state.forestReady ? 'Gereed' : 'Opbouwen');
+        stage('snow', state.snowReady ? 'ready' : 'pending', state.snowReady ? 'Gereed' : 'Hoogtes laden');
+        const models = state.models || {};
+        if (!models.installed) stage('models', 'pending', 'Laden');
+        else if (models.loading > 0) stage('models', 'pending', `${models.loaded || 0} geladen`);
+        else if (models.errors > 0) stage('models', 'warning', `${models.errors} niet geladen`);
+        else stage('models', 'ready', models.loaded ? `${models.loaded} geladen` : 'Geen aanvraag in dit beeld');
+      }
+      const states = Array.from(rows.values(), row => row.dataset.state);
+      const settled = states.filter(value => value !== 'pending').length;
+      const ready = states.filter(value => value === 'ready' || value === 'skip').length;
+      const warnings = states.filter(value => value === 'warning').length;
+      if (settled !== lastCount) {
+        lastCount = settled;
+        counter.textContent = `${settled} / ${rows.size}`;
+        bar.setAttribute('aria-valuenow', String(settled));
+        bar.setAttribute('aria-valuetext', `${ready} gereed of niet nodig, ${warnings} met melding, ${rows.size - settled} nog bezig`);
+        fill.style.width = `${settled / rows.size * 100}%`;
+      }
+      if (settled === rows.size && loaded && rendered) {
+        // Two observations avoid opening on a transient zero-loading snapshot.
+        if (readyAt === null) readyAt = performance.now();
+        if (performance.now() - readyAt >= 350 && finish === null) {
+          setNote(warnings ? 'Eerste kaartbeeld gereed, met een melding. Je kunt de kaart openen.' : 'Het eerste kaartbeeld is gereed.');
+          if (warnings) {
+            button.textContent = 'Kaart openen';
+            // Keep the warning visible; do not pretend missing parts succeeded.
+          } else finish = setTimeout(close, 450);
+        }
+      } else {
+        readyAt = null;
+        if (finish !== null) { clearTimeout(finish); finish = null; }
+      }
+      if (performance.now() - started > 20000 && settled < rows.size) {
+        setNote('Er wordt nog geladen. Je hoeft hier niet op te wachten: open de kaart gerust alvast.');
+      }
+      if (performance.now() - started > 45000) {
+        // Stop the passive observer, not the original loading tasks. Incomplete
+        // progress stays incomplete; the screen never invents 100% completion.
+        if (rendered) close();
+        else {
+          setNote('De kaart is nog niet gestart. Open de pagina zonder dit scherm om de oorspronkelijke melding te bekijken.');
+          clearInterval(poll); poll = null;
+        }
+      }
+    } catch (_) {
+      // A loader failure must never propagate into the original v49 module.
+      setNote('De voortgang kan niet worden uitgelezen. Je kunt de kaart alvast openen.');
+    }
+  }
+  const api = Object.freeze({
+    attach(instance, reader) {
+      if (closed || attached) return;
+      attached = true; map = instance; read = reader;
+      const listen = (event, handler) => {
+        map.on(event, handler);
+        unsubscribers.push(() => instance.off(event, handler));
+      };
+      listen('load', () => { loaded = true; });
+      listen('render', () => { rendered = true; });
+      listen('error', event => {
+        if (event?.sourceId) errors.add(event.sourceId);
+        onPageError();
+      });
+      listen('remove', close);
+      inspect();
+    },
+    close
+  });
+  window.BiganeV49Progress = api;
+  button.addEventListener('click', onOpen);
+  window.addEventListener('error', onPageError, true);
+  window.addEventListener('unhandledrejection', onPageError);
+  const originalStatus = document.getElementById('status');
+  if (originalStatus) {
+    observer = new MutationObserver(() => {
+      if (/^Fout:/i.test(originalStatus.textContent.trim())) onPageError();
+    });
+    observer.observe(originalStatus, {childList: true, characterData: true, subtree: true});
+  }
+  root.hidden = false;
+  poll = setInterval(inspect, 400);
+})();
+</script>
+<!-- BIGANE_V49_PASSIVE_LOADER_BODY_END -->
+
 
   <div class="layer-switcher" id="layer-switcher">
     <strong>Lagen</strong>
@@ -4314,6 +4551,28 @@
       map.on("error", (event) => {
         console.error("MapLibre error:", event.error || event);
       });
+
+      /* BIGANE_V49_PASSIVE_LOADER_HOOK_BEGIN */
+      // Read-only observer attached AFTER v49's own initialization handlers.
+      // It cannot change task ordering, storage, positions or snow calibration.
+      try {
+        window.BiganeV49Progress?.attach(map, () => {
+          const models = [...landmarkStatesByName.values()];
+          return {
+            water: waterPolishController?.getStats?.() || null,
+            snowReady: snowCalibrated,
+            forestRequired: document.getElementById('toggle-forests')?.checked !== false && map.getZoom() >= HF_SETTINGS.minZoom,
+            forestReady: Boolean(hybridForestController?.lastBuildKey && hybridForestController?.heightReady),
+            models: {
+              installed: Boolean(landmarkController),
+              loading: models.filter(item => item.loading).length,
+              loaded: models.filter(item => item.loaded).length,
+              errors: models.filter(item => item.error).length
+            }
+          };
+        });
+      } catch (_) { /* The map must work even if the loading screen fails. */ }
+      /* BIGANE_V49_PASSIVE_LOADER_HOOK_END */
 
     } catch (error) {
       showError("Fout: ", error);
