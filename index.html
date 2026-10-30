@@ -1094,7 +1094,7 @@
       }
 
       // ---------------------------------------------------------------
-      // V47: NATIVE VECTOR WATER, NO VIEWPORT MASK OR SCREEN-SIZED SDF
+      // V48: STABLE NATIVE WATER, NO OCEAN PATTERN, HIGHER SNOWLINE
       // Ocean and lakes use their original vector polygon fills. The former
       // v43-v46 CPU workers, tiled 1280px textures and fullscreen WebGL quad
       // have been removed completely. A single seamless, world-aligned
@@ -1102,8 +1102,8 @@
       // ocean polygons. Actual shorelines are cached geographic LineStrings,
       // not clipped polygon silhouettes or artificial viewport borders.
       // ---------------------------------------------------------------
-      const BIGANE_WATER_SOURCE_ID = 'bigane-water-actual-shores-v47';
-      const BIGANE_WATER_PATTERN_ID = 'bigane-ocean-soft-wave-v47';
+      const BIGANE_WATER_SOURCE_ID = 'bigane-water-actual-shores-v48';
+      const BIGANE_WATER_PATTERN_ID = 'bigane-ocean-soft-wave-v48';
       let waterPolishController = null;
 
       function biganeMakeSeamlessOceanPattern() {
@@ -1167,34 +1167,22 @@
         const ocean=map.getLayer('Ocean');
         const lakes=map.getLayer('lakes');
         if(!ocean && !lakes) {
-          console.warn('Bigane water v47: native Ocean/lakes layers not found');
+          console.warn('Bigane water v48: native Ocean/lakes layers not found');
           return;
         }
 
         // A native polygon is the sole authority for where water exists.
-        // In particular this prevents detached shallow-water surfaces over lakes.
-        if(map.getLayer('background'))
-          map.setPaintProperty('background','background-color','#335f81');
-        if(ocean)map.setPaintProperty('Ocean','fill-color','#345f80');
-        if(lakes)map.setPaintProperty('lakes','fill-color','#4c8093');
-
-        // One world-fixed texture, generated once. Render it as the base
-        // background AND the original Ocean fill. Crucial: the open ocean
-        // outside the loaded vector polygons then looks identical, so the
-        // Ocean-geometry/LOD boundary cannot be visible. No overlay pass.
-        let oceanSurfaceEnabled=false;
-        try {
-          if(!map.hasImage(BIGANE_WATER_PATTERN_ID))
-            map.addImage(BIGANE_WATER_PATTERN_ID,biganeMakeSeamlessOceanPattern(),{pixelRatio:1});
-          if(map.hasImage(BIGANE_WATER_PATTERN_ID)) {
-            if(map.getLayer('background'))
-              map.setPaintProperty('background','background-pattern',BIGANE_WATER_PATTERN_ID);
-            if(ocean)map.setPaintProperty('Ocean','fill-pattern',BIGANE_WATER_PATTERN_ID);
-            oceanSurfaceEnabled=true;
-          }
-        } catch(error) {
-          console.warn('Bigane seamless ocean pattern could not be installed; native water remains:',error);
+        // V48 deliberately removes the repeated ocean pattern because it caused
+        // visible stripes/tiling and looked especially bad in lakes.
+        if(map.getLayer('background')) {
+          map.setPaintProperty('background','background-color','#3f6f90');
         }
+        if(ocean)map.setPaintProperty('Ocean','fill-color','#3f6f90');
+        if(lakes)map.setPaintProperty('lakes','fill-color','#5f93aa');
+
+        // No texture/pattern pass in v48. Coast depth is suggested using
+        // several true coastline strokes instead of a repeated fill pattern.
+        const oceanSurfaceEnabled=false;
 
         // Shorelines follow the real vector coordinates. We discard edges
         // introduced by vector-tile clipping, deduplicate shared geometry and
@@ -1211,25 +1199,50 @@
           if(map.getLayer(id))return;
           map.addLayer({id,...common,filter:['==',['get','kind'],kind],paint},before);
         };
-        // A soft contact line and a crisp outline. Widths are in screen pixels,
-        // NOT kilometre-wide masks or resolution-dependent EDT values.
-        addShoreLayer('bigane-ocean-contact-v47','ocean',{
-          'line-color':'#8cbbc4',
-          'line-width':['interpolate',['linear'],['zoom'],2,2,5,3.5,8,5,12,6],
-          'line-blur':1.1,'line-opacity':0.22
+        // A broad shallow-water glow plus a crisp coastline. This gives depth
+        // without screen-space masks, tile seams or striped water textures.
+        addShoreLayer('bigane-ocean-shallow-v48','ocean',{
+          'line-color':'#8fc8d6',
+          'line-width':['interpolate',['linear'],['zoom'],2,6,4,9,6,14,8,22,10,32],
+          'line-blur':8,
+          'line-opacity':0.18
         });
-        addShoreLayer('bigane-ocean-coast-v47','ocean',{
-          'line-color':'#bdd9d8',
-          'line-width':['interpolate',['linear'],['zoom'],2,0.65,6,1.15,10,1.55],
-          'line-opacity':0.80
+        addShoreLayer('bigane-ocean-contact-v48','ocean',{
+          'line-color':'#b7dde4',
+          'line-width':['interpolate',['linear'],['zoom'],2,2.2,5,3.8,8,5.2,12,6.2],
+          'line-blur':1.6,'line-opacity':0.20
         });
-        addShoreLayer('bigane-lake-coast-v47','lake',{
-          'line-color':'#a6c4c4',
-          'line-width':['interpolate',['linear'],['zoom'],2,0.55,6,0.95,10,1.20],
-          'line-opacity':0.64
+        addShoreLayer('bigane-ocean-coast-v48','ocean',{
+          'line-color':'#d8eef0',
+          'line-width':['interpolate',['linear'],['zoom'],2,0.7,6,1.2,10,1.7],
+          'line-opacity':0.86
+        });
+        // Mask lakes again above roads/routes so weird grids and route lines do
+        // not visibly cut through inland water.
+        if(lakes && !map.getLayer('bigane-lakes-mask-v48')) {
+          const ll=map.getLayer('lakes');
+          map.addLayer({
+            id:'bigane-lakes-mask-v48',
+            type:'fill',
+            source:ll.source,
+            ...(((ll['source-layer']||ll.sourceLayer)) ? {'source-layer':(ll['source-layer']||ll.sourceLayer)} : {}),
+            ...(ll.filter?{filter:ll.filter}:{}),
+            paint:{'fill-color':'#5f93aa','fill-opacity':1}
+          }, before);
+        }
+        addShoreLayer('bigane-lake-shallow-v48','lake',{
+          'line-color':'#9ecfdd',
+          'line-width':['interpolate',['linear'],['zoom'],2,4,4,6.5,6,9.5,8,13,10,18],
+          'line-blur':5,
+          'line-opacity':0.16
+        });
+        addShoreLayer('bigane-lake-coast-v48','lake',{
+          'line-color':'#d3ecef',
+          'line-width':['interpolate',['linear'],['zoom'],2,0.55,6,1.0,10,1.35],
+          'line-opacity':0.82
         });
 
-        let scheduled=null,disposed=false,builds=0,lastSignature='',lastStats={version:47,phase:'initializing'};
+        let scheduled=null,disposed=false,builds=0,lastSignature='',lastStats={version:48,phase:'initializing'};
         const layerDetails=[{id:'Ocean',kind:'ocean'},{id:'lakes',kind:'lake'}]
           .filter(item=>map.getLayer(item.id)?.source);
         function collectSourceFeatures(id) {
@@ -1307,7 +1320,7 @@
             map.getSource(BIGANE_WATER_SOURCE_ID)?.setData({type:'FeatureCollection',features});
             lastSignature=signature;builds++;
           }
-          lastStats={version:47,phase:'ready',backend:'native-vectors',
+          lastStats={version:48,phase:'ready',backend:'native-vectors',
             oceanPattern:oceanSurfaceEnabled,shorelineSegments:segments,
             coastlineFeatures:features.length,tileClippingEdgesSkipped:clipped,
             waterPolygons:polygons,workerMs:0,textureReuploads:0,
@@ -4207,7 +4220,7 @@
 
 
       const SNOW_LAYER_ID = "bigane-snow-overlay";
-      const SNOW_CACHE_KEY = "bigane-global-snow-terrain-v18-v15-z2-v1";
+      const SNOW_CACHE_KEY = "bigane-global-snow-terrain-v18-v15-z2-v48";
       let snowCalibrated = false;
       let snowCalibrationQueued = false;
 
@@ -4222,15 +4235,15 @@
 
       function setSnowReliefStops(start, fadeWidth) {
         if (!map.getLayer(SNOW_LAYER_ID)) return;
-        // V47: snow begins at one elevation, with only a short edge anti-alias.
-        // No grey/brown rocky transition or four-stage milky snow fringe.
-        const full=start+Math.max(25,fadeWidth);
+        // V48: keep the transition visually simple. Below the snowline should be
+        // ordinary terrain again (with trees), not a huge pale middle band.
+        const full=start+Math.max(18,fadeWidth);
         map.setPaintProperty(SNOW_LAYER_ID,'color-relief-color',[
           'interpolate',['linear'],['elevation'],
           -100000,['rgba',248,251,255,0],
           start,['rgba',248,251,255,0],
-          full,['rgba',253,254,255,0.77],
-          1000000,['rgba',253,254,255,0.77]
+          full,['rgba',252,253,255,0.88],
+          1000000,['rgba',252,253,255,0.88]
         ]);
       }
 
@@ -4241,28 +4254,25 @@
         const q74 = percentile(values, 0.74);
         const q77 = percentile(values, 0.77);
         const q80 = percentile(values, 0.80);
-        const q86 = percentile(values, 0.86);
-        const q91 = percentile(values, 0.91);
+        const q88 = percentile(values, 0.88);
+        const q92 = percentile(values, 0.92);
         const q96 = percentile(values, 0.96);
         const q995 = percentile(values, 0.995);
         const max = values[values.length - 1];
+        // User preference: more snow than the adaptive conservative version, but
+        // only on truly high terrain. Use the top ~20% as the snow zone.
         const start = q80;
-        const light = Math.max(q86, start + 1);
-        const medium = Math.max(q91, light + 1);
-        const heavy = Math.max(q96, medium + 1);
-        let peak = Math.max(q995, heavy + 1);
-        if (peak > max) peak = max;
-        if (peak <= heavy) peak = heavy + Math.max(1, (max - heavy) * 0.5);
-        // The former 80th-to-99.5th percentile pale fringe is removed.
-        // A narrow transition (max. 150 elevation metres) prevents jaggies.
-        const fadeWidth=Math.max(35,Math.min(150,(q86-start)*0.13));
+        const full = Math.max(q88, start + 1);
+        const fadeWidth=Math.max(18,Math.min(55,(full-start)*0.45));
         setSnowReliefStops(start,fadeWidth);
         const exaggeration = Number(map.getTerrain?.()?.exaggeration) || 1.5;
-        snowTreeFadeStartExaggerated = (start-Math.max(20,fadeWidth*0.50))*exaggeration;
-        snowTreeCutoffExaggerated = start*exaggeration;
+        // Keep trees in the non-snow middle zone. Only fade very near the real
+        // snowline and remove them once clearly inside the snow zone.
+        snowTreeFadeStartExaggerated = (start - Math.max(8, fadeWidth * 0.35)) * exaggeration;
+        snowTreeCutoffExaggerated = (start + Math.max(10, fadeWidth * 0.55)) * exaggeration;
         hybridForestController?.map?.triggerRepaint?.();
         snowCalibrated = true;
-        console.info(`Global snow calibration applied (${sourceLabel})`, { samples: values.length, q65, q74, q77, q80, q86, q91, q96, q995, max });
+        console.info(`Global snow calibration applied (${sourceLabel})`, { samples: values.length, q65, q74, q77, q80, q88, q92, q96, q995, max });
         return true;
       }
 
