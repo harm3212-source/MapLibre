@@ -1,0 +1,113 @@
+{
+  "patch": {
+    "baseFile": "index_landmarks_bigane_v45_water_sdf_oldhill.html",
+    "baseSHA256": "a06e7b74a334cf54bea8cf4c290b6425f483f5c610baffa1cfd556879e45657e",
+    "outputFile": "index_landmarks_bigane_v49_v45_static_water_treeline.html",
+    "limitedPatchVerified": true,
+    "changed": [
+      "water-only block replaced",
+      "tree exclusion moves from q77-q80 to light-medium snow stops",
+      "one water bands checkbox"
+    ],
+    "unchanged": [
+      "snow colour stops",
+      "rock colour stops",
+      "hillshade",
+      "DEM",
+      "labels",
+      "routes",
+      "landmarks and storage keys",
+      "forest geometry, LOD, budgets and positions"
+    ],
+    "newDataDependency": "bigane-water-bands-v49.geojson"
+  },
+  "geometry": {
+    "exportedFeatures": 642,
+    "allExportedGeometriesValid": true,
+    "bandAreaInsideLandBeyondOneMetreM2": 0.0,
+    "lakeBandAreaOutsideLakeBeyondOneMetreM2": 0.0,
+    "worldFixedCropInvariance": true,
+    "samplePoints": 100000,
+    "sampledBandPointsOnLand": 0,
+    "note": "Checks against complete land coverage, not live native water tiles; widths in EPSG:3857."
+  },
+  "runtime": {
+    "waterInstaller": "passed with actual style layer ordering and a mocked MapLibre API",
+    "sourceCount": 1,
+    "nativeWaterFillLayersAdded": 1,
+    "waterMoveListeners": 0,
+    "waterZoomListeners": 0,
+    "missingFileFallback": "native water retained; error reported",
+    "toggle": "passed",
+    "cleanup": "passed",
+    "snowAndRockPaintUnchanged": true,
+    "oldTreeThresholds": {
+      "start": 34650,
+      "cutoff": 36000
+    },
+    "newTreeThresholds": {
+      "start": 38700,
+      "cutoff": 40950
+    },
+    "note": "Not an end-to-end rendering test against live MapLibre tiles."
+  },
+  "build": {
+    "version": 49,
+    "source": "BiomesBigane2.geojson",
+    "sourceMode": "complete-biome-land-coverage",
+    "classificationWarning": "inferred-from-land-union; NOT verified against live Ocean/lakes vector tiles",
+    "landComponents": 92,
+    "inferredLakeComponents": 122,
+    "features": 642,
+    "featureCounts": {
+      "ocean": 249,
+      "lake": 393
+    },
+    "coordinates": 409350,
+    "bytes": 9160848,
+    "bands": [
+      {
+        "kind": "ocean",
+        "band": 0,
+        "landOverlapProjectedM2": 0.0
+      },
+      {
+        "kind": "ocean",
+        "band": 1,
+        "landOverlapProjectedM2": 0.0
+      },
+      {
+        "kind": "ocean",
+        "band": 2,
+        "landOverlapProjectedM2": 0.0
+      },
+      {
+        "kind": "lake",
+        "band": 0,
+        "landOverlapProjectedM2": 0.0
+      },
+      {
+        "kind": "lake",
+        "band": 1,
+        "landOverlapProjectedM2": 0.0
+      },
+      {
+        "kind": "lake",
+        "band": 2,
+        "landOverlapProjectedM2": 0.0
+      }
+    ],
+    "seconds": 7.92
+  },
+  "files": {
+    "index_landmarks_bigane_v49_v45_static_water_treeline.html": {
+      "bytes": 194445,
+      "sha256": "daf9edc8fdaca4a5130f66c39a928b9d8dbe4a9a45ea5927bf98a36c45269f34"
+    },
+    "bigane-water-bands-v49.geojson": {
+      "bytes": 9160848,
+      "sha256": "0f5146cc9df6bc084035e45f8826486efd9e58eb05fd98b51458824861956df9"
+    }
+  },
+  "htmlIdsUnique": true
+}
