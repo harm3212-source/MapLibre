@@ -725,7 +725,7 @@
           <input id="forest-near-cap" type="number" step="500" min="0" max="18000" />
         </div>
         <div>
-          <label for="forest-sprite-cap">Max. sprites</label>
+          <label for="forest-sprite-cap">Max. sprites bij inzoomen</label>
           <input id="forest-sprite-cap" type="number" step="1000" min="0" max="90000" />
         </div>
       </div>
@@ -742,6 +742,13 @@
           </select>
         </div>
       </div>
+      <div class="landmark-editor-grid">
+        <div>
+          <label for="forest-overview-sprite-cap">Max. sprites bij uitzoomen</label>
+          <input id="forest-overview-sprite-cap" type="number" step="1000" min="0" max="90000" />
+        </div>
+      </div>
+      <p style="font-size:11px;line-height:1.4;margin:6px 0;color:#555">Het spritebudget groeit tussen de algemene bosgrens en de 3D-grens. Verhoog het overzichtsbudget tot het gewone spritebudget voor de volle dichtheid op alle zoomniveaus. De viewportbuffer blijft even groot.</p>
       <p id="forest-zoom-status" role="status" style="font-size:12px;line-height:1.45;margin:8px 0;white-space:normal"></p>
       <p style="font-size:11px;line-height:1.4;margin:6px 0;color:#555">Onder de 3D-grens blijven sprites zichtbaar. Onder de algemene bosgrens verdwijnen ook de sprites. Deze instellingen veranderen de steden niet.</p>
       <button type="button" id="forest-reset">Herstel bosstandaarden</button>
@@ -1888,15 +1895,16 @@ function createBiganeRuralGeometry() {
       let snowTreeFadeStartExaggerated = 1.0e9;
       let snowTreeCutoffExaggerated = 1.0e9 + 1.0;
       const HF_DEFAULT_SETTINGS = Object.freeze({
-        minZoom: 4.15,
-        threeDStartZoom: 5,
-        outerRadius: 2.25,
-        fadeStart: 1.38,
-        treeSize: 0.68,
-        nearCap: 8000,
-        spriteCap: 36000,
-        densityMultiplier: 1
-      });
+        "minZoom": 6,
+        "threeDStartZoom": 8,
+        "outerRadius": 3,
+        "fadeStart": 1.15,
+        "treeSize": 0.68,
+        "nearCap": 3000,
+        "spriteCap": 36000,
+        "densityMultiplier": 1,
+        "overviewSpriteCap": 12000
+});
       const HF_SETTINGS = { ...HF_DEFAULT_SETTINGS };
       // v49 forest patch: normalize explicit numeric values, never turn an
       // empty text input into zero or silently replace zero budgets by defaults.
@@ -1917,6 +1925,7 @@ function createBiganeRuralGeometry() {
         number('treeSize', 0.1, 2);
         number('nearCap', 0, HF_MAX_NEAR_CAP, true);
         number('spriteCap', 0, HF_MAX_SPRITE_CAP, true);
+        number('overviewSpriteCap', 0, HF_SETTINGS.spriteCap, true);
         number('densityMultiplier', 0.1, 2);
       }
       function hfDrawPolicy(zoom, enabled = true, spritesOnly = false) {
@@ -1924,6 +1933,37 @@ function createBiganeRuralGeometry() {
         const models = forest && !spritesOnly && HF_SETTINGS.nearCap > 0 && zoom >= HF_SETTINGS.threeDStartZoom;
         return { forest, models, mode: !forest ? 'hidden' : models ? '3d-eligible' : 'sprites-only' };
       }
+      function hfOverviewSpriteBudget(zoom) {
+        if (!Number.isFinite(zoom) || zoom < HF_SETTINGS.minZoom) return 0;
+        const full = Math.max(0, Math.floor(HF_SETTINGS.spriteCap));
+        if (zoom >= HF_SETTINGS.threeDStartZoom || HF_SETTINGS.threeDStartZoom <= HF_SETTINGS.minZoom) return full;
+        const low = Math.min(full, Math.max(0, Math.floor(HF_SETTINGS.overviewSpriteCap)));
+        const span = HF_SETTINGS.threeDStartZoom - HF_SETTINGS.minZoom;
+        const t = Math.max(0, Math.min(1, (zoom - HF_SETTINGS.minZoom) / span));
+        return Math.round(low + (full - low) * t);
+      }
+
+      function hfDistributeSpriteBudget(counts, budget) {
+        const total = counts.reduce((sum, count) => sum + count, 0);
+        const limit = Math.min(total, Math.max(0, Math.floor(budget)));
+        if (!total || !limit) return counts.map(() => 0);
+        const raw = counts.map(count => count * limit / total);
+        const shares = raw.map(Math.floor);
+        let rest = limit - shares.reduce((sum, n) => sum + n, 0);
+        const order = raw.map((value, i) => ({i, remainder:value-shares[i]}))
+          .sort((a,b) => b.remainder-a.remainder || a.i-b.i);
+        for (const item of order) { if (rest-- <= 0) break; shares[item.i]++; }
+        return shares;
+      }
+
+      function hfCompleteGroupPrefix(ends, budget) {
+        // Never submit three out of four roots and then let the shader show
+        // the fourth root inside a combined grove billboard.
+        let lo=0, hi=ends.length;
+        while(lo<hi) {const mid=(lo+hi)>>>1; if(ends[mid]<=budget)lo=mid+1;else hi=mid;}
+        return lo ? ends[lo-1] : 0;
+      }
+
       hfNormalizeSettings();
       let hybridForestController = null;
 
@@ -2716,11 +2756,12 @@ function createBiganeRuralGeometry() {
           float high; float near; float reserved1; float reserved2;
         };
         vec4 rootTexel(int n) { return texelFetch(u_roots, ivec2(n % 256, n / 256), 0); }
-        Tree readTree(int slot) {
-          int n = (gl_InstanceID * 4 + slot) * 3;
+        Tree readTreeAt(int index) {
+          int n = index * 3;
           vec4 a = rootTexel(n), b = rootTexel(n+1), c = rootTexel(n+2);
           return Tree(a.xy,a.z,a.w,b.x,b.y,b.z,b.w,c.x,c.y,c.z,c.w);
         }
+        Tree readTree(int slot) { return readTreeAt(gl_InstanceID * 4 + slot); }
         float rootElevation(Tree t) {
           vec2 uv = (t.xy-u_heightBounds.xy)/(u_heightBounds.zw-u_heightBounds.xy);
           return texture(u_heightMap,vec2(clamp(uv.x,0.0,1.0),1.0-clamp(uv.y,0.0,1.0))).r;
@@ -2770,9 +2811,7 @@ function createBiganeRuralGeometry() {
         return result;
       }
 
-      function hfPackRootGroups(candidates) {
-        // Group existing roots, not new randomly placed copies. Coast edges,
-        // town clearings and the chosen biome mix therefore remain intact.
+      function hfPackRootGroups(candidates, compactSprites=false) {
         const buckets=new Map();
         for(const t of candidates) {
           const key=`${Math.floor(t.ix/(t.stride*2))}:${Math.floor(t.iy/(t.stride*2))}`;
@@ -2784,21 +2823,34 @@ function createBiganeRuralGeometry() {
           roots.sort((a,b)=>a.iy-b.iy || a.ix-b.ix);
           for(let i=0;i<roots.length;i+=4) groups.push(roots.slice(i,i+4));
         }
+        if(compactSprites) {
+          // World-stable rank: a smaller overview budget is spread over the
+          // whole prepared area, not a smaller circle around the camera.
+          const rank=g=>hfHash(Math.floor(g[0].ix/(g[0].stride*2)),
+                              Math.floor(g[0].iy/(g[0].stride*2)),431);
+          groups.sort((a,b)=>rank(a)-rank(b) || a[0].iy-b[0].iy || a[0].ix-b[0].ix);
+        }
         const rows=Math.max(1,Math.ceil(groups.length*4*3/HF_DATA_WIDTH));
         const data=new Float32Array(HF_DATA_WIDTH*rows*4);
-        let index=0;
-        for(const group of groups) {
-          const cx=group.reduce((v,t)=>v+t.x,0)/4;
-          const cy=group.reduce((v,t)=>v+t.y,0)/4;
+        const rootIndices=new Float32Array(candidates.length);
+        const groupEnds=new Uint32Array(groups.length);
+        let index=0, root=0;
+        groups.forEach((group,groupIndex)=>{
+          const cx=group.reduce((v,t)=>v+t.x,0)/group.length;
+          const cy=group.reduce((v,t)=>v+t.y,0)/group.length;
           const maxDistanceWorld=group.reduce((v,t)=>Math.max(v,Math.hypot(t.x-cx,t.y-cy)),0);
           for(let slot=0;slot<4;slot++) {
             const c=group[slot];
-            if(c) data.set([c.x,c.y,c.mpu,c.width,c.height,c.rotation,c.seed,1,
-                            c.highEligible?1:0,c.nearEligible?1:0,maxDistanceWorld,0],index);
+            if(c) {
+              data.set([c.x,c.y,c.mpu,c.width,c.height,c.rotation,c.seed,1,
+                        c.highEligible?1:0,c.nearEligible?1:0,maxDistanceWorld,group.length],index);
+              rootIndices[root++]=groupIndex*4+slot;
+            }
             index+=12;
           }
-        }
-        return {data,rows,count:groups.length,trees:candidates.length};
+          groupEnds[groupIndex]=root;
+        });
+        return {data,rows,count:groups.length,trees:candidates.length,rootIndices,groupEnds};
       }
 
       function hfCreateRootTexture(gl) {
@@ -2812,7 +2864,7 @@ function createBiganeRuralGeometry() {
       }
 
       function hfUploadRootGroups(gl,draw,candidates) {
-        const packed=hfPackRootGroups(candidates);
+        const packed=hfPackRootGroups(candidates,Boolean(draw.indexedSprites));
         gl.bindTexture(gl.TEXTURE_2D,draw.roots);
         const oldPre=gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
         const oldFlip=gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL);
@@ -2821,11 +2873,46 @@ function createBiganeRuralGeometry() {
         gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,HF_DATA_WIDTH,packed.rows,0,gl.RGBA,gl.FLOAT,packed.data);
         gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,oldPre);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,oldFlip);
-        draw.count=packed.count;
+        if(draw.indexedSprites) {
+          const oldArray=gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+          gl.bindBuffer(gl.ARRAY_BUFFER,draw.instances);
+          gl.bufferData(gl.ARRAY_BUFFER,packed.rootIndices,gl.DYNAMIC_DRAW);
+          gl.bindBuffer(gl.ARRAY_BUFFER,oldArray);
+        }
+        draw.count=draw.indexedSprites?packed.trees:packed.count;
+        draw.groupCount=packed.count;
+        draw.groupEnds=packed.groupEnds;
         draw.trees=packed.trees;
       }
 
+      function hfCreateCompactSpriteDraw(gl) {
+        const oldVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+        const oldArray=gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+        const vao=gl.createVertexArray(),buffer=gl.createBuffer();
+        const elements=gl.createBuffer(),instances=gl.createBuffer();
+        gl.bindVertexArray(vao);
+        // Four shared vertices per actual sprite; no padded/empty tree quads.
+        gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+        gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([
+          -0.5,0,0,0,0, 0.5,0,0,1,0, 0.5,0,1,1,1, -0.5,0,1,0,1
+        ]),gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,20,0);
+        gl.vertexAttribDivisor(0,0);
+        gl.enableVertexAttribArray(1);gl.vertexAttribPointer(1,2,gl.FLOAT,false,20,12);
+        gl.vertexAttribDivisor(1,0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,elements);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array([0,1,2,0,2,3]),gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER,instances);
+        gl.bufferData(gl.ARRAY_BUFFER,4,gl.DYNAMIC_DRAW);
+        gl.enableVertexAttribArray(3);gl.vertexAttribPointer(3,1,gl.FLOAT,false,4,0);
+        gl.vertexAttribDivisor(3,1);
+        gl.bindVertexArray(oldVao);gl.bindBuffer(gl.ARRAY_BUFFER,oldArray);
+        return {vao,buffer,elements,instances,roots:hfCreateRootTexture(gl),
+          indexedSprites:true,count:0,trees:0,groupCount:0,groupEnds:new Uint32Array(),vertices:4};
+      }
+
       function hfCreateDraw(gl,geometry,isSprite=false) {
+        if(isSprite) return hfCreateCompactSpriteDraw(gl);
         const packed=hfMakeGroupedGeometry(geometry,isSprite);
         const vao=gl.createVertexArray(), buffer=gl.createBuffer();
         const oldVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING);
@@ -2926,13 +3013,15 @@ function createBiganeRuralGeometry() {
               uniform float u_pitch;
               layout(location=0) in vec3 a_local;
               layout(location=1) in vec2 a_uv;
-              layout(location=3) in float a_slot;
+              layout(location=3) in float a_rootIndex;
               out vec2 v_uv;
               flat out float v_seed;
               flat out float v_grove;
               void main() {
-                int slot=int(a_slot+0.5);
-                Tree t=readTree(slot);
+                int rootIndex=int(a_rootIndex+0.5);
+                int slot=rootIndex % 4;
+                int groupBase=rootIndex-slot;
+                Tree t=readTreeAt(rootIndex);
                 float elevation=rootElevation(t);
                 if(!keepTree(t,elevation) || selectedLOD(t,elevation)!=2) {
                   gl_Position=vec4(2.0,2.0,2.0,1.0); return;
@@ -2940,15 +3029,18 @@ function createBiganeRuralGeometry() {
                 float b=radians(u_bearing), pitch=radians(u_pitch);
                 vec2 right=vec2(cos(b),sin(b));
                 vec3 up=vec3(sin(b)*cos(pitch),-cos(b)*cos(pitch),sin(pitch));
-                bool combine=true;
+                float treePixels=screenHeight(t,elevation);
+                // Incomplete groups cannot combine. Large sprites cannot either.
+                // Skip the four-root terrain/size loop entirely in both cases.
+                bool combine=t.reserved2>3.5 && treePixels<4.2;
                 vec2 center=vec2(0.0);
                 float minElevation=1e20,maxElevation=-1e20,meanHeight=0.0;
                 float meanWidth=0.0;
-                for(int k=0;k<4;k++) {
-                  Tree q=readTree(k); float h=rootElevation(q);
-                  // Below 4.2px the result is always sprite LOD (mid starts at
-                  // >=7px). Avoid computing screenHeight twice for each root.
-                  combine=combine && keepTree(q,h) && screenHeight(q,h)<4.2;
+                if(combine) for(int k=0;k<4;k++) {
+                  Tree q=t; float h=elevation;
+                  if(k!=slot) {q=readTreeAt(groupBase+k);h=rootElevation(q);}
+                  float px=k==slot?treePixels:screenHeight(q,h);
+                  if(!keepTree(q,h) || px>=4.2) {combine=false;break;}
                   center+=q.xy*0.25;
                   meanHeight+=q.height*0.25;
                   meanWidth+=q.width*0.25;
@@ -2962,7 +3054,7 @@ function createBiganeRuralGeometry() {
                 vec2 position=t.xy;
                 float w=t.width*1.25;
                 float h=t.height*1.13;
-                float farScale=mix(1.0,1.5,1.0-smoothstep(3.0,12.0,screenHeight(t,elevation)));
+                float farScale=mix(1.0,1.5,1.0-smoothstep(3.0,12.0,treePixels));
                 if(combine) {
                   position=center; elevation=minElevation;
                   // One four-tree image only for tiny, nearly level groups.
@@ -3413,7 +3505,7 @@ function createBiganeRuralGeometry() {
             this.lastHighTotal=highTotal;
             this.lastSpriteTotal=spriteTotalSelected;
             this.lastMidGroupTotal=this.typeStates.reduce((n,t)=>n+t.mid.count,0);
-            this.lastFarGroupTotal=this.typeStates.reduce((n,t)=>n+t.far.count,0);
+            this.lastFarGroupTotal=this.typeStates.reduce((n,t)=>n+t.far.groupCount,0);
             this.lastBiomeFeatureCount=features.length;
             this.lastRebuildMs=Math.round(performance.now()-buildStarted);
             console.info(`Forest v42: ${nearTotalSelected} 3D roots (${highTotal} detailed), ${this.lastMidGroupTotal} middle batches, ${spriteTotalSelected} sprite roots. Rebuild ${this.lastRebuildMs}ms.`);
@@ -3425,7 +3517,7 @@ function createBiganeRuralGeometry() {
             const policy=hfDrawPolicy(zoom,this.enabled,this.spritesOnly);
             const drawn=this.lastFrameStats||{};
             return {
-              patch:'v49-forest-zoom-1', zoom,
+              patch:'v49-compact-sprites-locations-20261030', zoom,
               minZoom:HF_SETTINGS.minZoom, threeDStartZoom:HF_SETTINGS.threeDStartZoom,
               mode:policy.mode, spritesOnlyTest:this.spritesOnly,
               modelPassAllowed:policy.models,
@@ -3436,6 +3528,11 @@ function createBiganeRuralGeometry() {
               lastRenderedZoom:drawn.zoom??null,
               reserved3DRoots:this.lastNearTotal||0,
               reservedSpriteRoots:this.lastSpriteTotal||0,
+              submittedSpriteRoots:policy.forest?(drawn.submittedSpriteRoots||0):0,
+              overviewSpriteCap:HF_SETTINGS.overviewSpriteCap,
+              effectiveSpriteBudget:hfOverviewSpriteBudget(zoom),
+              spriteGeometry:'indexed-quad-per-valid-root',
+              spriteLimitMethod:'world-ranked-complete-groups', 
               near:policy.models?(this.lastNearTotal||0):0,
               sprites:policy.forest?(this.lastSpriteTotal||0):0,
               detailedTrees:policy.models?(this.lastHighTotal||0):0,
@@ -3483,11 +3580,15 @@ function createBiganeRuralGeometry() {
               gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.heightMap);
               gl.uniform1i(loc.u_heightMap,0);gl.uniform1i(loc.u_roots,1);
             };
-            const draw=(item,model)=>{
-              if(!item.count || (model&&!policy.models))return;
+            const draw=(item,model,limit=item.count)=>{
+              const count=Math.min(item.count,limit);
+              if(!count || (model&&!policy.models))return;
               gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,item.roots);
               gl.bindVertexArray(item.vao);
-              gl.drawArraysInstanced(gl.TRIANGLES,0,item.vertices,item.count);
+              if(item.indexedSprites) {
+                gl.drawElementsInstanced(gl.TRIANGLES,6,gl.UNSIGNED_SHORT,0,count);
+                this.lastFrameStats.submittedSpriteRoots=(this.lastFrameStats.submittedSpriteRoots||0)+count;
+              } else gl.drawArraysInstanced(gl.TRIANGLES,0,item.vertices,count);
               this.lastFrameStats[model?'modelDrawCalls':'spriteDrawCalls']++;
             };
             try {
@@ -3504,10 +3605,16 @@ function createBiganeRuralGeometry() {
               gl.uniform1f(this.spriteLocations.u_bearing,this.map.getBearing());
               gl.uniform1f(this.spriteLocations.u_pitch,this.map.getPitch());
               gl.uniform1i(this.spriteLocations.u_sprite,2);gl.uniform1i(this.spriteLocations.u_grove,3);
-              for(const s of this.typeStates) {
+              const spriteBudget=hfOverviewSpriteBudget(zoom);
+              const shares=hfDistributeSpriteBudget(this.typeStates.map(s=>s.far.trees||0),spriteBudget);
+              this.lastFrameStats.spriteBudget=spriteBudget;
+              for(let i=0;i<this.typeStates.length;i++) {
+                const s=this.typeStates[i];
+                const count=hfCompleteGroupPrefix(s.far.groupEnds,shares[i]);
+                if(!count)continue;
                 gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,s.spriteTexture);
                 gl.activeTexture(gl.TEXTURE3);gl.bindTexture(gl.TEXTURE_2D,s.groveTexture);
-                draw(s.far,false);
+                draw(s.far,false,count);
               }
             } finally {
               gl.bindVertexArray(previousVao);gl.activeTexture(previousActive);
@@ -3523,6 +3630,8 @@ function createBiganeRuralGeometry() {
             for(const s of this.typeStates||[]) {
               for(const d of [s.high,s.mid,s.far]) {
                 gl.deleteVertexArray(d.vao);gl.deleteBuffer(d.buffer);gl.deleteTexture(d.roots);
+                if(d.elements)gl.deleteBuffer(d.elements);
+                if(d.instances)gl.deleteBuffer(d.instances);
               }
               gl.deleteTexture(s.spriteTexture);gl.deleteTexture(s.groveTexture);
             }
@@ -3547,20 +3656,20 @@ function createBiganeRuralGeometry() {
       // viewport, then cached. Exact lng/lat takes precedence over legacy
       // city-anchor + metre offsets; existing configs are migrated at runtime.
       const LANDMARKS_3D = [
-        {"name":"Stonefront","model":"./Stonefront_v2_Textured.glb","visible":true,"widthMeters":36000,"rotationDeg":0,"lng":-7.98431396484375,"lat":40.38002840251184,"positionMode":"absolute","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Ehlehuak","model":"./Ehlehuak_v2_MapReady.glb","visible":true,"widthMeters":43000,"rotationDeg":-90,"lng":-15.919189453125,"lat":42.24071874922669,"positionMode":"absolute","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ehuleak","Ehléhuak","Ehlehuak","Ehuleák","Ehleuak","Ehleak"]},
-        {"name":"Khuktul","model":"./Khuktul_v1_MapReady.glb","visible":true,"widthMeters":18000,"rotationDeg":90,"lng":-16.317430049246695,"lat":49.176353165090774,"positionMode":"absolute","elevationOffsetMeters":-900,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Kuktul"]},
+        {"name":"Stonefront","model":"./Stonefront_v2_Textured.glb","visible":true,"widthMeters":36000,"rotationDeg":0,"lng":-7.9784111,"lat":40.3800242,"positionMode":"absolute","elevationOffsetMeters":-4100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Ehlehuak","model":"./Ehlehuak_v2_MapReady.glb","visible":true,"widthMeters":43000,"rotationDeg":-90,"lng":-15.9191895,"lat":42.2407187,"positionMode":"absolute","elevationOffsetMeters":-6650,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ehuleak","Ehléhuak","Ehlehuak","Ehuleák","Ehleuak","Ehleak"]},
+        {"name":"Khuktul","model":"./Khuktul_v1_MapReady.glb","visible":true,"widthMeters":18000,"rotationDeg":90,"lng":-16.296795,"lat":49.1763532,"positionMode":"absolute","elevationOffsetMeters":-2750,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Kuktul"]},
         {"name":"Ambrezzo","model":"./Ambrezzo_v2_MapReady.glb","visible":true,"widthMeters":36000,"rotationDeg":175,"lng":5.298789443589328,"lat":42.22821402675601,"positionMode":"absolute","elevationOffsetMeters":-400,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Yumizen","model":"./Yumizen_v1_MapReady.glb","visible":true,"widthMeters":35000,"rotationDeg":-43,"lng":-5.208334279498104,"lat":45.74831315721312,"positionMode":"absolute","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Seawatch","model":"./Keelfort_v2_Compact_MapReady.glb","visible":true,"widthMeters":24000,"rotationDeg":-35,"lng":-12.796362783367215,"lat":47.19927408852189,"positionMode":"absolute","elevationOffsetMeters":-1600,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Yumizen","model":"./Yumizen_v1_MapReady.glb","visible":true,"widthMeters":35000,"rotationDeg":-43,"lng":-5.2083343,"lat":45.7483132,"positionMode":"absolute","elevationOffsetMeters":-7750,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Seawatch","model":"./Keelfort_v2_Compact_MapReady.glb","visible":true,"widthMeters":22857,"rotationDeg":-35,"lng":-12.836084834181975,"lat":47.22624838677086,"positionMode":"absolute","elevationOffsetMeters":-2750,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Old Hill","model":"./Ruined_Hill_Settlement_v1_MapReady.glb","visible":true,"widthMeters":29000,"rotationDeg":-160,"lng":-7.4742583000000025,"lat":40.71265629255609,"positionMode":"absolute","elevationOffsetMeters":-9200,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Ecbashah","model":"./Lake_Jewel_City_v2_Pyramid.glb","visible":true,"widthMeters":32000,"rotationDeg":-90,"eastMeters":9310,"northMeters":1280,"positionMode":"anchor","elevationOffsetMeters":-50,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ecbashah","Ecabashah","Ecbashahh"]},
-        {"name":"Morbus","model":"./Frostfort_v1.glb","visible":true,"widthMeters":10700,"rotationDeg":-95,"lng":6.401703351096984,"lat":43.597176534495276,"positionMode":"absolute","elevationOffsetMeters":-200,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Ecbashah","model":"./Lake_Jewel_City_v2_Pyramid.glb","visible":true,"widthMeters":32000,"rotationDeg":-90,"lng":53.543901657934754,"lat":7.406664057630238,"positionMode":"absolute","elevationOffsetMeters":-50,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ecbashah","Ecabashah","Ecbashahh"]},
+        {"name":"Morbus","model":"./Frostfort_v1.glb","visible":true,"widthMeters":10700,"rotationDeg":-60,"lng":6.4141228,"lat":43.6106625,"positionMode":"absolute","elevationOffsetMeters":-3800,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Matronass","model":"./Matronass_v2_BreachedWalls.glb","visible":true,"widthMeters":42000,"rotationDeg":-90,"lng":2.2263328002069045,"lat":44.11845427924138,"positionMode":"absolute","elevationOffsetMeters":300,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Padin","model":"./Padin_v1_Optimized_Limestone(1).glb","visible":true,"widthMeters":40000,"rotationDeg":0,"lng":-6.5885432,"lat":36.8610651,"positionMode":"absolute","elevationOffsetMeters":-4100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Tillfort","model":"./Tillfort_v3_StonefrontStyle_MapReady_FixedDomes.glb","visible":true,"widthMeters":40000,"rotationDeg":-95,"lng":-9.773421528692438,"lat":32.719165367557125,"positionMode":"absolute","elevationOffsetMeters":-1000,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Till Fort","Tilfort"]},
         {"name":"Khypir Tul","model":"./Dwarven_Lighthouse_v2_FixedRoof.glb","visible":true,"widthMeters":22000,"rotationDeg":180,"lng":-14.62005615234375,"lat":48.31973404047173,"positionMode":"absolute","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Khypir Tul","Khypir-Tul","Khypirtul"]},
-        {"name":"Priddam","model":"./Priddam_MapLibre_Textured.glb","visible":true,"widthMeters":40000,"rotationDeg":180,"eastMeters":-55590,"northMeters":123930,"positionMode":"anchor","elevationOffsetMeters":-4100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Priddam","model":"./Priddam_MapLibre_Textured.glb","visible":true,"widthMeters":40000,"rotationDeg":180,"lng":13.626142996375961,"lat":28.42941193846039,"positionMode":"absolute","elevationOffsetMeters":-4100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Vinboa","model":"./Vinboa_Renaissance_GateRoofs_Fixed.glb","visible":true,"widthMeters":40000,"rotationDeg":-15,"lng":8.983181151128804,"lat":43.93356481107847,"positionMode":"absolute","elevationOffsetMeters":-3450,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Kibumun","model":"./Kibumun_Dwarven_Greenhouse_Farm.glb","visible":true,"widthMeters":32000,"rotationDeg":-125,"lng":-15.9397888,"lat":50.0703622,"positionMode":"absolute","elevationOffsetMeters":-3700,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Copper","model":"./Copper_MapLibre_Textured.glb","visible":true,"widthMeters":32000,"rotationDeg":0,"lng":-13.5186767578125,"lat":46.77937368205562,"positionMode":"absolute","elevationOffsetMeters":-3300,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0}
@@ -3763,6 +3872,36 @@ function createBiganeRuralGeometry() {
             console.warn(`Kon ${key} niet laden:`, error);
           }
         }
+      }
+
+      const BUNDLED_PLACEMENT_UPDATE_ID = "landmarks-20261030T150425841Z-zoom8-overview-v1";
+      function applyBundledPlacementUpdateOnce() {
+        const marker='bigane-applied-placement-update';
+        let previous=null;
+        try {
+          previous=localStorage.getItem(LANDMARK_EDITOR_STORAGE_KEY);
+          if(previous && localStorage.getItem(marker)===BUNDLED_PLACEMENT_UPDATE_ID) return false;
+          if(previous && !localStorage.getItem('bigane-backup-before-'+BUNDLED_PLACEMENT_UPDATE_ID))
+            localStorage.setItem('bigane-backup-before-'+BUNDLED_PLACEMENT_UPDATE_ID,previous);
+        } catch(error) { console.warn('Plaatsingsbackup niet beschikbaar:',error); }
+        for(const config of LANDMARKS_3D) {
+          const supplied=landmarkDefaultsByName.get(config.name);
+          if(!supplied)continue;
+          landmarkApplySerialized(config,supplied);
+          if(supplied.positionMode==='absolute') {
+            delete config.eastMeters;delete config.northMeters;
+          }
+        }
+        Object.assign(HF_SETTINGS,HF_DEFAULT_SETTINGS);
+        hfNormalizeSettings();
+        try {
+          localStorage.setItem(LANDMARK_EDITOR_STORAGE_KEY,JSON.stringify({
+            format:'bigane-landmarks-v2', savedAt:new Date().toISOString(),
+            landmarks:LANDMARKS_3D.map(landmarkSerializeConfig), forest:{...HF_SETTINGS}
+          }));
+          localStorage.setItem(marker,BUNDLED_PLACEMENT_UPDATE_ID);
+        } catch(error) { console.warn('Nieuwe plaatsingen konden niet lokaal worden bewaard:',error); }
+        return true;
       }
 
       function installSharedLandmarkLayer() {
@@ -4674,6 +4813,7 @@ function createBiganeRuralGeometry() {
           outerRadius: document.getElementById("forest-outer-radius"),
           nearCap: document.getElementById("forest-near-cap"),
           spriteCap: document.getElementById("forest-sprite-cap"),
+          overviewSpriteCap: document.getElementById("forest-overview-sprite-cap"),
           densityMultiplier: document.getElementById("forest-density")
         };
 
@@ -4691,7 +4831,7 @@ function createBiganeRuralGeometry() {
           const z=map.getZoom();
           const st=hybridForestController?.getStats?.();
           const mode=st?.mode==='hidden'?'geen bomen':st?.mode==='sprites-only'?'alleen sprites':'3D toegestaan + sprites';
-          el.textContent=`Zoom ${z.toFixed(2)} | ${mode} | bomen vanaf ${HF_SETTINGS.minZoom.toFixed(2)} | 3D vanaf ${HF_SETTINGS.threeDStartZoom.toFixed(2)} | modelpasses ${st?.modelDrawCalls||0}, spritepasses ${st?.spriteDrawCalls||0}`;
+          el.textContent=`Zoom ${z.toFixed(2)} | ${mode} | bomen vanaf ${HF_SETTINGS.minZoom.toFixed(2)} | 3D vanaf ${HF_SETTINGS.threeDStartZoom.toFixed(2)} | modelpasses ${st?.modelDrawCalls||0}, spritepasses ${st?.spriteDrawCalls||0} | sprites aangeboden ${st?.submittedSpriteRoots||0} / budget ${hfOverviewSpriteBudget(z)}`;
         }
         function applyForestFields(key,element) {
           if(!element || element.value.trim()==='')return false;
@@ -4970,6 +5110,7 @@ function createBiganeRuralGeometry() {
 
         // Load saved landmark and forest tuning before the render layers start.
         loadInitialLandmarkState();
+        applyBundledPlacementUpdateOnce();
 
         try {
           installHybridForestLayer();
