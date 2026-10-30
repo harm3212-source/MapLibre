@@ -592,7 +592,7 @@
     </label>
     <label>
       <input type="checkbox" id="toggle-forests" checked />
-      <span>3D forests</span>
+      <span>Bomen (3D + sprites)</span>
     </label>
     <label title="Vooraf berekende ondiepwaterbanden aan/uit">
       <input type="checkbox" id="toggle-waterbands" checked />
@@ -698,8 +698,8 @@
           <input id="forest-tree-size" type="number" step="0.05" min="0.1" max="2" />
         </div>
         <div>
-          <label for="forest-3d-zoom">3D vanaf zoom</label>
-          <input id="forest-3d-zoom" type="number" step="0.1" min="3" max="12" />
+          <label for="forest-3d-zoom">3D-bomen vanaf zoom</label>
+          <input id="forest-3d-zoom" type="number" step="0.1" min="1" max="22" />
         </div>
         <div>
           <label for="forest-outer-radius">Viewportbuffer</label>
@@ -718,6 +718,21 @@
           <input id="forest-sprite-cap" type="number" step="1000" min="0" max="90000" />
         </div>
       </div>
+      <div class="landmark-editor-grid">
+        <div>
+          <label for="forest-min-zoom">Alle bomen zichtbaar vanaf zoom</label>
+          <input id="forest-min-zoom" type="number" step="0.1" min="1" max="22" />
+        </div>
+        <div>
+          <label for="forest-sprites-only">Controleweergave</label>
+          <select id="forest-sprites-only">
+            <option value="auto">Automatische detailkeuze</option>
+            <option value="sprites">Alleen sprites (tijdelijke test)</option>
+          </select>
+        </div>
+      </div>
+      <p id="forest-zoom-status" role="status" style="font-size:12px;line-height:1.45;margin:8px 0;white-space:normal"></p>
+      <p style="font-size:11px;line-height:1.4;margin:6px 0;color:#555">Onder de 3D-grens blijven sprites zichtbaar. Onder de algemene bosgrens verdwijnen ook de sprites. Deze instellingen veranderen de steden niet.</p>
       <button type="button" id="forest-reset">Herstel bosstandaarden</button>
     </details>
 
@@ -1213,8 +1228,7 @@
           forestsToggle.addEventListener("change", () => {
             if (hybridForestController) {
               hybridForestController.enabled = forestsToggle.checked;
-              hybridForestController.needsRebuild = true;
-              hybridForestController.scheduleRebuild?.(true, 0);
+              hybridForestController.scheduleRebuild?.(false, 0);
               map.triggerRepaint();
             }
           });
@@ -1550,19 +1564,31 @@
         densityMultiplier: 1
       });
       const HF_SETTINGS = { ...HF_DEFAULT_SETTINGS };
+      // v49 forest patch: normalize explicit numeric values, never turn an
+      // empty text input into zero or silently replace zero budgets by defaults.
       function hfNormalizeSettings() {
-        HF_SETTINGS.minZoom = Math.max(2, Math.min(12, Number(HF_SETTINGS.minZoom || HF_DEFAULT_SETTINGS.minZoom)));
-        // Keep 3D-startzoom independent. Previously a value such as 4 was silently
-        // clamped up to the generic forest minZoom (4.15).
-        HF_SETTINGS.threeDStartZoom = Math.max(2, Math.min(14, Number(HF_SETTINGS.threeDStartZoom || HF_DEFAULT_SETTINGS.threeDStartZoom)));
-        // The forest layer itself must be active by the time 3D trees are requested.
+        const number = (key, lo, hi, integer = false) => {
+          const input = HF_SETTINGS[key];
+          const parsed = input !== null && input !== '' ? Number(input) : NaN;
+          const value = Number.isFinite(parsed) ? parsed : HF_DEFAULT_SETTINGS[key];
+          HF_SETTINGS[key] = Math.max(lo, Math.min(hi, integer ? Math.round(value) : value));
+        };
+        number('minZoom', 1, 22);
+        number('threeDStartZoom', 1, 22);
+        // A requested 3D start of 4 must not be blocked by a legacy forest floor
+        // of 4.15. The separate floor is now visible and kept in sync in the UI.
         HF_SETTINGS.minZoom = Math.min(HF_SETTINGS.minZoom, HF_SETTINGS.threeDStartZoom);
-        HF_SETTINGS.outerRadius = Math.max(1.2, Math.min(4, Number(HF_SETTINGS.outerRadius || HF_DEFAULT_SETTINGS.outerRadius)));
-        HF_SETTINGS.fadeStart = Math.max(0.8, Math.min(HF_SETTINGS.outerRadius - 0.05, Number(HF_SETTINGS.fadeStart || HF_DEFAULT_SETTINGS.fadeStart)));
-        HF_SETTINGS.treeSize = Math.max(0.1, Math.min(2, Number(HF_SETTINGS.treeSize || HF_DEFAULT_SETTINGS.treeSize)));
-        HF_SETTINGS.nearCap = Math.max(0, Math.min(HF_MAX_NEAR_CAP, Math.round(Number(HF_SETTINGS.nearCap || 0))));
-        HF_SETTINGS.spriteCap = Math.max(0, Math.min(HF_MAX_SPRITE_CAP, Math.round(Number(HF_SETTINGS.spriteCap || 0))));
-        HF_SETTINGS.densityMultiplier = Math.max(0.1, Math.min(2, Number(HF_SETTINGS.densityMultiplier || HF_DEFAULT_SETTINGS.densityMultiplier)));
+        number('outerRadius', 1.2, 4);
+        number('fadeStart', 0.8, HF_SETTINGS.outerRadius - 0.05);
+        number('treeSize', 0.1, 2);
+        number('nearCap', 0, HF_MAX_NEAR_CAP, true);
+        number('spriteCap', 0, HF_MAX_SPRITE_CAP, true);
+        number('densityMultiplier', 0.1, 2);
+      }
+      function hfDrawPolicy(zoom, enabled = true, spritesOnly = false) {
+        const forest = Boolean(enabled) && Number.isFinite(zoom) && zoom >= HF_SETTINGS.minZoom;
+        const models = forest && !spritesOnly && HF_SETTINGS.nearCap > 0 && zoom >= HF_SETTINGS.threeDStartZoom;
+        return { forest, models, mode: !forest ? 'hidden' : models ? '3d-eligible' : 'sprites-only' };
       }
       hfNormalizeSettings();
       let hybridForestController = null;
@@ -2346,6 +2372,7 @@
         uniform vec2 u_viewSize;
         uniform float u_zoom;
         uniform float u_startZoom;
+        uniform bool u_allow3D;
         uniform float u_treeLineFadeStart;
         uniform float u_treeLineCutoff;
         uniform int u_mode;
@@ -2386,7 +2413,7 @@
           return max(vertical,horizontal);
         }
         int selectedLOD(Tree t,float h) {
-          if (u_zoom<u_startZoom || t.near<0.5) return 2;
+          if (!u_allow3D || u_zoom<u_startZoom || t.near<0.5) return 2;
           float px = screenHeight(t,h);
           float highLimit = mix(28.0,40.0,stableRandom(t.seed,3.0));
           float midLimit = mix(7.0,11.0,stableRandom(t.seed,6.0));
@@ -2426,11 +2453,16 @@
         const rows=Math.max(1,Math.ceil(groups.length*4*3/HF_DATA_WIDTH));
         const data=new Float32Array(HF_DATA_WIDTH*rows*4);
         let index=0;
-        for(const group of groups) for(let slot=0;slot<4;slot++) {
-          const c=group[slot];
-          if(c) data.set([c.x,c.y,c.mpu,c.width,c.height,c.rotation,c.seed,1,
-                          c.highEligible?1:0,c.nearEligible?1:0,0,0],index);
-          index+=12;
+        for(const group of groups) {
+          const cx=group.reduce((v,t)=>v+t.x,0)/4;
+          const cy=group.reduce((v,t)=>v+t.y,0)/4;
+          const maxDistanceWorld=group.reduce((v,t)=>Math.max(v,Math.hypot(t.x-cx,t.y-cy)),0);
+          for(let slot=0;slot<4;slot++) {
+            const c=group[slot];
+            if(c) data.set([c.x,c.y,c.mpu,c.width,c.height,c.rotation,c.seed,1,
+                            c.highEligible?1:0,c.nearEligible?1:0,maxDistanceWorld,0],index);
+            index+=12;
+          }
         }
         return {data,rows,count:groups.length,trees:candidates.length};
       }
@@ -2479,7 +2511,7 @@
 
       function hfProgramLocations(gl,program,sprite=false) {
         const names=['u_matrix','u_heightBounds','u_heightMap','u_roots','u_viewSize','u_zoom','u_startZoom',
-          'u_treeLineFadeStart','u_treeLineCutoff','u_mode','u_foliageColor','u_trunkColor'];
+          'u_treeLineFadeStart','u_treeLineCutoff','u_mode','u_foliageColor','u_trunkColor','u_allow3D'];
         if(sprite) names.push('u_sprite','u_grove','u_bearing','u_pitch');
         return Object.fromEntries(names.map(n=>[n,gl.getUniformLocation(program,n)]));
       }
@@ -2496,6 +2528,16 @@
           rebuildTimer: null,
           lastBuildKey: "",
           biomeFeatures: [],
+          cachedForestFrame: null,
+          cachedForestStride: null,
+          settingsKey: '',
+          sourceRevision: 0,
+          builtSourceRevision: -1,
+          heightRefreshes: 0,
+          heightCacheHits: 0,
+          rebuilds: 0,
+          spritesOnly: false,
+          lastFrameStats: {},
           heightBounds: new Float32Array([0, 0, 1, 1]),
 
           onAdd(mapInstance, gl) {
@@ -2514,6 +2556,9 @@
               flat out float v_seed;
               flat out float v_part;
               void main() {
+                if (!u_allow3D || u_zoom<u_startZoom) {
+                  gl_Position=vec4(2.0,2.0,2.0,1.0); return;
+                }
                 Tree t=readTree(int(a_slot+0.5));
                 float h=rootElevation(t);
                 if(!keepTree(t,h) || selectedLOD(t,h)!=u_mode) {
@@ -2567,18 +2612,16 @@
                 float meanWidth=0.0;
                 for(int k=0;k<4;k++) {
                   Tree q=readTree(k); float h=rootElevation(q);
-                  combine=combine && keepTree(q,h) && selectedLOD(q,h)==2 && screenHeight(q,h)<4.2;
+                  // Below 4.2px the result is always sprite LOD (mid starts at
+                  // >=7px). Avoid computing screenHeight twice for each root.
+                  combine=combine && keepTree(q,h) && screenHeight(q,h)<4.2;
                   center+=q.xy*0.25;
                   meanHeight+=q.height*0.25;
                   meanWidth+=q.width*0.25;
                   minElevation=min(minElevation,h); maxElevation=max(maxElevation,h);
                 }
                 combine=combine && (maxElevation-minElevation)<meanHeight*0.20;
-                float maxDistance=0.0;
-                for(int k=0;k<4;k++) {
-                  Tree q=readTree(k);
-                  maxDistance=max(maxDistance,length(q.xy-center)/max(t.mpu,1e-12));
-                }
+                float maxDistance=t.reserved1/max(t.mpu,1e-12);
                 combine=combine && maxDistance<meanHeight*2.2;
                 v_grove=combine?1.0:0.0;
                 if(combine && slot!=0) {gl_Position=vec4(2.0,2.0,2.0,1.0);return;}
@@ -2646,53 +2689,57 @@
                 try {this.rebuild(gl);} catch(error) {console.warn('Forest refresh failed:',error);}
               },delay);
             };
-            this.onMoveEnd=()=>{
+            this.invalidateHeight=(reason)=>{
               this.heightMapDirty=true;
+              this.heightDirtyReason=reason;
+            };
+            this.onMoveEnd=()=>{
+              // One settled-camera refresh catches reused terrain LOD tiles.
+              // Never regenerate the height texture on every move event.
+              this.invalidateHeight('camera settled');
               this.scheduleRebuild(false,160);
             };
             this.onZoomEnd=()=>{
-              this.heightMapDirty=true;
+              this.invalidateHeight('terrain LOD settled');
               this.scheduleRebuild(false,190);
             };
-            // Refresh during a long drag, but only when the old buffered forest
-            // has shifted substantially. Keep a strict >=700ms throttle; most
-            // camera movements simply reuse the large world-space buffer.
             this.lastLiveRefreshAt=0;
-            this.lastRefreshCenter=null;
             this.onMove=()=>{
-              this.heightMapDirty=true;
               if(!this.enabled || this.map.getZoom()<HF_SETTINGS.minZoom) return;
+              if(this.canReuseForestFrame()) return;
               const now=performance.now();
               if(now-this.lastLiveRefreshAt<820) return;
-              const center=this.map.getCenter(),bounds=this.map.getBounds();
-              const dx=Math.max(1e-7,Math.abs(bounds.getEast()-bounds.getWest()));
-              const dy=Math.max(1e-7,Math.abs(bounds.getNorth()-bounds.getSouth()));
-              if(this.lastRefreshCenter &&
-                Math.abs(center.lng-this.lastRefreshCenter.lng)<dx*0.30 &&
-                Math.abs(center.lat-this.lastRefreshCenter.lat)<dy*0.30 &&
-                Math.abs(this.map.getZoom()-this.lastRefreshCenter.zoom)<0.35) return;
               this.lastLiveRefreshAt=now;
-              this.lastRefreshCenter={lng:center.lng,lat:center.lat,zoom:this.map.getZoom()};
-              // Defer this expensive operation to a single idle-ish task while
-              // the user is still dragging; never rebuild every animation frame.
               this.scheduleRebuild(false,120);
             };
-            this.onIdle=()=>{if(this.enabled && this.map.getZoom()>=HF_SETTINGS.minZoom && (this.needsRebuild||!this.lastBuildKey))this.scheduleRebuild(false,180);};
+            this.onZoom=()=>{
+              // MapLibre renders during zoom. This is only a repaint request,
+              // not a new polygon scan, root upload, or height-map generation.
+              this.map.triggerRepaint();
+            };
+            this.onIdle=()=>{
+              if(this.enabled && this.map.getZoom()>=HF_SETTINGS.minZoom &&
+                 (this.needsRebuild||!this.lastBuildKey)) this.scheduleRebuild(false,180);
+            };
             this.onSourceData=event=>{
               const biomeLayer=this.map.getLayer('Biomes');
-              if(event?.sourceId==='bigane-dem') this.heightMapDirty=true;
+              if(event?.sourceId==='bigane-dem' && event?.sourceDataType!=='metadata')
+                this.invalidateHeight('DEM content');
               if(event?.sourceId===biomeLayer?.source && event.isSourceLoaded) {
+                this.sourceRevision++;
                 this.needsRebuild=true;
-                if(!this.map.isMoving?.()) this.scheduleRebuild(true,220);
+                if(!this.map.isMoving?.()) this.scheduleRebuild(false,220);
               }
             };
             mapInstance.on('move',this.onMove);
+            mapInstance.on('zoom',this.onZoom);
             mapInstance.on('moveend',this.onMoveEnd);
             mapInstance.on('zoomend',this.onZoomEnd);
             mapInstance.on('idle',this.onIdle);
             mapInstance.on('sourcedata',this.onSourceData);
             this.scheduleRebuild(true,30);
             hybridForestController=this;
+            window.biganeForestDebug=()=>this.getStats();
           },
 
           collectBiomeFeatures() {
@@ -2843,16 +2890,35 @@
             };
           },
 
+          forestGeometrySettingsKey() {
+            return [HF_SETTINGS.outerRadius,HF_SETTINGS.fadeStart,HF_SETTINGS.treeSize,
+              HF_SETTINGS.nearCap,HF_SETTINGS.spriteCap,HF_SETTINGS.densityMultiplier].join(':');
+          },
+
+          canReuseForestFrame() {
+            const f=this.cachedForestFrame;
+            if(!f || !this.lastBuildKey || this.needsRebuild ||
+               this.cachedForestStride!==hfStrideForZoom(this.map.getZoom()) ||
+               this.settingsKey!==this.forestGeometrySettingsKey()) return false;
+            const b=this.map.getBounds();
+            const x0=(b.getWest()+180)/360, x1=(b.getEast()+180)/360;
+            const y0=hfMercY(b.getNorth()), y1=hfMercY(b.getSouth());
+            // The accepted viewport lies well inside the original outer fade.
+            // Bounds (not just the center) protect rotated and pitched views.
+            const safeRadius=Math.min(HF_SETTINGS.fadeStart,HF_SETTINGS.outerRadius*0.66);
+            return x0>=f.c.x-f.halfW*safeRadius && x1<=f.c.x+f.halfW*safeRadius &&
+                   y0>=f.c.y-f.halfH*safeRadius && y1<=f.c.y+f.halfH*safeRadius;
+          },
+
           rebuild(gl) {
             const buildStarted=performance.now();
+            if(this.canReuseForestFrame() && this.builtSourceRevision===this.sourceRevision) {
+              this.map.triggerRepaint();
+              return;
+            }
             this.needsRebuild = false;
             if (!this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) {
-              for (const state of this.typeStates) {
-                state.high.count=0;state.mid.count=0;state.far.count=0;
-              }
-              this.lastNearTotal = 0;
-              this.lastSpriteTotal = 0;
-              this.map.triggerRepaint();
+              // Rendering is hard-gated; retain the cache for a later zoom-in.
               return;
             }
 
@@ -2875,10 +2941,8 @@
               Math.floor(frame.y0 / HF_BASE_CELL_WORLD),
               Math.ceil(frame.y1 / HF_BASE_CELL_WORLD),
               stride,
-              zoom.toFixed(2),
-              Math.round(nearRadiusMeters),
-              HF_SETTINGS.threeDStartZoom.toFixed(2),
-              HF_SETTINGS.minZoom.toFixed(2),
+              this.forestGeometrySettingsKey(),
+              this.sourceRevision,
               features.length,
               settlementPoints.length
             ].join(":");
@@ -2975,10 +3039,10 @@
 
             candidates.sort((a,b)=>a.norm-b.norm);
             const highData=HF_TYPES.map(()=>[]),midData=HF_TYPES.map(()=>[]),farData=HF_TYPES.map(()=>[]);
-            const can3D=zoom>=HF_SETTINGS.threeDStartZoom;
-            // The public 3D budget counts unique tree roots across BOTH 3D tiers.
-            // No per-type quota. High LOD is a subset of those same roots.
-            const max3D=can3D?HF_SETTINGS.nearCap:0;
+            // Cache potential model roots also while in sprite-only mode.
+            // Visibility is decided live on every render, not at rebuild time.
+            // These buffers do NOT issue model draw calls below the 3D gate.
+            const max3D=HF_SETTINGS.nearCap;
             const maxHigh=Math.min(max3D,Math.ceil(max3D*0.44));
             let nearTotalSelected=0,highTotal=0,spriteTotalSelected=0;
             const candidateLimit=Math.max(max3D,HF_SETTINGS.spriteCap);
@@ -3000,8 +3064,13 @@
             this.heightBounds[1] = frame.y0 - extra;
             this.heightBounds[2] = frame.x1 + extra;
             this.heightBounds[3] = frame.y1 + extra;
-            this.heightMapDirty = true;
+            this.invalidateHeight('forest bounds changed');
             this.lastBuildKey = buildKey;
+            this.cachedForestFrame = frame;
+            this.cachedForestStride = stride;
+            this.settingsKey = this.forestGeometrySettingsKey();
+            this.builtSourceRevision = this.sourceRevision;
+            this.rebuilds++;
 
             this.lastNearTotal=nearTotalSelected;
             this.lastHighTotal=highTotal;
@@ -3015,21 +3084,49 @@
           },
 
           getStats() {
-            return {near:this.lastNearTotal||0,sprites:this.lastSpriteTotal||0,biomes:this.lastBiomeFeatureCount||0,
-              detailedTrees:this.lastHighTotal||0,clusterBatches:this.lastMidGroupTotal||0,
-              spriteBatches:this.lastFarGroupTotal||0,rebuildMs:this.lastRebuildMs||0};
+            const zoom=this.map.getZoom();
+            const policy=hfDrawPolicy(zoom,this.enabled,this.spritesOnly);
+            const drawn=this.lastFrameStats||{};
+            return {
+              patch:'v49-forest-zoom-1', zoom,
+              minZoom:HF_SETTINGS.minZoom, threeDStartZoom:HF_SETTINGS.threeDStartZoom,
+              mode:policy.mode, spritesOnlyTest:this.spritesOnly,
+              modelPassAllowed:policy.models,
+              // These are actual CPU-submitted passes, not a claim that every
+              // submitted root survived viewport/snow/size tests in the shader.
+              modelDrawCalls:policy.models?(drawn.modelDrawCalls||0):0,
+              spriteDrawCalls:policy.forest?(drawn.spriteDrawCalls||0):0,
+              lastRenderedZoom:drawn.zoom??null,
+              reserved3DRoots:this.lastNearTotal||0,
+              reservedSpriteRoots:this.lastSpriteTotal||0,
+              near:policy.models?(this.lastNearTotal||0):0,
+              sprites:policy.forest?(this.lastSpriteTotal||0):0,
+              detailedTrees:policy.models?(this.lastHighTotal||0):0,
+              clusterBatches:this.lastMidGroupTotal||0,spriteBatches:this.lastFarGroupTotal||0,
+              biomes:this.lastBiomeFeatureCount||0,rebuildMs:this.lastRebuildMs||0,
+              rebuilds:this.rebuilds,heightRefreshes:this.heightRefreshes,
+              heightCacheHits:this.heightCacheHits,heightReason:this.heightDirtyReason||'initial',
+              lastHeightCpuMs:this.lastHeightCpuMs||0
+            };
           },
           prerender(gl,options) {
-            if(!this.enabled||this.map.getZoom()<HF_SETTINGS.minZoom||!this.heightMapDirty)return;
+            if(!hfDrawPolicy(this.map.getZoom(),this.enabled,this.spritesOnly).forest) return;
+            if(!this.heightMapDirty){this.heightCacheHits++;return;}
             if(!options.renderTerrainHeightMap)return;
             const now=performance.now();
-            if(this.heightReady&&this.map.isMoving?.()&&now-(this.lastHeightRefresh||0)<120)return;
+            if(this.heightReady&&this.map.isMoving?.()&&now-(this.lastHeightRefresh||0)<180)return;
+            const started=performance.now();
             options.renderTerrainHeightMap({texture:this.heightMap,width:HF_HEIGHTMAP_SIZE,
               height:HF_HEIGHTMAP_SIZE,bounds:this.heightBounds});
+            this.lastHeightCpuMs=performance.now()-started;
+            this.heightRefreshes++;
             this.heightMapDirty=false;this.heightReady=true;this.lastHeightRefresh=now;
           },
           render(gl,options) {
-            if(!this.enabled||!this.heightReady||this.map.getZoom()<HF_SETTINGS.minZoom)return;
+            const zoom=this.map.getZoom();
+            const policy=hfDrawPolicy(zoom,this.enabled,this.spritesOnly);
+            this.lastFrameStats={zoom,modelDrawCalls:0,spriteDrawCalls:0};
+            if(!policy.forest||!this.heightReady)return;
             const matrix=options?.defaultProjectionData?.mainMatrix;if(!matrix)return;
             const previousVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING);
             const previousActive=gl.getParameter(gl.ACTIVE_TEXTURE);
@@ -3043,25 +3140,27 @@
               gl.uniform2f(loc.u_viewSize,canvas.clientWidth||canvas.width,canvas.clientHeight||canvas.height);
               gl.uniform1f(loc.u_zoom,this.map.getZoom());
               gl.uniform1f(loc.u_startZoom,HF_SETTINGS.threeDStartZoom);
+              gl.uniform1i(loc.u_allow3D,policy.models?1:0);
               gl.uniform1f(loc.u_treeLineFadeStart,snowTreeFadeStartExaggerated);
               gl.uniform1f(loc.u_treeLineCutoff,snowTreeCutoffExaggerated);
               gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.heightMap);
               gl.uniform1i(loc.u_heightMap,0);gl.uniform1i(loc.u_roots,1);
             };
-            const draw=(item)=>{
-              if(!item.count)return;
+            const draw=(item,model)=>{
+              if(!item.count || (model&&!policy.models))return;
               gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,item.roots);
               gl.bindVertexArray(item.vao);
               gl.drawArraysInstanced(gl.TRIANGLES,0,item.vertices,item.count);
+              this.lastFrameStats[model?'modelDrawCalls':'spriteDrawCalls']++;
             };
             try {
-              if(this.map.getZoom()>=HF_SETTINGS.threeDStartZoom) {
+              if(policy.models) {
                 prepare(this.nearProgram,this.nearLocations);
                 for(const s of this.typeStates) {
                   gl.uniform3fv(this.nearLocations.u_foliageColor,s.type.foliage);
                   gl.uniform3fv(this.nearLocations.u_trunkColor,s.type.trunk);
-                  gl.uniform1i(this.nearLocations.u_mode,0);draw(s.high);
-                  gl.uniform1i(this.nearLocations.u_mode,1);draw(s.mid);
+                  gl.uniform1i(this.nearLocations.u_mode,0);draw(s.high,true);
+                  gl.uniform1i(this.nearLocations.u_mode,1);draw(s.mid,true);
                 }
               }
               prepare(this.spriteProgram,this.spriteLocations);
@@ -3071,7 +3170,7 @@
               for(const s of this.typeStates) {
                 gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,s.spriteTexture);
                 gl.activeTexture(gl.TEXTURE3);gl.bindTexture(gl.TEXTURE_2D,s.groveTexture);
-                draw(s.far);
+                draw(s.far,false);
               }
             } finally {
               gl.bindVertexArray(previousVao);gl.activeTexture(previousActive);
@@ -3080,7 +3179,7 @@
           },
           onRemove(mapInstance,gl) {
             clearTimeout(this.rebuildTimer);
-            for(const [event,handler] of [['move',this.onMove],['moveend',this.onMoveEnd],
+            for(const [event,handler] of [['move',this.onMove],['zoom',this.onZoom],['moveend',this.onMoveEnd],
               ['zoomend',this.onZoomEnd],['idle',this.onIdle],['sourcedata',this.onSourceData]]) {
               if(handler) mapInstance.off(event,handler);
             }
@@ -3860,7 +3959,10 @@
             }
             landmarkController?.updateVisibilityAndLoading(true);
             hybridForestController?.scheduleRebuild?.(true, 0);
+            map.triggerRepaint();
             refreshFields();
+            refreshForestFields();
+            persistAllSilently('Instellingen hersteld en automatisch bewaard');
           } catch (error) {
             console.warn("Undo snapshot failed:", error);
           }
@@ -4033,7 +4135,9 @@
               else landmarkController?.updateLandmark(config.name, true);
             }
             hybridForestController?.scheduleRebuild?.(true, 0);
+            map.triggerRepaint();
             refreshFields();
+            refreshForestFields();
             persistAllSilently(`${file.name} geïmporteerd en automatisch bewaard`);
           } catch (error) {
             console.warn("Landmark JSON import failed:", error);
@@ -4227,6 +4331,7 @@
         });
 
         const forestInputs = {
+          minZoom: document.getElementById("forest-min-zoom"),
           treeSize: document.getElementById("forest-tree-size"),
           threeDStartZoom: document.getElementById("forest-3d-zoom"),
           outerRadius: document.getElementById("forest-outer-radius"),
@@ -4242,28 +4347,67 @@
           }
         }
 
-        function applyForestFields() {
-          if (typeof HF_SETTINGS === "undefined") return;
-          for (const [key, element] of Object.entries(forestInputs)) {
-            if (element && Number.isFinite(Number(element.value))) HF_SETTINGS[key] = Number(element.value);
-          }
+        let forestEditSnapshot=null;
+        function updateForestZoomStatus() {
+          const el=document.getElementById('forest-zoom-status');
+          if(!el)return;
+          const z=map.getZoom();
+          const st=hybridForestController?.getStats?.();
+          const mode=st?.mode==='hidden'?'geen bomen':st?.mode==='sprites-only'?'alleen sprites':'3D toegestaan + sprites';
+          el.textContent=`Zoom ${z.toFixed(2)} | ${mode} | bomen vanaf ${HF_SETTINGS.minZoom.toFixed(2)} | 3D vanaf ${HF_SETTINGS.threeDStartZoom.toFixed(2)} | modelpasses ${st?.modelDrawCalls||0}, spritepasses ${st?.spriteDrawCalls||0}`;
+        }
+        function applyForestFields(key,element) {
+          if(!element || element.value.trim()==='')return false;
+          const value=Number(element.value);
+          if(!Number.isFinite(value))return false;
+          const previous={...HF_SETTINGS};
+          HF_SETTINGS[key]=value;
+          if(key==='minZoom' && value>HF_SETTINGS.threeDStartZoom) HF_SETTINGS.threeDStartZoom=value;
           hfNormalizeSettings();
-          hybridForestController?.scheduleRebuild?.(true, 0);
+          const changed=Object.keys(HF_SETTINGS).some(k=>HF_SETTINGS[k]!==previous[k]);
+          if(!changed)return false;
+          // Thresholds affect rendering immediately, even before blur/change.
+          // No root generation or height sampling is necessary for this switch.
+          map.triggerRepaint();
+          const geometryChanged=['treeSize','outerRadius','nearCap','spriteCap','densityMultiplier']
+            .some(k=>HF_SETTINGS[k]!==previous[k]);
+          if(geometryChanged) hybridForestController?.scheduleRebuild?.(true,160);
+          else if(!hybridForestController?.lastBuildKey) hybridForestController?.scheduleRebuild?.(false,0);
+          persistAllSilently('Bosinstellingen toegepast en automatisch bewaard');
+          updateForestZoomStatus();
+          return true;
         }
-
-        for (const element of Object.values(forestInputs)) {
-          if (!element) continue;
-          element.addEventListener("change", () => {
-            pushUndo();
-            applyForestFields();
-            refreshForestFields();
+        for (const [key,element] of Object.entries(forestInputs)) {
+          if(!element)continue;
+          element.addEventListener('focus',()=>{forestEditSnapshot=snapshotAll();});
+          element.addEventListener('input',()=>{
+            const before=forestEditSnapshot||snapshotAll();
+            if(applyForestFields(key,element) && forestEditSnapshot!==false){
+              pushUndo(before);forestEditSnapshot=false;
+            }
+            // Do not rewrite the active input while a decimal is being typed.
+            if(key==='threeDStartZoom')forestInputs.minZoom.value=HF_SETTINGS.minZoom;
+            if(key==='minZoom')forestInputs.threeDStartZoom.value=HF_SETTINGS.threeDStartZoom;
           });
+          element.addEventListener('change',()=>{
+            const before=forestEditSnapshot||snapshotAll();
+            if(applyForestFields(key,element) && forestEditSnapshot!==false)pushUndo(before);
+            refreshForestFields();forestEditSnapshot=null;
+          });
+          element.addEventListener('blur',()=>{refreshForestFields();forestEditSnapshot=null;});
         }
+        document.getElementById('forest-sprites-only').addEventListener('change',event=>{
+          if(hybridForestController)hybridForestController.spritesOnly=event.target.value==='sprites';
+          map.triggerRepaint();updateForestZoomStatus();
+        });
         document.getElementById("forest-reset").addEventListener("click", () => {
           pushUndo();
           Object.assign(HF_SETTINGS, HF_DEFAULT_SETTINGS);
           refreshForestFields();
           hybridForestController?.scheduleRebuild?.(true, 0);
+          map.triggerRepaint();
+          persistAllSilently('Bosstandaarden hersteld en automatisch bewaard');
+          updateForestZoomStatus();
         });
 
         document.getElementById("edit-mode-toggle").addEventListener("click", () => {
@@ -4287,8 +4431,10 @@
             `modellen ${landmarkStats.visible || 0}/${landmarkStats.loaded || 0} geladen`,
             landmarkStats.loading ? `${landmarkStats.loading} laden` : "",
             landmarkStats.errors ? `${landmarkStats.errors} fout` : "",
-            `bos ${forestStats.near || 0} 3D + ${forestStats.sprites || 0} sprites`
+            `bos: ${forestStats.mode === 'hidden' ? 'uit' : forestStats.mode === 'sprites-only' ? 'sprites' : '3D + sprites'}`,
+            `modelpasses ${forestStats.modelDrawCalls || 0}`
           ].filter(Boolean).join(" · ");
+          updateForestZoomStatus();
           refreshModelStatus();
         }, 600);
 
