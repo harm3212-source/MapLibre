@@ -1094,627 +1094,243 @@
       }
 
       // ---------------------------------------------------------------
-      // V45: WATER SDF FROM THE REAL OCEAN / LAKE VECTOR FEATURES
-      // Replaces v44's independent 35km extruded ribbons. No shoreline
-      // triangles can extend across bays or meet at incorrect miters.
-      // Raster preparation (coverage + true shoreline distances) is done
-      // asynchronously in a worker, only on camera/tile changes.
-      // One GPU quad adds the gentle shore colour and directional lighting.
+      // V47: NATIVE VECTOR WATER, NO VIEWPORT MASK OR SCREEN-SIZED SDF
+      // Ocean and lakes use their original vector polygon fills. The former
+      // v43-v46 CPU workers, tiled 1280px textures and fullscreen WebGL quad
+      // have been removed completely. A single seamless, world-aligned
+      // periodic water image adds low-amplitude surface variation only to
+      // ocean polygons. Actual shorelines are cached geographic LineStrings,
+      // not clipped polygon silhouettes or artificial viewport borders.
       // ---------------------------------------------------------------
-      const ROCK_LAYER_ID = 'bigane-highland-rock';
-      const BIGANE_WATER_LAYER_ID = 'bigane-water-v46';
-      const BIGANE_WATER_EARTH = 40075016.68557849;
-      const BIGANE_WATER_TEXTURE_SIZE = 1280;
+      const BIGANE_WATER_SOURCE_ID = 'bigane-water-actual-shores-v47';
+      const BIGANE_WATER_PATTERN_ID = 'bigane-ocean-soft-wave-v47';
       let waterPolishController = null;
 
-      function biganeWaterSdfWorker() {
-        const EARTH = 40075016.68557849;
-        const rad = Math.PI / 180;
-        const yMerc = latitude => {
-          const lat = Math.max(-85.05112878, Math.min(85.05112878, latitude)) * rad;
-          return (1 - Math.log(Math.tan(lat) + 1 / Math.cos(lat)) / Math.PI) / 2;
-        };
-        const toWorld = p => [(p[0] + 180) / 360, yMerc(p[1])];
-        const LIMIT = 1e12;
-
-        // Ignore artificial straight edges introduced by vector-tile clipping.
-        // Genuine shoreline segments are projected with full vector precision.
-        function tileClippingEdge(a, b) {
-          const eps = 7e-8;
-          if (Math.abs(a[0] - b[0]) < eps) {
-            for (let z = 0; z <= 15; z++) {
-              const n = 2 ** z;
-              if (Math.abs(a[0] * n - Math.round(a[0] * n)) < eps * n) return true;
-            }
-          }
-          if (Math.abs(a[1] - b[1]) < eps) {
-            for (let z = 0; z <= 15; z++) {
-              const n = 2 ** z;
-              if (Math.abs(a[1] * n - Math.round(a[1] * n)) < eps * n) return true;
-            }
-          }
-          return false;
+      function biganeMakeSeamlessOceanPattern() {
+        // Integer Fourier modes meet at tile edges with matching slopes.
+        // Unlike a camera-bound water mask this texture never jumps on drag;
+        // MapLibre's fill-pattern keeps it aligned to the world grid.
+        const size = 512, data = new Uint8Array(size * size * 4);
+        const twoPi = Math.PI * 2;
+        // Short irregular swell lines, not large repeating cloudy blobs.
+        // All frequencies remain integral so the left/right and top/bottom
+        // edges join exactly when MapLibre repeats the native fill-pattern.
+        for (let y=0;y<size;y++) for(let x=0;x<size;x++) {
+          const u=x/size,v=y/size;
+          const bend=0.60*Math.sin(twoPi*(2*u-v)+0.65)+
+                     0.28*Math.sin(twoPi*(3*u+2*v)+2.1);
+          const ridgeA=Math.pow(Math.max(0,Math.sin(twoPi*(12*u-4*v)+bend)),7);
+          const ridgeB=Math.pow(Math.max(0,Math.sin(twoPi*(27*u-10*v)+bend*0.55+1.7)),9);
+          const ridgeC=Math.pow(Math.max(0,Math.sin(twoPi*(43*u-18*v)+bend*0.28+0.30)),10);
+          const swell=Math.sin(twoPi*(2*u+v)+0.5)*0.20+
+                      Math.sin(twoPi*(u-3*v)+2.7)*0.13;
+          const shade=0.47*ridgeA+0.31*ridgeB+0.14*ridgeC+swell;
+          const i=(y*size+x)*4;
+          const crest=Math.max(0,shade),trough=Math.max(0,-shade);
+          // The same *opaque* sea pattern is used on both the global
+          // background and native Ocean polygon: no LOD-edge colour jump.
+          data[i]=Math.round(52+16*crest-7*trough);
+          data[i+1]=Math.round(95+17*crest-8*trough);
+          data[i+2]=Math.round(128+14*crest-7*trough);
+          data[i+3]=255;
         }
+        return {width:size,height:size,data};
+      }
 
-        function transform(p, bounds, size) {
-          const c = toWorld(p);
-          return [
-            (c[0] - bounds.x0) / (bounds.x1 - bounds.x0) * size,
-            (c[1] - bounds.y0) / (bounds.y1 - bounds.y0) * size
-          ];
-        }
+      function biganeMercatorCoords(position) {
+        const lon=Number(position[0]), latitude=Number(position[1]);
+        const lat=Math.max(-85.05112878,Math.min(85.05112878,latitude))*Math.PI/180;
+        return [(lon+180)/360,(1-Math.log(Math.tan(lat)+1/Math.cos(lat))/Math.PI)/2];
+      }
 
-        function polygonList(g) {
-          if (g?.type === 'Polygon') return [g.coordinates];
-          if (g?.type === 'MultiPolygon') return g.coordinates;
-          return [];
-        }
-
-        function drawPolygons(ctx, geometries, bounds, size, color) {
-          ctx.fillStyle = color;
-          let count = 0;
-          for (const geometry of geometries) {
-            for (const polygon of polygonList(geometry)) {
-              ctx.beginPath();
-              for (const ring of polygon) {
-                let first = true;
-                for (const position of ring) {
-                  if (!Number.isFinite(position[0]) || !Number.isFinite(position[1])) continue;
-                  const p = transform(position, bounds, size);
-                  if (first) { ctx.moveTo(p[0], p[1]); first = false; }
-                  else ctx.lineTo(p[0], p[1]);
-                }
-                if (!first) ctx.closePath();
-              }
-              ctx.fill('evenodd');
-              count++;
-            }
-          }
-          return count;
-        }
-
-        function drawActualCoasts(ctx, geometries, bounds, size, waterImage) {
-          ctx.lineWidth = 1.45;
-          ctx.lineJoin = 'round';
-          ctx.lineCap = 'round';
-          ctx.strokeStyle = '#ffffff';
-          let count = 0;
-          const edge = 24;
-          const isWaterAt = (px,py) => {
-            const x = Math.floor(px), y = Math.floor(py);
-            if (x < 0 || y < 0 || x >= size || y >= size) return null;
-            return waterImage[(y*size+x)*4+3] > 96;
-          };
-          for (const geometry of geometries) {
-            for (const poly of polygonList(geometry)) {
-              for (const ring of poly) {
-                if (!ring || ring.length < 2) continue;
-                for (let i = 0; i < ring.length; i++) {
-                  const ap = ring[i], bp = ring[(i + 1) % ring.length];
-                  if (!ap || !bp) continue;
-                  const a = toWorld(ap), b = toWorld(bp);
-                  if (tileClippingEdge(a, b)) continue;
-                  const p = transform(ap, bounds, size), q = transform(bp, bounds, size);
-                  if ((p[0] < -edge && q[0] < -edge) ||
-                      (p[1] < -edge && q[1] < -edge) ||
-                      (p[0] > size + edge && q[0] > size + edge) ||
-                      (p[1] > size + edge && q[1] > size + edge)) continue;
-                  if (Math.abs(p[0] - q[0]) > size * 0.7 || Math.abs(p[1] - q[1]) > size * 0.7) continue;
-                  // Crucial: an artificial tile edge has water on both sides
-                  // once adjoining clipped water polygons have been rasterized.
-                  // A real coast separates water on one side and land on the
-                  // other. Test multiple positions to avoid missing bends.
-                  const dx=q[0]-p[0], dy=q[1]-p[1];
-                  const len=Math.hypot(dx,dy);
-                  if(len<0.4) continue;
-                  const nx=-dy/len, ny=dx/len;
-                  let trueCoast = false;
-                  for (const t of [0.22,0.5,0.78]) {
-                    const cx=p[0]+dx*t,cy=p[1]+dy*t;
-                    for(const offset of [1.8,3.25]){
-                      const left=isWaterAt(cx+nx*offset,cy+ny*offset);
-                      const right=isWaterAt(cx-nx*offset,cy-ny*offset);
-                      if(left!==null&&right!==null&&left!==right) {
-                        trueCoast=true;break;
-                      }
-                    }
-                    if(trueCoast)break;
-                  }
-                  if (!trueCoast) continue;
-                  ctx.beginPath();
-                  ctx.moveTo(p[0], p[1]);
-                  ctx.lineTo(q[0], q[1]);
-                  ctx.stroke();
-                  count++;
-                }
-              }
-            }
-          }
-          return count;
-        }
-
-        // Exact squared Euclidean distance transform in O(N) for each axis.
-        function edtLine(input, length, result, positions, breaks) {
-          let k = 0;
-          positions[0] = 0;
-          breaks[0] = -1e20;
-          breaks[1] = 1e20;
-          for (let q = 1; q < length; q++) {
-            const fq = input[q] + q * q;
-            let v = positions[k];
-            let s = (fq - (input[v] + v * v)) / (2 * (q - v));
-            while (k > 0 && s <= breaks[k]) {
-              k--;
-              v = positions[k];
-              s = (fq - (input[v] + v * v)) / (2 * (q - v));
-            }
-            k++;
-            positions[k] = q;
-            breaks[k] = s;
-            breaks[k + 1] = 1e20;
-          }
-          k = 0;
-          for (let q = 0; q < length; q++) {
-            while (breaks[k + 1] < q) k++;
-            const dx = q - positions[k];
-            result[q] = dx * dx + input[positions[k]];
+      function biganeIsVectorTileBoundary(a,b) {
+        // A clipped polygon edge on a vector tile boundary is NOT a coast.
+        // Only remove straight, axis-aligned segments at global tile lines.
+        const eps=3e-7;
+        if(Math.abs(a[0]-b[0]) < eps) {
+          for(let z=0;z<=15;z++) {
+            const n=Math.pow(2,z);
+            if(Math.abs(a[0]*n-Math.round(a[0]*n))<eps*n)return true;
           }
         }
-
-        self.onmessage = event => {
-          const job = event.data;
-          const start = performance.now();
-          try {
-            const { requestId, bounds, ocean, lakes, size } = job;
-            const coverage = new OffscreenCanvas(size, size);
-            const ctx = coverage.getContext('2d', { willReadFrequently:true });
-            if (!ctx) throw new Error('2D worker canvas unavailable');
-            ctx.clearRect(0, 0, size, size);
-            const oceanPoly = drawPolygons(ctx, ocean, bounds, size, '#ff0000');
-            const lakePoly = drawPolygons(ctx, lakes, bounds, size, '#00ff00');
-            const waterImage = ctx.getImageData(0, 0, size, size).data;
-
-            const shoreCanvas = new OffscreenCanvas(size, size);
-            const shoreCtx = shoreCanvas.getContext('2d', { willReadFrequently:true });
-            if (!shoreCtx) throw new Error('Shoreline worker canvas unavailable');
-            const oceanSegments = drawActualCoasts(shoreCtx, ocean, bounds, size, waterImage);
-            const lakeSegments = drawActualCoasts(shoreCtx, lakes, bounds, size, waterImage);
-            const shoreImage = shoreCtx.getImageData(0, 0, size, size).data;
-
-            const lineInput = new Float64Array(size);
-            const lineOutput = new Float64Array(size);
-            const positions = new Int32Array(size);
-            const breaks = new Float64Array(size+1);
-            const temp = new Float32Array(size*size);
-            for (let y = 0; y < size; y++) {
-              for (let x = 0; x < size; x++) {
-                const i = (y*size+x) * 4;
-                lineInput[x] = shoreImage[i+3] > 32 ? 0 : LIMIT;
-              }
-              edtLine(lineInput,size,lineOutput,positions,breaks);
-              for (let x = 0; x < size; x++) temp[y*size+x] = lineOutput[x];
-            }
-
-            const centerLat = Math.atan(Math.sinh(Math.PI*(1 - bounds.y0 - bounds.y1))) / rad;
-            const metresPerPixel = EARTH * Math.max(0.08, Math.cos(centerLat*rad)) *
-                                   (bounds.x1-bounds.x0) / size;
-            const pixels = new Uint8Array(size*size*4);
-            let waterCount = 0, nearCoastCount = 0;
-            for (let x = 0; x < size; x++) {
-              for (let y = 0; y < size; y++) lineInput[y] = temp[y*size+x];
-              edtLine(lineInput,size,lineOutput,positions,breaks);
-              for (let y = 0; y < size; y++) {
-                const offset = (y*size+x)*4;
-                const alpha = waterImage[offset+3];
-                const lake = waterImage[offset+1] > waterImage[offset];
-                if (alpha < 32) continue;
-                waterCount++;
-                const radius = lake ? 9000 : 29000;
-                const meters = Math.sqrt(Math.max(0,lineOutput[y])) * metresPerPixel;
-                if (meters < radius) nearCoastCount++;
-                pixels[offset] = Math.round(255*Math.min(1,meters/radius));
-                pixels[offset+1] = lake ? 255 : 0;
-                pixels[offset+2] = 0;
-                pixels[offset+3] = alpha;
-              }
-            }
-            self.postMessage({requestId,bounds,size,buffer:pixels.buffer,
-              oceanPoly,lakePoly,oceanSegments,lakeSegments,waterCount,nearCoastCount,
-              ms:Math.round(performance.now()-start)},[pixels.buffer]);
-          } catch(error) {
-            self.postMessage({requestId:job.requestId,error:String(error?.message||error)});
+        if(Math.abs(a[1]-b[1]) < eps) {
+          for(let z=0;z<=15;z++) {
+            const n=Math.pow(2,z);
+            if(Math.abs(a[1]*n-Math.round(a[1]*n))<eps*n)return true;
           }
-        };
+        }
+        return false;
       }
 
       function installWaterPolish() {
-        if (waterPolishController) return;
-        const names = ['Ocean','lakes'];
-        const layers = names.map(name=>({name,layer:map.getLayer(name)}))
-          .filter(entry=>entry.layer?.source && entry.layer?.type==='fill');
-        if (!layers.length) {
-          console.warn('Water v45: Ocean/lakes vectorlagen ontbreken.');
+        if(waterPolishController)return;
+        const ocean=map.getLayer('Ocean');
+        const lakes=map.getLayer('lakes');
+        if(!ocean && !lakes) {
+          console.warn('Bigane water v47: native Ocean/lakes layers not found');
           return;
         }
-        // Retain existing v42/v44 water base colours but NEVER repaint the land.
+
+        // A native polygon is the sole authority for where water exists.
+        // In particular this prevents detached shallow-water surfaces over lakes.
+        if(map.getLayer('background'))
+          map.setPaintProperty('background','background-color','#335f81');
+        if(ocean)map.setPaintProperty('Ocean','fill-color','#345f80');
+        if(lakes)map.setPaintProperty('lakes','fill-color','#4c8093');
+
+        // One world-fixed texture, generated once. Render it as the base
+        // background AND the original Ocean fill. Crucial: the open ocean
+        // outside the loaded vector polygons then looks identical, so the
+        // Ocean-geometry/LOD boundary cannot be visible. No overlay pass.
+        let oceanSurfaceEnabled=false;
         try {
-          if (map.getLayer('background')) map.setPaintProperty('background','background-color','#3f7090');
-          if (map.getLayer('Ocean')) map.setPaintProperty('Ocean','fill-color','#3f7090');
-          if (map.getLayer('lakes')) map.setPaintProperty('lakes','fill-color','#488da2');
-        } catch(error) { console.warn('Water base colours:',error); }
-
-        const vertexSource = `#version 300 es
-          precision highp float;
-          layout(location=0) in vec2 a_position;
-          layout(location=1) in vec2 a_uv;
-          uniform mat4 u_matrix;
-          out vec2 v_uv;
-          out vec2 v_world;
-          void main() {
-            v_uv=a_uv;
-            v_world=a_position;
-            gl_Position=u_matrix*vec4(a_position,0.0,1.0);
+          if(!map.hasImage(BIGANE_WATER_PATTERN_ID))
+            map.addImage(BIGANE_WATER_PATTERN_ID,biganeMakeSeamlessOceanPattern(),{pixelRatio:1});
+          if(map.hasImage(BIGANE_WATER_PATTERN_ID)) {
+            if(map.getLayer('background'))
+              map.setPaintProperty('background','background-pattern',BIGANE_WATER_PATTERN_ID);
+            if(ocean)map.setPaintProperty('Ocean','fill-pattern',BIGANE_WATER_PATTERN_ID);
+            oceanSurfaceEnabled=true;
           }
-        `;
-        const fragmentSource = `#version 300 es
-          precision highp float;
-          uniform sampler2D u_water;
-          uniform float u_pitch;
-          uniform float u_bearing;
-          in vec2 v_uv;
-          in vec2 v_world;
-          out vec4 fragColor;
-          float sat(float v){return clamp(v,0.0,1.0);}
-          float smooth01(float v){v=sat(v);return v*v*(3.0-2.0*v);}
-          void main() {
-            vec4 data = texture(u_water,v_uv);
-            if(data.a<0.01)discard;
-            float lake=step(0.5,data.g);
-            float distance01=sat(data.r);
-            float shelf=1.0-smooth01(distance01);
-            // No visible LOD perimeter. The extra buffer sits entirely off
-            // screen; any parts that become visible fade to zero gently.
-            vec2 border=min(v_uv,1.0-v_uv);
-            float margin=smooth01(min(border.x,border.y)/0.12);
-            if(margin<0.005)discard;
+        } catch(error) {
+          console.warn('Bigane seamless ocean pattern could not be installed; native water remains:',error);
+        }
 
-            // Three-step bathymetry: bright shallows, shelf water, then a
-            // darker offshore body so the sea no longer reads as a flat fill.
-            float tMid=smoothstep(0.05,0.45,distance01);
-            float tDeep=smoothstep(0.38,1.00,distance01);
-            vec3 coast=mix(vec3(0.53,0.83,0.89),vec3(0.56,0.84,0.88),lake);
-            vec3 mid=mix(vec3(0.34,0.64,0.77),vec3(0.38,0.69,0.76),lake);
-            vec3 deep=mix(vec3(0.16,0.39,0.56),vec3(0.23,0.54,0.65),lake);
-            vec3 color=mix(coast,mid,tMid);
-            color=mix(color,deep,tDeep);
-
-            // Large-scale body variation, world anchored, to break the flat look
-            // without adding moving textures or extra draw calls.
-            vec2 world=v_world*40075016.68557849*0.00008;
-            float macro=0.5+0.5*sin(dot(world,vec2(0.11,0.04))*1.8 + sin(dot(world,vec2(-0.03,0.09))*1.2));
-            float macro2=0.5+0.5*sin(dot(world,vec2(-0.06,0.08))*1.1);
-            float offshore=(0.06*macro + 0.04*macro2) * (0.20 + 0.80*tDeep) * (1.0-lake*0.55);
-            color *= 1.0 - offshore;
-
-            // Directional stationary reflection using gentle world-anchored wave normals.
-            float a=dot(world,vec2(0.97,0.33))*2.4;
-            float b=dot(world,vec2(-0.26,0.96))*3.8;
-            float c=dot(world,vec2(0.53,-0.85))*1.5;
-            vec2 slope=vec2(0.97,0.33)*cos(a)*0.18 +
-                       vec2(-0.26,0.96)*cos(b)*0.10 +
-                       vec2(0.53,-0.85)*cos(c)*0.06;
-            vec3 normal=normalize(vec3(slope*mix(0.80,0.35,lake),1.0));
-            vec3 sun=normalize(vec3(-0.55,-0.70,1.25));
-            vec3 view=normalize(vec3(sin(u_bearing)*sin(u_pitch),
-              -cos(u_bearing)*sin(u_pitch),max(cos(u_pitch),0.12)));
-            float reflection=pow(max(dot(normal,normalize(sun+view)),0.0),42.0);
-            float fresnel=pow(1.0-max(dot(normal,view),0.0),2.4);
-            float glint=(0.11*reflection+0.07*fresnel)*mix(1.0,0.45,lake);
-            color+=vec3(glint*0.55,glint*0.75,glint*0.95);
-
-            // Make the actual coastline clearly readable: a subtle darker water
-            // contact band plus a crisp bright shoreline, both derived from the
-            // real SDF coast rather than the LOD boundary.
-            float px=max(fwidth(distance01),0.0016);
-            float contact=1.0-smoothstep(px*1.6,px*7.5,distance01);
-            float shoreLine=1.0-smoothstep(px*0.35,px*2.0,distance01);
-            float shoreGlow=1.0-smoothstep(px*2.0,px*10.0,distance01);
-            color=mix(color,color*vec3(0.76,0.88,0.96),contact*0.35);
-            color=mix(color,vec3(0.93,0.98,0.99),shoreLine*0.92);
-            color+=vec3(0.05,0.10,0.10)*shoreGlow*0.18;
-
-            float bodyOpacity=(0.18 + 0.56*shelf + 0.08*tDeep + 0.03*glint)*data.a*margin;
-            float lineBoost=(shoreLine*0.32 + shoreGlow*0.10)*data.a*margin;
-            float opacity=clamp(bodyOpacity + lineBoost, 0.0, 0.95);
-            if(opacity<0.002)discard;
-            fragColor=vec4(color,opacity);
-          }
-        `;
-        const layer = {
-          id: BIGANE_WATER_LAYER_ID,
-          type: 'custom',
-          renderingMode: '2d',
-          gl: null, count: 0, hasMask:false,
-          stats:{},
-          onAdd(mapObj,gl) {
-            this.map=mapObj;this.gl=gl;
-            const compile=(kind,src)=>{
-              const sh=gl.createShader(kind);
-              gl.shaderSource(sh,src);
-              gl.compileShader(sh);
-              if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS)){
-                const e=gl.getShaderInfoLog(sh);gl.deleteShader(sh);throw Error(e);
-              }
-              return sh;
-            };
-            const vert=compile(gl.VERTEX_SHADER,vertexSource);
-            const frag=compile(gl.FRAGMENT_SHADER,fragmentSource);
-            this.program=gl.createProgram();
-            gl.attachShader(this.program,vert);gl.attachShader(this.program,frag);
-            gl.linkProgram(this.program);
-            gl.deleteShader(vert);gl.deleteShader(frag);
-            if(!gl.getProgramParameter(this.program,gl.LINK_STATUS))
-              throw Error(gl.getProgramInfoLog(this.program));
-            this.uMatrix=gl.getUniformLocation(this.program,'u_matrix');
-            this.uPitch=gl.getUniformLocation(this.program,'u_pitch');
-            this.uBearing=gl.getUniformLocation(this.program,'u_bearing');
-            this.uTexture=gl.getUniformLocation(this.program,'u_water');
-            this.vao=gl.createVertexArray();
-            this.buffer=gl.createBuffer();
-            gl.bindVertexArray(this.vao);
-            gl.bindBuffer(gl.ARRAY_BUFFER,this.buffer);
-            gl.bufferData(gl.ARRAY_BUFFER,4*4*4,gl.DYNAMIC_DRAW);
-            gl.enableVertexAttribArray(0);
-            gl.vertexAttribPointer(0,2,gl.FLOAT,false,16,0);
-            gl.enableVertexAttribArray(1);
-            gl.vertexAttribPointer(1,2,gl.FLOAT,false,16,8);
-            gl.bindVertexArray(null);
-            this.texture=gl.createTexture();
-            gl.bindTexture(gl.TEXTURE_2D,this.texture);
-            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-            gl.bindTexture(gl.TEXTURE_2D,null);
-          },
-          update(data) {
-            if(!this.gl)return;
-            const gl=this.gl;
-            const {bounds,buffer,size}=data;
-            const {x0,y0,x1,y1}=bounds;
-            const quad=new Float32Array([
-              x0,y0,0,0,
-              x1,y0,1,0,
-              x0,y1,0,1,
-              x1,y1,1,1
-            ]);
-            const oldArray=gl.getParameter(gl.ARRAY_BUFFER_BINDING);
-            const oldTexture=gl.getParameter(gl.TEXTURE_BINDING_2D);
-            const oldUnpack=gl.getParameter(gl.UNPACK_ALIGNMENT);
-            const oldFlip=gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL);
-            gl.bindBuffer(gl.ARRAY_BUFFER,this.buffer);
-            gl.bufferData(gl.ARRAY_BUFFER,quad,gl.DYNAMIC_DRAW);
-            gl.bindBuffer(gl.ARRAY_BUFFER,oldArray);
-            gl.bindTexture(gl.TEXTURE_2D,this.texture);
-            gl.pixelStorei(gl.UNPACK_ALIGNMENT,1);
-            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
-            // Typed-array rows are top-to-bottom. Our UVs (0,0) refer to the
-            // top edge; that is the matching orientation for raw WebGL upload.
-            gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,size,size,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(buffer));
-            gl.pixelStorei(gl.UNPACK_ALIGNMENT,oldUnpack);
-            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,oldFlip);
-            gl.bindTexture(gl.TEXTURE_2D,oldTexture);
-            this.hasMask=true;
-            this.stats={...data,buffer:undefined};
-            this.map.triggerRepaint();
-          },
-          render(gl,options) {
-            if(!this.hasMask)return;
-            const main=options?.defaultProjectionData?.mainMatrix;
-            if(!main)return;
-            const oldProgram=gl.getParameter(gl.CURRENT_PROGRAM);
-            const oldVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING);
-            const oldTextureUnit=gl.getParameter(gl.ACTIVE_TEXTURE);
-            gl.activeTexture(gl.TEXTURE0);
-            const oldZeroTexture=gl.getParameter(gl.TEXTURE_BINDING_2D);
-            gl.activeTexture(oldTextureUnit);
-            const oldCull=gl.isEnabled(gl.CULL_FACE);
-            const oldDepth=gl.isEnabled(gl.DEPTH_TEST);
-            const oldBlend=gl.isEnabled(gl.BLEND);
-            const oldMask=gl.getParameter(gl.DEPTH_WRITEMASK);
-            const rgbSrc=gl.getParameter(gl.BLEND_SRC_RGB);
-            const rgbDst=gl.getParameter(gl.BLEND_DST_RGB);
-            const aSrc=gl.getParameter(gl.BLEND_SRC_ALPHA);
-            const aDst=gl.getParameter(gl.BLEND_DST_ALPHA);
-            gl.disable(gl.CULL_FACE);
-            gl.disable(gl.DEPTH_TEST);
-            gl.depthMask(false);
-            gl.enable(gl.BLEND);
-            gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
-            gl.useProgram(this.program);
-            gl.uniformMatrix4fv(this.uMatrix,false,main);
-            gl.uniform1f(this.uPitch,this.map.getPitch()*Math.PI/180);
-            gl.uniform1f(this.uBearing,this.map.getBearing()*Math.PI/180);
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D,this.texture);
-            gl.uniform1i(this.uTexture,0);
-            gl.bindVertexArray(this.vao);
-            gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
-            gl.bindVertexArray(oldVao);
-            gl.bindTexture(gl.TEXTURE_2D,oldZeroTexture);
-            gl.activeTexture(oldTextureUnit);
-            gl.useProgram(oldProgram);
-            if(oldCull)gl.enable(gl.CULL_FACE);else gl.disable(gl.CULL_FACE);
-            gl.blendFuncSeparate(rgbSrc,rgbDst,aSrc,aDst);
-            if(!oldBlend)gl.disable(gl.BLEND);
-            if(oldDepth)gl.enable(gl.DEPTH_TEST);else gl.disable(gl.DEPTH_TEST);
-            gl.depthMask(oldMask);
-          },
-          onRemove(mapObj,gl) {
-            if(this.texture)gl.deleteTexture(this.texture);
-            if(this.buffer)gl.deleteBuffer(this.buffer);
-            if(this.vao)gl.deleteVertexArray(this.vao);
-            if(this.program)gl.deleteProgram(this.program);
-          }
-        };
-        // Above the actual ocean/lake fills, below roads and ALL labels.
+        // Shorelines follow the real vector coordinates. We discard edges
+        // introduced by vector-tile clipping, deduplicate shared geometry and
+        // submit a small cached GeoJSON source only after new tiles arrive.
+        const empty={type:'FeatureCollection',features:[]};
+        if(!map.getSource(BIGANE_WATER_SOURCE_ID))
+          map.addSource(BIGANE_WATER_SOURCE_ID,{type:'geojson',data:empty,
+            tolerance:0.25,buffer:64,maxzoom:13});
         const before=map.getLayer('Lakes names')?'Lakes names':
-          map.getLayer('Trails')?'Trails':
           map.getLayer('Town names')?'Town names':undefined;
-        try {map.addLayer(layer,before);} catch(error) {
-          console.error('Water v45 custom layer:',error);return;
-        }
+        const common={type:'line',source:BIGANE_WATER_SOURCE_ID,
+          layout:{'line-cap':'round','line-join':'round'}};
+        const addShoreLayer=(id,kind,paint)=>{
+          if(map.getLayer(id))return;
+          map.addLayer({id,...common,filter:['==',['get','kind'],kind],paint},before);
+        };
+        // A soft contact line and a crisp outline. Widths are in screen pixels,
+        // NOT kilometre-wide masks or resolution-dependent EDT values.
+        addShoreLayer('bigane-ocean-contact-v47','ocean',{
+          'line-color':'#8cbbc4',
+          'line-width':['interpolate',['linear'],['zoom'],2,2,5,3.5,8,5,12,6],
+          'line-blur':1.1,'line-opacity':0.22
+        });
+        addShoreLayer('bigane-ocean-coast-v47','ocean',{
+          'line-color':'#bdd9d8',
+          'line-width':['interpolate',['linear'],['zoom'],2,0.65,6,1.15,10,1.55],
+          'line-opacity':0.80
+        });
+        addShoreLayer('bigane-lake-coast-v47','lake',{
+          'line-color':'#a6c4c4',
+          'line-width':['interpolate',['linear'],['zoom'],2,0.55,6,0.95,10,1.20],
+          'line-opacity':0.64
+        });
 
-        if(typeof Worker==='undefined'||typeof OffscreenCanvas==='undefined'){
-          console.warn('Water v45: no Worker/OffscreenCanvas, native water remains.');
-          return;
+        let scheduled=null,disposed=false,builds=0,lastSignature='',lastStats={version:47,phase:'initializing'};
+        const layerDetails=[{id:'Ocean',kind:'ocean'},{id:'lakes',kind:'lake'}]
+          .filter(item=>map.getLayer(item.id)?.source);
+        function collectSourceFeatures(id) {
+          const layer=map.getLayer(id);
+          if(!layer?.source)return [];
+          const sourceLayer=layer['source-layer']||layer.sourceLayer;
+          try {
+            const data=map.querySourceFeatures(layer.source,
+              sourceLayer?{sourceLayer}:undefined);
+            if(data?.length)return data;
+          } catch(error) {console.warn('Water shoreline source lookup:',error);}
+          try{return map.queryRenderedFeatures({layers:[id]})||[];}
+          catch(_){return [];}
         }
-        const workerUrl=URL.createObjectURL(new Blob([`(${biganeWaterSdfWorker.toString()})()`],{type:'text/javascript'}));
-        let worker;
-        try {worker=new Worker(workerUrl);} catch(error) {
-          URL.revokeObjectURL(workerUrl);
-          console.warn('Water v45 worker could not start:',error);
-          return;
+        function rebuild() {
+          if(disposed)return;
+          const features=[],seen=new Set();
+          let polygons=0,segments=0,clipped=0;
+          for(const item of layerDetails) {
+            const sourceFeatures=collectSourceFeatures(item.id);
+            for(const feature of sourceFeatures) {
+              const geometry=feature?.geometry;
+              if(!geometry || !['Polygon','MultiPolygon'].includes(geometry.type))continue;
+              const polygonsInFeature=geometry.type==='Polygon'?[geometry.coordinates]:geometry.coordinates;
+              for(const polygon of polygonsInFeature) {
+                polygons++;
+                for(const ring of polygon) {
+                  if(!Array.isArray(ring)||ring.length<2)continue;
+                  const n=ring.length;
+                  const flush=(coords)=>{
+                    if(coords.length<2)return;
+                    features.push({type:'Feature',properties:{kind:item.kind},
+                      geometry:{type:'LineString',coordinates:coords}});
+                  };
+                  let current=[];
+                  for(let k=0;k<n;k++) {
+                    const a=ring[k],b=ring[(k+1)%n];
+                    if(!a||!b||!Number.isFinite(a[0])||!Number.isFinite(b[0]))continue;
+                    if(a[0]===b[0]&&a[1]===b[1])continue;
+                    const first=biganeMercatorCoords(a),second=biganeMercatorCoords(b);
+                    if(biganeIsVectorTileBoundary(first,second)) {
+                      clipped++;flush(current);current=[];continue;
+                    }
+                    // Source tiles can repeat the same shoreline. Use endpoints
+                    // as a stable undirected segment key, scoped to water kind.
+                    const aKey=`${a[0].toFixed(6)}:${a[1].toFixed(6)}`;
+                    const bKey=`${b[0].toFixed(6)}:${b[1].toFixed(6)}`;
+                    const key=`${item.kind}:${aKey<bKey?aKey+'|'+bKey:bKey+'|'+aKey}`;
+                    if(seen.has(key)){flush(current);current=[];continue;}
+                    seen.add(key);segments++;
+                    if(current.length===0)current=[a.slice(0,2),b.slice(0,2)];
+                    else {
+                      const last=current[current.length-1];
+                      if(Math.abs(last[0]-a[0])<1e-7&&Math.abs(last[1]-a[1])<1e-7)
+                        current.push(b.slice(0,2));
+                      else{flush(current);current=[a.slice(0,2),b.slice(0,2)];}
+                    }
+                  }
+                  flush(current);
+                }
+              }
+            }
+          }
+          // Avoid redundant source reparses if none of the loaded vectors changed.
+          // Every segment contributes: different tile sets with the same count
+          // must still update their cached, world-anchored shoreline source.
+          let signatureHash=2166136261;
+          for(const key of [...seen].sort()){
+            for(let i=0;i<key.length;i++){
+              signatureHash=Math.imul(signatureHash^key.charCodeAt(i),16777619);
+            }
+          }
+          const signature=`${segments}:${signatureHash>>>0}`;
+          if(signature!==lastSignature) {
+            map.getSource(BIGANE_WATER_SOURCE_ID)?.setData({type:'FeatureCollection',features});
+            lastSignature=signature;builds++;
+          }
+          lastStats={version:47,phase:'ready',backend:'native-vectors',
+            oceanPattern:oceanSurfaceEnabled,shorelineSegments:segments,
+            coastlineFeatures:features.length,tileClippingEdgesSkipped:clipped,
+            waterPolygons:polygons,workerMs:0,textureReuploads:0,
+            maskSize:0,sourceUpdates:builds};
         }
-        URL.revokeObjectURL(workerUrl);
-
-        const yMerc=lat=>{
-          const radians=Math.max(-85.05112878,Math.min(85.05112878,lat))*Math.PI/180;
-          return (1-Math.log(Math.tan(radians)+1/Math.cos(radians))/Math.PI)*0.5;
+        const schedule=(delay=300)=>{
+          clearTimeout(scheduled);scheduled=setTimeout(()=>{scheduled=null;rebuild();},delay);
         };
-        let requestId=0, active=false, queued=false, stopped=false;
-        let scheduled=null, lastRequest=null, lastRefresh=0;
-        let lastStats={version:45,phase:'initializing'};
-        function viewportBounds() {
-          const b=map.getBounds(), c=map.getCenter();
-          const west=(b.getWest()+180)/360,east=(b.getEast()+180)/360;
-          const north=yMerc(b.getNorth()),south=yMerc(b.getSouth());
-          const centerX=(c.lng+180)/360,centerY=yMerc(c.lat);
-          const span=Math.max(Math.abs(east-west),Math.abs(south-north),1e-8)*1.75;
-          return {x0:centerX-span/2,x1:centerX+span/2,
-                  y0:centerY-span/2,y1:centerY+span/2};
-        }
-        function bboxIntersects(geometry,bounds) {
-          let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
-          const visit=node=>{
-            if(!Array.isArray(node))return;
-            if(node.length>=2 && typeof node[0]==='number' && typeof node[1]==='number') {
-              const x=(node[0]+180)/360,y=yMerc(node[1]);
-              minX=Math.min(minX,x);maxX=Math.max(maxX,x);
-              minY=Math.min(minY,y);maxY=Math.max(maxY,y);
-            }else for(const child of node)visit(child);
-          };
-          visit(geometry?.coordinates);
-          return minX<=bounds.x1 && maxX>=bounds.x0 &&
-                 minY<=bounds.y1 && maxY>=bounds.y0;
-        }
-        function getWaterFeatures(name,bounds) {
-          const item=layers.find(x=>x.name===name);
-          if(!item)return [];
-          const id=item.layer.source;
-          const sourceLayer=item.layer['source-layer']||item.layer.sourceLayer;
-          let features=[];
-          try {features=map.querySourceFeatures(id,sourceLayer?{sourceLayer}:undefined)||[];}
-          catch(error){console.warn('Water source query:',name,error);}
-          if(!features.length) {
-            try{features=map.queryRenderedFeatures({layers:[name]})||[];}
-            catch(error){console.warn('Water fallback:',name,error);}
-          }
-          const found=[], seen=new Set();
-          for(const feature of features) {
-            const g=feature?.geometry;
-            if(!g||!['Polygon','MultiPolygon'].includes(g.type))continue;
-            if(!bboxIntersects(g,bounds))continue;
-            const key=[g.type,feature?.id,
-              g.coordinates?.[0]?.[0]?.[0],g.coordinates?.[0]?.[0]?.[1],
-              g.coordinates?.length].join('|');
-            if(seen.has(key))continue;
-            seen.add(key);
-            found.push({type:g.type,coordinates:g.coordinates});
-          }
-          return found;
-        }
-        function build() {
-          if(stopped)return;
-          if(active){queued=true;return;}
-          const bounds=viewportBounds();
-          const ocean=getWaterFeatures('Ocean',bounds);
-          const lakes=getWaterFeatures('lakes',bounds);
-          if(!ocean.length && !lakes.length)return;
-          active=true;
-          const id=++requestId;
-          lastRequest={bounds};
-          lastStats={version:45,phase:'building',oceanFeatures:ocean.length,
-            lakeFeatures:lakes.length,size:BIGANE_WATER_TEXTURE_SIZE};
-          worker.postMessage({requestId:id,bounds,ocean,lakes,size:BIGANE_WATER_TEXTURE_SIZE});
-        }
-        worker.onmessage = ({data}) => {
-          active=false;
-          if(stopped)return;
-          if(data.error){console.warn('Water v45 worker:',data.error);lastStats={version:45,error:data.error};}
-          else {
-            const c=map.getCenter();
-            const x=(c.lng+180)/360,y=yMerc(c.lat);
-            const side=data.bounds.x1-data.bounds.x0;
-            // Don't replace a usable mask with a stale image after a large pan.
-            if(Math.abs(x-(data.bounds.x0+data.bounds.x1)/2)<side*0.30 &&
-               Math.abs(y-(data.bounds.y0+data.bounds.y1)/2)<side*0.30) {
-              layer.update(data);
-              lastStats={version:45,phase:'ready',workerMs:data.ms,
-                waterPixels:data.waterCount,nearCoastPixels:data.nearCoastCount,
-                oceanPolygons:data.oceanPoly,lakePolygons:data.lakePoly,
-                oceanSegments:data.oceanSegments,lakeSegments:data.lakeSegments,
-                size:data.size};
-            } else queued=true;
-          }
-          if(queued){queued=false;schedule(70);}
+        const onSource=event=>{
+          if(event?.sourceId==='composite'&&event?.isSourceLoaded)schedule(350);
         };
-        worker.onerror = error => {
-          active=false;
-          console.error('Water v45 worker failed:',error);
-          lastStats={version:45,error:String(error.message||error)};
-        };
-        function schedule(delay=240) {
-          clearTimeout(scheduled);
-          scheduled=setTimeout(()=>{scheduled=null;build();},delay);
-        }
-        function onMove() {
-          if(active)return;
-          const now=performance.now();
-          if(now-lastRefresh<900)return;
-          const c=map.getCenter(),x=(c.lng+180)/360,y=yMerc(c.lat);
-          if(lastRequest?.bounds){
-            const b=lastRequest.bounds,span=b.x1-b.x0;
-            if(Math.abs(x-(b.x0+b.x1)/2)<span*0.18 &&
-               Math.abs(y-(b.y0+b.y1)/2)<span*0.18)return;
-          }
-          lastRefresh=now;
-          schedule(100);
-        }
-        function onSourceData(event) {
-          if(layers.some(l=>l.layer.source===event?.sourceId) && event?.isSourceLoaded)
-            schedule(360);
-        }
-        const onEnd=()=>schedule(160);
-        map.on('move',onMove);
+        const onEnd=()=>schedule(190);
+        const onIdle=()=>{if(!lastSignature)schedule(100);};
+        map.on('sourcedata',onSource);
         map.on('moveend',onEnd);
         map.on('zoomend',onEnd);
-        map.on('sourcedata',onSourceData);
-        const initial=()=>schedule(100);
-        map.once('idle',initial);
-        waterPolishController={layer,refresh:()=>schedule(0),
-          getStats:()=>lastStats,
-          dispose() {
-            stopped=true;clearTimeout(scheduled);
-            worker.terminate();
-            map.off('move',onMove);
-            map.off('moveend',onEnd);
-            map.off('zoomend',onEnd);
-            map.off('sourcedata',onSourceData);
-          }
-        };
+        map.on('idle',onIdle);
+        waterPolishController={refresh:()=>schedule(0),getStats:()=>lastStats,
+          dispose(){disposed=true;clearTimeout(scheduled);
+            map.off('sourcedata',onSource);map.off('moveend',onEnd);
+            map.off('zoomend',onEnd);map.off('idle',onIdle);}};
         window.biganeWaterDebug=()=>waterPolishController?.getStats();
-        schedule(180);
+        schedule(120);
       }
 
 
@@ -1743,37 +1359,10 @@
               }
             }, map.getLayer("bigane-snow-overlay") ? "bigane-snow-overlay" : (map.getLayer("Town names") ? "Town names" : undefined));
           }
-          if (map.getSource("bigane-dem") && !map.getLayer(ROCK_LAYER_ID)) {
-            map.addLayer({
-              id: ROCK_LAYER_ID,
-              type: "color-relief",
-              source: "bigane-dem",
-              paint: {
-                "color-relief-color": [
-                  "interpolate", ["linear"], ["elevation"],
-                  -100000, ["rgba", 98, 92, 84, 0],
-                  1000000, ["rgba", 98, 92, 84, 0]
-                ],
-                "color-relief-opacity": 1,
-                "resampling": "linear"
-              }
-            }, map.getLayer("bigane-snow-overlay") ? "bigane-snow-overlay" : (map.getLayer("Town names") ? "Town names" : undefined));
-          }
+
         } catch (error) {
           console.warn("Landscape polish overgeslagen:", error);
         }
-      }
-
-      function setRockReliefStops(start, strong, snowStart) {
-        if (!map.getLayer(ROCK_LAYER_ID)) return;
-        map.setPaintProperty(ROCK_LAYER_ID, "color-relief-color", [
-          "interpolate", ["linear"], ["elevation"],
-          -100000, ["rgba", 105, 97, 87, 0],
-          start, ["rgba", 105, 97, 87, 0],
-          strong, ["rgba", 101, 93, 83, 0.10],
-          snowStart, ["rgba", 112, 108, 101, 0.16],
-          snowStart + 1, ["rgba", 112, 108, 101, 0.05]
-        ]);
       }
 
       // ---------------------------------------------------------------------
@@ -2589,10 +2178,11 @@
         return factor;
       }
 
-      function hfWaterDensityFactor(entry, x, y, mpu) {
+      function hfWaterDensityFactor(entry, x, y, mpu, knownShoreDistance = Infinity) {
         const rings = entry.nearbyWaterRings || [];
         if (!rings.length) return 1;
-        const d = hfDistanceToWaterRingsMeters(x, y, mpu, rings);
+        const d = Number.isFinite(knownShoreDistance) ? knownShoreDistance :
+          hfDistanceToWaterRingsMeters(x, y, mpu, rings);
         const near = hfClamp01(1 - d / HF_WATER_INFLUENCE_METERS);
         if (entry.biome === "Savanna") return 0.78 + 0.65 * near;
         if (entry.biome === "Wetland") return 0.92 + 0.38 * near;
@@ -2982,6 +2572,37 @@
               } catch (_) {}
             }
 
+            // Exact water polygons are an exclusion mask for tree roots.
+            // Biome polygons alone may extend underneath lakes and oceans.
+            const waterExclusions=[];
+            const waterSeen=new Set();
+            for(const layerId of ['Ocean','lakes']) {
+              const layer=this.map.getLayer(layerId);
+              if(!layer?.source)continue;
+              const sourceLayer=layer['source-layer']||layer.sourceLayer;
+              let waterFeatures=[];
+              try {waterFeatures=this.map.querySourceFeatures(layer.source,
+                sourceLayer?{sourceLayer}:undefined)||[];} catch(_) {}
+              if(!waterFeatures.length){
+                try{waterFeatures=this.map.queryRenderedFeatures({layers:[layerId]})||[];}catch(_){}
+              }
+              for(const feature of waterFeatures){
+                if(!['Polygon','MultiPolygon'].includes(feature?.geometry?.type))continue;
+                const bounds=hfFeatureBounds(feature);
+                if(!bounds)continue;
+                const first=feature.geometry.type==='Polygon'?
+                  feature.geometry.coordinates?.[0]?.[0]:feature.geometry.coordinates?.[0]?.[0]?.[0];
+                const key=[layerId,bounds.west.toFixed(5),bounds.east.toFixed(5),
+                  bounds.south.toFixed(5),bounds.north.toFixed(5),
+                  first?.[0],first?.[1]].join('|');
+                if(waterSeen.has(key))continue;
+                waterSeen.add(key);
+                waterExclusions.push({feature,bounds});
+              }
+            }
+            this.waterExclusionCount=waterExclusions.length;
+            const waterExclusionPad=4200/HF_WORLD_METERS;
+
             const allEntries = [];
             const seenFeatures = new Set();
             for (const feature of raw) {
@@ -3078,7 +2699,8 @@
               .map(entry => ({
                 ...entry,
                 mixOverride: hfPalmMixForEntry(entry, allLakeRings, allEntries),
-                nearbyWaterRings: hydroRings.filter(ring => hfBoundsNear(entry.bounds, ring.bounds, waterPadWorld))
+                nearbyWaterRings: hydroRings.filter(ring => hfBoundsNear(entry.bounds, ring.bounds, waterPadWorld)),
+                nearbyWaterPolygons:waterExclusions.filter(w=>hfBoundsNear(entry.bounds,w.bounds,waterExclusionPad))
               }));
             const oasisEntries = [];
             for (const desert of desertEntries) {
@@ -3087,7 +2709,8 @@
               oasisEntries.push({
                 ...desert,
                 biome: HF_OASIS_BIOME,
-                waterRings: nearbyRings
+                waterRings: nearbyRings,
+                nearbyWaterPolygons:waterExclusions.filter(w=>hfBoundsNear(desert.bounds,w.bounds,waterExclusionPad))
               });
             }
 
@@ -3154,6 +2777,19 @@
 
             const seen = new Set();
             const candidates = [];
+            const waterRootCache=new Map();
+            const waterBufferMeters=2400; // exclude roots near open water (large crowns)
+            const isWaterRoot=(entry,lng,lat,x,y,mpu,key)=>{
+              if(waterRootCache.has(key))return waterRootCache.get(key);
+              let inside=false;
+              for(const water of entry.nearbyWaterPolygons||[]){
+                const b=water.bounds;
+                if(x<b.x0||x>b.x1||y<b.y0||y>b.y1)continue;
+                if(featureContainsCoordinate(water.feature,[lng,lat])){inside=true;break;}
+              }
+              waterRootCache.set(key,inside);
+              return inside;
+            };
 
             featureLoop:
             for (const entry of features) {
@@ -3208,10 +2844,14 @@
 
                   const merc = new maplibregl.MercatorCoordinate(x, y, 0);
                   const localMpu = merc.meterInMercatorCoordinateUnits();
+                  if(isWaterRoot(entry,lng,lat,x,y,localMpu,key))continue;
                   const settlementFactor = hfSettlementDensityFactor(x, y, localMpu, settlementIndex);
                   if (settlementFactor <= 0) continue;
                   const densityField = hfForestDensityField(entry, x, y);
-                  const waterFactor = hfWaterDensityFactor(entry, x, y, localMpu);
+                  const shoreDistance=entry.nearbyWaterRings?.length ?
+                    hfDistanceToWaterRingsMeters(x,y,localMpu,entry.nearbyWaterRings) : Infinity;
+                  if(shoreDistance<waterBufferMeters)continue;
+                  const waterFactor = hfWaterDensityFactor(entry, x, y, localMpu, shoreDistance);
                   const candidateDensity = Math.min(1, biomeConfig.density * HF_SETTINGS.densityMultiplier * densityField * waterFactor * settlementFactor);
                   if (hfHash(ix, iy, 3) > candidateDensity) continue;
                   // Oasis palms are generated only on Hot desert land within a
@@ -3285,7 +2925,8 @@
           getStats() {
             return {near:this.lastNearTotal||0,sprites:this.lastSpriteTotal||0,biomes:this.lastBiomeFeatureCount||0,
               detailedTrees:this.lastHighTotal||0,clusterBatches:this.lastMidGroupTotal||0,
-              spriteBatches:this.lastFarGroupTotal||0,rebuildMs:this.lastRebuildMs||0};
+              spriteBatches:this.lastFarGroupTotal||0,rebuildMs:this.lastRebuildMs||0,
+              waterExclusionPolygons:this.waterExclusionCount||0};
           },
           prerender(gl,options) {
             if(!this.enabled||this.map.getZoom()<HF_SETTINGS.minZoom||!this.heightMapDirty)return;
@@ -4579,17 +4220,17 @@
         return sorted[lo] * (1 - t) + sorted[hi] * t;
       }
 
-      function setSnowReliefStops(stops) {
+      function setSnowReliefStops(start, fadeWidth) {
         if (!map.getLayer(SNOW_LAYER_ID)) return;
-        const [start, light, medium, heavy, peak] = stops;
-        map.setPaintProperty(SNOW_LAYER_ID, "color-relief-color", [
-          "interpolate", ["linear"], ["elevation"],
-          -100000, ["rgba", 246, 250, 255, 0.0],
-          start,   ["rgba", 246, 250, 255, 0.0],
-          light,   ["rgba", 247, 251, 255, 0.12],
-          medium,  ["rgba", 248, 252, 255, 0.30],
-          heavy,   ["rgba", 250, 253, 255, 0.52],
-          peak,    ["rgba", 253, 254, 255, 0.72]
+        // V47: snow begins at one elevation, with only a short edge anti-alias.
+        // No grey/brown rocky transition or four-stage milky snow fringe.
+        const full=start+Math.max(25,fadeWidth);
+        map.setPaintProperty(SNOW_LAYER_ID,'color-relief-color',[
+          'interpolate',['linear'],['elevation'],
+          -100000,['rgba',248,251,255,0],
+          start,['rgba',248,251,255,0],
+          full,['rgba',253,254,255,0.77],
+          1000000,['rgba',253,254,255,0.77]
         ]);
       }
 
@@ -4612,11 +4253,13 @@
         let peak = Math.max(q995, heavy + 1);
         if (peak > max) peak = max;
         if (peak <= heavy) peak = heavy + Math.max(1, (max - heavy) * 0.5);
-        setSnowReliefStops([start, light, medium, heavy, peak]);
-        setRockReliefStops(q65, q74, start);
+        // The former 80th-to-99.5th percentile pale fringe is removed.
+        // A narrow transition (max. 150 elevation metres) prevents jaggies.
+        const fadeWidth=Math.max(35,Math.min(150,(q86-start)*0.13));
+        setSnowReliefStops(start,fadeWidth);
         const exaggeration = Number(map.getTerrain?.()?.exaggeration) || 1.5;
-        snowTreeFadeStartExaggerated = q77 * exaggeration;
-        snowTreeCutoffExaggerated = start * exaggeration;
+        snowTreeFadeStartExaggerated = (start-Math.max(20,fadeWidth*0.50))*exaggeration;
+        snowTreeCutoffExaggerated = start*exaggeration;
         hybridForestController?.map?.triggerRepaint?.();
         snowCalibrated = true;
         console.info(`Global snow calibration applied (${sourceLabel})`, { samples: values.length, q65, q74, q77, q80, q86, q91, q96, q995, max });
