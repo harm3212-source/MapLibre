@@ -357,10 +357,6 @@
       <input type="checkbox" id="toggle-forests" checked />
       <span>3D forests</span>
     </label>
-    <label title="Vooraf berekende ondiepwaterbanden aan/uit">
-      <input type="checkbox" id="toggle-waterbands" checked />
-      <span>Ondiep water</span>
-    </label>
     <button type="button" id="edit-mode-toggle" class="edit-mode-toggle">Bewerken</button>
   </div>
 
@@ -1097,119 +1093,244 @@
         }
       }
 
-      // V49 is branched from v45, NOT v48. Precomputed native fill bands.
-      // No custom water mesh, zero-height quad, SDF worker, periodic texture,
-      // runtime shoreline extraction, or per-camera geometry rebuild.
-      const ROCK_LAYER_ID = 'bigane-highland-rock';
-      const BIGANE_WATER_SOURCE_ID = 'bigane-water-bands-v49';
-      const BIGANE_WATER_LAYER_ID = 'bigane-water-depth-v49';
-      const BIGANE_WATER_DATA_URL = './bigane-water-bands-v49.geojson';
+      // ---------------------------------------------------------------
+      // V47: NATIVE VECTOR WATER, NO VIEWPORT MASK OR SCREEN-SIZED SDF
+      // Ocean and lakes use their original vector polygon fills. The former
+      // v43-v46 CPU workers, tiled 1280px textures and fullscreen WebGL quad
+      // have been removed completely. A single seamless, world-aligned
+      // periodic water image adds low-amplitude surface variation only to
+      // ocean polygons. Actual shorelines are cached geographic LineStrings,
+      // not clipped polygon silhouettes or artificial viewport borders.
+      // ---------------------------------------------------------------
+      const BIGANE_WATER_SOURCE_ID = 'bigane-water-actual-shores-v47';
+      const BIGANE_WATER_PATTERN_ID = 'bigane-ocean-soft-wave-v47';
       let waterPolishController = null;
 
+      function biganeMakeSeamlessOceanPattern() {
+        // Integer Fourier modes meet at tile edges with matching slopes.
+        // Unlike a camera-bound water mask this texture never jumps on drag;
+        // MapLibre's fill-pattern keeps it aligned to the world grid.
+        const size = 512, data = new Uint8Array(size * size * 4);
+        const twoPi = Math.PI * 2;
+        // Short irregular swell lines, not large repeating cloudy blobs.
+        // All frequencies remain integral so the left/right and top/bottom
+        // edges join exactly when MapLibre repeats the native fill-pattern.
+        for (let y=0;y<size;y++) for(let x=0;x<size;x++) {
+          const u=x/size,v=y/size;
+          const bend=0.60*Math.sin(twoPi*(2*u-v)+0.65)+
+                     0.28*Math.sin(twoPi*(3*u+2*v)+2.1);
+          const ridgeA=Math.pow(Math.max(0,Math.sin(twoPi*(12*u-4*v)+bend)),7);
+          const ridgeB=Math.pow(Math.max(0,Math.sin(twoPi*(27*u-10*v)+bend*0.55+1.7)),9);
+          const ridgeC=Math.pow(Math.max(0,Math.sin(twoPi*(43*u-18*v)+bend*0.28+0.30)),10);
+          const swell=Math.sin(twoPi*(2*u+v)+0.5)*0.20+
+                      Math.sin(twoPi*(u-3*v)+2.7)*0.13;
+          const shade=0.47*ridgeA+0.31*ridgeB+0.14*ridgeC+swell;
+          const i=(y*size+x)*4;
+          const crest=Math.max(0,shade),trough=Math.max(0,-shade);
+          // The same *opaque* sea pattern is used on both the global
+          // background and native Ocean polygon: no LOD-edge colour jump.
+          data[i]=Math.round(52+16*crest-7*trough);
+          data[i+1]=Math.round(95+17*crest-8*trough);
+          data[i+2]=Math.round(128+14*crest-7*trough);
+          data[i+3]=255;
+        }
+        return {width:size,height:size,data};
+      }
+
+      function biganeMercatorCoords(position) {
+        const lon=Number(position[0]), latitude=Number(position[1]);
+        const lat=Math.max(-85.05112878,Math.min(85.05112878,latitude))*Math.PI/180;
+        return [(lon+180)/360,(1-Math.log(Math.tan(lat)+1/Math.cos(lat))/Math.PI)/2];
+      }
+
+      function biganeIsVectorTileBoundary(a,b) {
+        // A clipped polygon edge on a vector tile boundary is NOT a coast.
+        // Only remove straight, axis-aligned segments at global tile lines.
+        const eps=3e-7;
+        if(Math.abs(a[0]-b[0]) < eps) {
+          for(let z=0;z<=15;z++) {
+            const n=Math.pow(2,z);
+            if(Math.abs(a[0]*n-Math.round(a[0]*n))<eps*n)return true;
+          }
+        }
+        if(Math.abs(a[1]-b[1]) < eps) {
+          for(let z=0;z<=15;z++) {
+            const n=Math.pow(2,z);
+            if(Math.abs(a[1]*n-Math.round(a[1]*n))<eps*n)return true;
+          }
+        }
+        return false;
+      }
+
       function installWaterPolish() {
-        if (waterPolishController) return;
-        const nativeWater = ['Ocean', 'lakes'].filter(id => map.getLayer(id)?.type === 'fill');
-        const stats = {
-          version: 49, baseVersion: 45, phase: 'loading',
-          method: 'precomputed-native-fill',
-          source: BIGANE_WATER_DATA_URL,
-          geometrySource: 'complete BiomesBigane2.geojson land union',
-          waterClassification: 'inferred exterior sea and interior lakes; not live-tile verified',
-          features: 642, bandsPerWaterType: 3,
-          waterWorkers: 0, customWaterDrawPasses: 0,
-          cameraRebuilds: 0, dynamicReflections: false,
-          enabled: true, error: null
-        };
-        const toggle = document.getElementById('toggle-waterbands');
-        let disposed = false;
-
-        const setEnabled = enabled => {
-          stats.enabled = Boolean(enabled);
-          if (map.getLayer(BIGANE_WATER_LAYER_ID)) {
-            map.setLayoutProperty(BIGANE_WATER_LAYER_ID, 'visibility', stats.enabled ? 'visible' : 'none');
-          }
-          if (toggle) toggle.checked = stats.enabled;
-        };
-        const onToggle = () => setEnabled(toggle.checked);
-        const onData = event => {
-          if (disposed || event?.sourceId !== BIGANE_WATER_SOURCE_ID) return;
-          try {
-            if (map.isSourceLoaded(BIGANE_WATER_SOURCE_ID)) stats.phase = 'ready';
-          } catch (_) { /* Map may be disposing. */ }
-        };
-        const onError = event => {
-          if (disposed) return;
-          const message = String(event?.error?.message || event?.error || 'Unknown water source error');
-          if (event?.sourceId !== BIGANE_WATER_SOURCE_ID && !message.includes('bigane-water-bands-v49')) return;
-          stats.phase = 'error';
-          stats.error = 'Waterbanden niet geladen. Zet bigane-water-bands-v49.geojson naast index.html. ' + message;
-          console.warn(stats.error);
-        };
-        waterPolishController = {
-          setEnabled,
-          getStats: () => ({ ...stats }),
-          // Deliberately a repaint, never a rebuild or a fresh network request.
-          refresh: () => map.triggerRepaint(),
-          dispose() {
-            disposed = true;
-            map.off('sourcedata', onData);
-            map.off('error', onError);
-            toggle?.removeEventListener('change', onToggle);
-            if (map.getLayer(BIGANE_WATER_LAYER_ID)) map.removeLayer(BIGANE_WATER_LAYER_ID);
-            if (map.getSource(BIGANE_WATER_SOURCE_ID)) map.removeSource(BIGANE_WATER_SOURCE_ID);
-          }
-        };
-        window.biganeWaterDebug = () => waterPolishController.getStats();
-        if (!nativeWater.length) {
-          stats.phase = 'error'; stats.error = 'Native Ocean/lakes lagen ontbreken.';
-          console.warn(stats.error); return;
+        if(waterPolishController)return;
+        const ocean=map.getLayer('Ocean');
+        const lakes=map.getLayer('lakes');
+        if(!ocean && !lakes) {
+          console.warn('Bigane water v47: native Ocean/lakes layers not found');
+          return;
         }
 
+        // A native polygon is the sole authority for where water exists.
+        // In particular this prevents detached shallow-water surfaces over lakes.
+        if(map.getLayer('background'))
+          map.setPaintProperty('background','background-color','#335f81');
+        if(ocean)map.setPaintProperty('Ocean','fill-color','#345f80');
+        if(lakes)map.setPaintProperty('lakes','fill-color','#4c8093');
+
+        // One world-fixed texture, generated once. Render it as the base
+        // background AND the original Ocean fill. Crucial: the open ocean
+        // outside the loaded vector polygons then looks identical, so the
+        // Ocean-geometry/LOD boundary cannot be visible. No overlay pass.
+        let oceanSurfaceEnabled=false;
         try {
-          // Match v45's base colours exactly. Never insert opaque water above
-          // routes, modify the DEM, or add a second independently elevated sea.
-          if (map.getLayer('background')) {
-            map.setPaintProperty('background', 'background-color', '#3f7090');
-            map.setPaintProperty('background', 'background-pattern', null);
+          if(!map.hasImage(BIGANE_WATER_PATTERN_ID))
+            map.addImage(BIGANE_WATER_PATTERN_ID,biganeMakeSeamlessOceanPattern(),{pixelRatio:1});
+          if(map.hasImage(BIGANE_WATER_PATTERN_ID)) {
+            if(map.getLayer('background'))
+              map.setPaintProperty('background','background-pattern',BIGANE_WATER_PATTERN_ID);
+            if(ocean)map.setPaintProperty('Ocean','fill-pattern',BIGANE_WATER_PATTERN_ID);
+            oceanSurfaceEnabled=true;
           }
-          if (map.getLayer('Ocean')) {
-            map.setPaintProperty('Ocean', 'fill-color', '#3f7090');
-            map.setPaintProperty('Ocean', 'fill-pattern', null);
-          }
-          if (map.getLayer('lakes')) {
-            map.setPaintProperty('lakes', 'fill-color', '#488da2');
-            map.setPaintProperty('lakes', 'fill-pattern', null);
-          }
-
-          // Keep the new surface immediately above native water, with labels,
-          // routes and other existing map overlays retaining their order.
-          const layers = map.getStyle().layers || [];
-          const lastWaterIndex = Math.max(...nativeWater.map(id => layers.findIndex(l => l.id === id)));
-          const beforeId = layers[lastWaterIndex + 1]?.id;
-          map.on('sourcedata', onData);
-          map.on('error', onError);
-          map.addSource(BIGANE_WATER_SOURCE_ID, {
-            type: 'geojson', data: BIGANE_WATER_DATA_URL,
-            maxzoom: 14, tolerance: 0.15, buffer: 64
-          });
-          map.addLayer({
-            id: BIGANE_WATER_LAYER_ID,
-            type: 'fill', source: BIGANE_WATER_SOURCE_ID,
-            layout: { visibility: 'visible' },
-            paint: {
-              'fill-color': ['get', 'color'],
-              'fill-opacity': 1,
-              // Bands share boundaries. Do not outline internal polygon edges
-              // or tile clipping edges: they are NOT coastlines.
-              'fill-antialias': false
-            }
-          }, beforeId);
-          toggle?.addEventListener('change', onToggle);
-          setEnabled(toggle ? toggle.checked : true);
-        } catch (error) {
-          stats.phase = 'error'; stats.error = String(error?.message || error);
-          console.warn('Water bands v49: native base water remains visible.', error);
+        } catch(error) {
+          console.warn('Bigane seamless ocean pattern could not be installed; native water remains:',error);
         }
+
+        // Shorelines follow the real vector coordinates. We discard edges
+        // introduced by vector-tile clipping, deduplicate shared geometry and
+        // submit a small cached GeoJSON source only after new tiles arrive.
+        const empty={type:'FeatureCollection',features:[]};
+        if(!map.getSource(BIGANE_WATER_SOURCE_ID))
+          map.addSource(BIGANE_WATER_SOURCE_ID,{type:'geojson',data:empty,
+            tolerance:0.25,buffer:64,maxzoom:13});
+        const before=map.getLayer('Lakes names')?'Lakes names':
+          map.getLayer('Town names')?'Town names':undefined;
+        const common={type:'line',source:BIGANE_WATER_SOURCE_ID,
+          layout:{'line-cap':'round','line-join':'round'}};
+        const addShoreLayer=(id,kind,paint)=>{
+          if(map.getLayer(id))return;
+          map.addLayer({id,...common,filter:['==',['get','kind'],kind],paint},before);
+        };
+        // A soft contact line and a crisp outline. Widths are in screen pixels,
+        // NOT kilometre-wide masks or resolution-dependent EDT values.
+        addShoreLayer('bigane-ocean-contact-v47','ocean',{
+          'line-color':'#8cbbc4',
+          'line-width':['interpolate',['linear'],['zoom'],2,2,5,3.5,8,5,12,6],
+          'line-blur':1.1,'line-opacity':0.22
+        });
+        addShoreLayer('bigane-ocean-coast-v47','ocean',{
+          'line-color':'#bdd9d8',
+          'line-width':['interpolate',['linear'],['zoom'],2,0.65,6,1.15,10,1.55],
+          'line-opacity':0.80
+        });
+        addShoreLayer('bigane-lake-coast-v47','lake',{
+          'line-color':'#a6c4c4',
+          'line-width':['interpolate',['linear'],['zoom'],2,0.55,6,0.95,10,1.20],
+          'line-opacity':0.64
+        });
+
+        let scheduled=null,disposed=false,builds=0,lastSignature='',lastStats={version:47,phase:'initializing'};
+        const layerDetails=[{id:'Ocean',kind:'ocean'},{id:'lakes',kind:'lake'}]
+          .filter(item=>map.getLayer(item.id)?.source);
+        function collectSourceFeatures(id) {
+          const layer=map.getLayer(id);
+          if(!layer?.source)return [];
+          const sourceLayer=layer['source-layer']||layer.sourceLayer;
+          try {
+            const data=map.querySourceFeatures(layer.source,
+              sourceLayer?{sourceLayer}:undefined);
+            if(data?.length)return data;
+          } catch(error) {console.warn('Water shoreline source lookup:',error);}
+          try{return map.queryRenderedFeatures({layers:[id]})||[];}
+          catch(_){return [];}
+        }
+        function rebuild() {
+          if(disposed)return;
+          const features=[],seen=new Set();
+          let polygons=0,segments=0,clipped=0;
+          for(const item of layerDetails) {
+            const sourceFeatures=collectSourceFeatures(item.id);
+            for(const feature of sourceFeatures) {
+              const geometry=feature?.geometry;
+              if(!geometry || !['Polygon','MultiPolygon'].includes(geometry.type))continue;
+              const polygonsInFeature=geometry.type==='Polygon'?[geometry.coordinates]:geometry.coordinates;
+              for(const polygon of polygonsInFeature) {
+                polygons++;
+                for(const ring of polygon) {
+                  if(!Array.isArray(ring)||ring.length<2)continue;
+                  const n=ring.length;
+                  const flush=(coords)=>{
+                    if(coords.length<2)return;
+                    features.push({type:'Feature',properties:{kind:item.kind},
+                      geometry:{type:'LineString',coordinates:coords}});
+                  };
+                  let current=[];
+                  for(let k=0;k<n;k++) {
+                    const a=ring[k],b=ring[(k+1)%n];
+                    if(!a||!b||!Number.isFinite(a[0])||!Number.isFinite(b[0]))continue;
+                    if(a[0]===b[0]&&a[1]===b[1])continue;
+                    const first=biganeMercatorCoords(a),second=biganeMercatorCoords(b);
+                    if(biganeIsVectorTileBoundary(first,second)) {
+                      clipped++;flush(current);current=[];continue;
+                    }
+                    // Source tiles can repeat the same shoreline. Use endpoints
+                    // as a stable undirected segment key, scoped to water kind.
+                    const aKey=`${a[0].toFixed(6)}:${a[1].toFixed(6)}`;
+                    const bKey=`${b[0].toFixed(6)}:${b[1].toFixed(6)}`;
+                    const key=`${item.kind}:${aKey<bKey?aKey+'|'+bKey:bKey+'|'+aKey}`;
+                    if(seen.has(key)){flush(current);current=[];continue;}
+                    seen.add(key);segments++;
+                    if(current.length===0)current=[a.slice(0,2),b.slice(0,2)];
+                    else {
+                      const last=current[current.length-1];
+                      if(Math.abs(last[0]-a[0])<1e-7&&Math.abs(last[1]-a[1])<1e-7)
+                        current.push(b.slice(0,2));
+                      else{flush(current);current=[a.slice(0,2),b.slice(0,2)];}
+                    }
+                  }
+                  flush(current);
+                }
+              }
+            }
+          }
+          // Avoid redundant source reparses if none of the loaded vectors changed.
+          // Every segment contributes: different tile sets with the same count
+          // must still update their cached, world-anchored shoreline source.
+          let signatureHash=2166136261;
+          for(const key of [...seen].sort()){
+            for(let i=0;i<key.length;i++){
+              signatureHash=Math.imul(signatureHash^key.charCodeAt(i),16777619);
+            }
+          }
+          const signature=`${segments}:${signatureHash>>>0}`;
+          if(signature!==lastSignature) {
+            map.getSource(BIGANE_WATER_SOURCE_ID)?.setData({type:'FeatureCollection',features});
+            lastSignature=signature;builds++;
+          }
+          lastStats={version:47,phase:'ready',backend:'native-vectors',
+            oceanPattern:oceanSurfaceEnabled,shorelineSegments:segments,
+            coastlineFeatures:features.length,tileClippingEdgesSkipped:clipped,
+            waterPolygons:polygons,workerMs:0,textureReuploads:0,
+            maskSize:0,sourceUpdates:builds};
+        }
+        const schedule=(delay=300)=>{
+          clearTimeout(scheduled);scheduled=setTimeout(()=>{scheduled=null;rebuild();},delay);
+        };
+        const onSource=event=>{
+          if(event?.sourceId==='composite'&&event?.isSourceLoaded)schedule(350);
+        };
+        const onEnd=()=>schedule(190);
+        const onIdle=()=>{if(!lastSignature)schedule(100);};
+        map.on('sourcedata',onSource);
+        map.on('moveend',onEnd);
+        map.on('zoomend',onEnd);
+        map.on('idle',onIdle);
+        waterPolishController={refresh:()=>schedule(0),getStats:()=>lastStats,
+          dispose(){disposed=true;clearTimeout(scheduled);
+            map.off('sourcedata',onSource);map.off('moveend',onEnd);
+            map.off('zoomend',onEnd);map.off('idle',onIdle);}};
+        window.biganeWaterDebug=()=>waterPolishController?.getStats();
+        schedule(120);
       }
 
 
@@ -1238,37 +1359,10 @@
               }
             }, map.getLayer("bigane-snow-overlay") ? "bigane-snow-overlay" : (map.getLayer("Town names") ? "Town names" : undefined));
           }
-          if (map.getSource("bigane-dem") && !map.getLayer(ROCK_LAYER_ID)) {
-            map.addLayer({
-              id: ROCK_LAYER_ID,
-              type: "color-relief",
-              source: "bigane-dem",
-              paint: {
-                "color-relief-color": [
-                  "interpolate", ["linear"], ["elevation"],
-                  -100000, ["rgba", 98, 92, 84, 0],
-                  1000000, ["rgba", 98, 92, 84, 0]
-                ],
-                "color-relief-opacity": 1,
-                "resampling": "linear"
-              }
-            }, map.getLayer("bigane-snow-overlay") ? "bigane-snow-overlay" : (map.getLayer("Town names") ? "Town names" : undefined));
-          }
+
         } catch (error) {
           console.warn("Landscape polish overgeslagen:", error);
         }
-      }
-
-      function setRockReliefStops(start, strong, snowStart) {
-        if (!map.getLayer(ROCK_LAYER_ID)) return;
-        map.setPaintProperty(ROCK_LAYER_ID, "color-relief-color", [
-          "interpolate", ["linear"], ["elevation"],
-          -100000, ["rgba", 105, 97, 87, 0],
-          start, ["rgba", 105, 97, 87, 0],
-          strong, ["rgba", 101, 93, 83, 0.10],
-          snowStart, ["rgba", 112, 108, 101, 0.16],
-          snowStart + 1, ["rgba", 112, 108, 101, 0.05]
-        ]);
       }
 
       // ---------------------------------------------------------------------
@@ -2084,10 +2178,11 @@
         return factor;
       }
 
-      function hfWaterDensityFactor(entry, x, y, mpu) {
+      function hfWaterDensityFactor(entry, x, y, mpu, knownShoreDistance = Infinity) {
         const rings = entry.nearbyWaterRings || [];
         if (!rings.length) return 1;
-        const d = hfDistanceToWaterRingsMeters(x, y, mpu, rings);
+        const d = Number.isFinite(knownShoreDistance) ? knownShoreDistance :
+          hfDistanceToWaterRingsMeters(x, y, mpu, rings);
         const near = hfClamp01(1 - d / HF_WATER_INFLUENCE_METERS);
         if (entry.biome === "Savanna") return 0.78 + 0.65 * near;
         if (entry.biome === "Wetland") return 0.92 + 0.38 * near;
@@ -2477,6 +2572,37 @@
               } catch (_) {}
             }
 
+            // Exact water polygons are an exclusion mask for tree roots.
+            // Biome polygons alone may extend underneath lakes and oceans.
+            const waterExclusions=[];
+            const waterSeen=new Set();
+            for(const layerId of ['Ocean','lakes']) {
+              const layer=this.map.getLayer(layerId);
+              if(!layer?.source)continue;
+              const sourceLayer=layer['source-layer']||layer.sourceLayer;
+              let waterFeatures=[];
+              try {waterFeatures=this.map.querySourceFeatures(layer.source,
+                sourceLayer?{sourceLayer}:undefined)||[];} catch(_) {}
+              if(!waterFeatures.length){
+                try{waterFeatures=this.map.queryRenderedFeatures({layers:[layerId]})||[];}catch(_){}
+              }
+              for(const feature of waterFeatures){
+                if(!['Polygon','MultiPolygon'].includes(feature?.geometry?.type))continue;
+                const bounds=hfFeatureBounds(feature);
+                if(!bounds)continue;
+                const first=feature.geometry.type==='Polygon'?
+                  feature.geometry.coordinates?.[0]?.[0]:feature.geometry.coordinates?.[0]?.[0]?.[0];
+                const key=[layerId,bounds.west.toFixed(5),bounds.east.toFixed(5),
+                  bounds.south.toFixed(5),bounds.north.toFixed(5),
+                  first?.[0],first?.[1]].join('|');
+                if(waterSeen.has(key))continue;
+                waterSeen.add(key);
+                waterExclusions.push({feature,bounds});
+              }
+            }
+            this.waterExclusionCount=waterExclusions.length;
+            const waterExclusionPad=4200/HF_WORLD_METERS;
+
             const allEntries = [];
             const seenFeatures = new Set();
             for (const feature of raw) {
@@ -2573,7 +2699,8 @@
               .map(entry => ({
                 ...entry,
                 mixOverride: hfPalmMixForEntry(entry, allLakeRings, allEntries),
-                nearbyWaterRings: hydroRings.filter(ring => hfBoundsNear(entry.bounds, ring.bounds, waterPadWorld))
+                nearbyWaterRings: hydroRings.filter(ring => hfBoundsNear(entry.bounds, ring.bounds, waterPadWorld)),
+                nearbyWaterPolygons:waterExclusions.filter(w=>hfBoundsNear(entry.bounds,w.bounds,waterExclusionPad))
               }));
             const oasisEntries = [];
             for (const desert of desertEntries) {
@@ -2582,7 +2709,8 @@
               oasisEntries.push({
                 ...desert,
                 biome: HF_OASIS_BIOME,
-                waterRings: nearbyRings
+                waterRings: nearbyRings,
+                nearbyWaterPolygons:waterExclusions.filter(w=>hfBoundsNear(desert.bounds,w.bounds,waterExclusionPad))
               });
             }
 
@@ -2649,6 +2777,19 @@
 
             const seen = new Set();
             const candidates = [];
+            const waterRootCache=new Map();
+            const waterBufferMeters=2400; // exclude roots near open water (large crowns)
+            const isWaterRoot=(entry,lng,lat,x,y,mpu,key)=>{
+              if(waterRootCache.has(key))return waterRootCache.get(key);
+              let inside=false;
+              for(const water of entry.nearbyWaterPolygons||[]){
+                const b=water.bounds;
+                if(x<b.x0||x>b.x1||y<b.y0||y>b.y1)continue;
+                if(featureContainsCoordinate(water.feature,[lng,lat])){inside=true;break;}
+              }
+              waterRootCache.set(key,inside);
+              return inside;
+            };
 
             featureLoop:
             for (const entry of features) {
@@ -2703,10 +2844,14 @@
 
                   const merc = new maplibregl.MercatorCoordinate(x, y, 0);
                   const localMpu = merc.meterInMercatorCoordinateUnits();
+                  if(isWaterRoot(entry,lng,lat,x,y,localMpu,key))continue;
                   const settlementFactor = hfSettlementDensityFactor(x, y, localMpu, settlementIndex);
                   if (settlementFactor <= 0) continue;
                   const densityField = hfForestDensityField(entry, x, y);
-                  const waterFactor = hfWaterDensityFactor(entry, x, y, localMpu);
+                  const shoreDistance=entry.nearbyWaterRings?.length ?
+                    hfDistanceToWaterRingsMeters(x,y,localMpu,entry.nearbyWaterRings) : Infinity;
+                  if(shoreDistance<waterBufferMeters)continue;
+                  const waterFactor = hfWaterDensityFactor(entry, x, y, localMpu, shoreDistance);
                   const candidateDensity = Math.min(1, biomeConfig.density * HF_SETTINGS.densityMultiplier * densityField * waterFactor * settlementFactor);
                   if (hfHash(ix, iy, 3) > candidateDensity) continue;
                   // Oasis palms are generated only on Hot desert land within a
@@ -2780,7 +2925,8 @@
           getStats() {
             return {near:this.lastNearTotal||0,sprites:this.lastSpriteTotal||0,biomes:this.lastBiomeFeatureCount||0,
               detailedTrees:this.lastHighTotal||0,clusterBatches:this.lastMidGroupTotal||0,
-              spriteBatches:this.lastFarGroupTotal||0,rebuildMs:this.lastRebuildMs||0};
+              spriteBatches:this.lastFarGroupTotal||0,rebuildMs:this.lastRebuildMs||0,
+              waterExclusionPolygons:this.waterExclusionCount||0};
           },
           prerender(gl,options) {
             if(!this.enabled||this.map.getZoom()<HF_SETTINGS.minZoom||!this.heightMapDirty)return;
@@ -4074,17 +4220,17 @@
         return sorted[lo] * (1 - t) + sorted[hi] * t;
       }
 
-      function setSnowReliefStops(stops) {
+      function setSnowReliefStops(start, fadeWidth) {
         if (!map.getLayer(SNOW_LAYER_ID)) return;
-        const [start, light, medium, heavy, peak] = stops;
-        map.setPaintProperty(SNOW_LAYER_ID, "color-relief-color", [
-          "interpolate", ["linear"], ["elevation"],
-          -100000, ["rgba", 246, 250, 255, 0.0],
-          start,   ["rgba", 246, 250, 255, 0.0],
-          light,   ["rgba", 247, 251, 255, 0.12],
-          medium,  ["rgba", 248, 252, 255, 0.30],
-          heavy,   ["rgba", 250, 253, 255, 0.52],
-          peak,    ["rgba", 253, 254, 255, 0.72]
+        // V47: snow begins at one elevation, with only a short edge anti-alias.
+        // No grey/brown rocky transition or four-stage milky snow fringe.
+        const full=start+Math.max(25,fadeWidth);
+        map.setPaintProperty(SNOW_LAYER_ID,'color-relief-color',[
+          'interpolate',['linear'],['elevation'],
+          -100000,['rgba',248,251,255,0],
+          start,['rgba',248,251,255,0],
+          full,['rgba',253,254,255,0.77],
+          1000000,['rgba',253,254,255,0.77]
         ]);
       }
 
@@ -4107,14 +4253,13 @@
         let peak = Math.max(q995, heavy + 1);
         if (peak > max) peak = max;
         if (peak <= heavy) peak = heavy + Math.max(1, (max - heavy) * 0.5);
-        setSnowReliefStops([start, light, medium, heavy, peak]);
-        setRockReliefStops(q65, q74, start);
+        // The former 80th-to-99.5th percentile pale fringe is removed.
+        // A narrow transition (max. 150 elevation metres) prevents jaggies.
+        const fadeWidth=Math.max(35,Math.min(150,(q86-start)*0.13));
+        setSnowReliefStops(start,fadeWidth);
         const exaggeration = Number(map.getTerrain?.()?.exaggeration) || 1.5;
-        // V49: the rock wash and faint early snow are NOT a treeline.
-        // Keep biome-appropriate trees through that middle zone. Thin whole
-        // trees only between the existing light and medium snow stops.
-        snowTreeFadeStartExaggerated = light * exaggeration;
-        snowTreeCutoffExaggerated = medium * exaggeration;
+        snowTreeFadeStartExaggerated = (start-Math.max(20,fadeWidth*0.50))*exaggeration;
+        snowTreeCutoffExaggerated = start*exaggeration;
         hybridForestController?.map?.triggerRepaint?.();
         snowCalibrated = true;
         console.info(`Global snow calibration applied (${sourceLabel})`, { samples: values.length, q65, q74, q77, q80, q86, q91, q96, q995, max });
