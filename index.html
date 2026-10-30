@@ -598,6 +598,17 @@
       <input type="checkbox" id="toggle-waterbands" checked />
       <span>Ondiep water</span>
     </label>
+    <!-- BIGANE_RURAL_UI_BEGIN -->
+    <label title="Rustige akkers en weiden bij geschikte nederzettingen">
+      <input type="checkbox" id="toggle-farmland" checked />
+      <span>Akkerland en weiden</span>
+    </label>
+    <label title="Aardkleurige landwegen; zee- en ondergrondse routes blijven ongewijzigd">
+      <input type="checkbox" id="toggle-roadstyle" checked />
+      <span>Aardkleurige landwegen</span>
+    </label>
+    <div id="farmland-status" role="status" style="font-size:11px;line-height:1.4;color:#4e6053;max-width:218px;margin:5px 0 7px">Akkerland: wacht op kaartgegevens</div>
+    <!-- BIGANE_RURAL_UI_END -->
     <button type="button" id="edit-mode-toggle" class="edit-mode-toggle">Bewerken</button>
   </div>
 
@@ -1521,6 +1532,329 @@
           snowStart + 1, ["rgba", 112, 108, 101, 0.05]
         ]);
       }
+
+      /* BIGANE_RURAL_MODULE_BEGIN */
+// Deterministic field geometry. No network, canvas, dependencies or frame loop.
+function createBiganeRuralGeometry() {
+  'use strict';
+  const EARTH=40075016.68557849, DEG=Math.PI/180;
+  const PROFILES={
+    'Grassland':{id:'temperate',chance:0.94,scale:1.0},
+    'Savanna':{id:'dry',chance:0.48,scale:0.83},
+    'Temperate deciduous forest':{id:'temperate',chance:0.55,scale:0.80},
+    'Tropical seasonal forest':{id:'warm',chance:0.53,scale:0.78}
+  };
+  const PALETTES={
+    temperate:['#adb087','#b8b18a','#949d78','#b8ad87','#a3a785','#9ba489','#b8b898'],
+    dry:['#b2a17b','#bdad86','#a6a17a','#afa47f','#a6aa87','#c0b38e'],
+    warm:['#94a47d','#a2ac83','#aca780','#839d77','#a8b18b','#b3ad87']
+  };
+  function hash(s){let h=2166136261;for(const c of String(s)){h^=c.charCodeAt(0);h=Math.imul(h,16777619);}return h>>>0;}
+  function rand(seed){let a=seed>>>0;return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+  function world(p){const a=Math.max(-85,Math.min(85,Number(p[1])))*DEG;return[(Number(p[0])+180)/360,(1-Math.log(Math.tan(a)+1/Math.cos(a))/Math.PI)/2];}
+  function lnglat(p){return[p[0]*360-180,Math.atan(Math.sinh(Math.PI*(1-2*p[1])))/DEG];}
+  function mpu(lat){return 1/(EARTH*Math.max(0.09,Math.cos(lat*DEG)));}
+  function bounds(points){const b=[Infinity,Infinity,-Infinity,-Infinity];for(const p of points){b[0]=Math.min(b[0],p[0]);b[1]=Math.min(b[1],p[1]);b[2]=Math.max(b[2],p[0]);b[3]=Math.max(b[3],p[1]);}return b;}
+  const overlaps=(a,b)=>a[0]<=b[2]&&a[2]>=b[0]&&a[1]<=b[3]&&a[3]>=b[1];
+  const inBox=(p,b)=>p[0]>=b[0]&&p[0]<=b[2]&&p[1]>=b[1]&&p[1]<=b[3];
+  function onSegment(p,a,b){const v=[b[0]-a[0],b[1]-a[1]],w=[p[0]-a[0],p[1]-a[1]];const n=v[0]*v[0]+v[1]*v[1];if(n<1e-25)return Math.hypot(...w)<1e-12;const t=(w[0]*v[0]+w[1]*v[1])/n;return t>=-1e-8&&t<=1+1e-8&&Math.abs(v[0]*w[1]-v[1]*w[0])<Math.sqrt(n)*1e-11;}
+  function inRing(p,r){
+    let es;
+    if(r.length>24){
+      if(!r._yBins){const bb=bounds(r),n=Math.min(128,Math.max(16,Math.ceil(r.length/12))),step=(bb[3]-bb[1])/n||1,bs=Array.from({length:n},()=>[]);
+        for(let i=0,j=r.length-1;i<r.length;j=i++){const a=r[j],b=r[i],lo=Math.max(0,Math.min(n-1,Math.floor((Math.min(a[1],b[1])-bb[1])/step))),hi=Math.max(0,Math.min(n-1,Math.floor((Math.max(a[1],b[1])-bb[1])/step)));for(let k=lo;k<=hi;k++)bs[k].push([a,b]);}
+        r._yBins={bb,n,step,bs};
+      }
+      const q=r._yBins;if(!inBox(p,q.bb))return false;es=q.bs[Math.max(0,Math.min(q.n-1,Math.floor((p[1]-q.bb[1])/q.step)))];
+    }else{es=[];for(let i=0,j=r.length-1;i<r.length;j=i++)es.push([r[j],r[i]]);}
+    let inside=false;for(const[a,b]of es){if(onSegment(p,a,b))return true;if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0])inside=!inside;}return inside;
+  }
+  function segmentsNear(shape,bb){
+    const cell=0.0008;
+    if(!shape._segments){const bs=new Map(),long=[];for(const ring of shape.rings)edges(ring,(a,b)=>{const box=bounds([a,b]),x0=Math.floor(box[0]/cell),x1=Math.floor(box[2]/cell),y0=Math.floor(box[1]/cell),y1=Math.floor(box[3]/cell),e={a,b,box};if((x1-x0+1)*(y1-y0+1)>64)long.push(e);else for(let x=x0;x<=x1;x++)for(let y=y0;y<=y1;y++){const key=x+':'+y;if(!bs.has(key))bs.set(key,[]);bs.get(key).push(e);}return false;});shape._segments={bs,long};}
+    const result=new Set(shape._segments.long.filter(e=>overlaps(e.box,bb)));for(let x=Math.floor(bb[0]/cell);x<=Math.floor(bb[2]/cell);x++)for(let y=Math.floor(bb[1]/cell);y<=Math.floor(bb[3]/cell);y++)for(const e of shape._segments.bs.get(x+':'+y)||[])if(overlaps(e.box,bb))result.add(e);return [...result];
+  }
+  function contains(p,shape){return inBox(p,shape.box)&&inRing(p,shape.rings[0])&&!shape.rings.slice(1).some(r=>inRing(p,r));}
+  function prepare(feature){const g=feature?.geometry;if(!g)return[];const polys=g.type==='Polygon'?[g.coordinates]:g.type==='MultiPolygon'?g.coordinates:[];return polys.filter(p=>p[0]?.length>=4).map(p=>{const rings=p.map(r=>r.filter(c=>Number.isFinite(+c[0])&&Number.isFinite(+c[1])).map(world));return{rings,box:bounds(rings[0]),biome:feature.properties?.Biome||'',id:feature.id??''};});}
+  function cross(a,b){return a[0]*b[1]-a[1]*b[0];}
+  function intersectionT(a,b,c,d){const r=[b[0]-a[0],b[1]-a[1]],s=[d[0]-c[0],d[1]-c[1]],v=[c[0]-a[0],c[1]-a[1]],den=cross(r,s);if(Math.abs(den)<1e-25)return null;const t=cross(v,s)/den,u=cross(v,r)/den;return t>=-1e-8&&t<=1+1e-8&&u>=-1e-8&&u<=1+1e-8?Math.max(0,Math.min(1,t)):null;}
+  function edges(r,fn){for(let i=1;i<r.length;i++)if(fn(r[i-1],r[i]))return true;return false;}
+  function polygonIntersects(a,b){if(!overlaps(a.box,b.box))return false;if(a.rings[0].some(p=>contains(p,b))||b.rings[0].some(p=>contains(p,a)))return true;return a.rings.some(ar=>b.rings.some(br=>edges(ar,(p,q)=>edges(br,(r,s)=>intersectionT(p,q,r,s)!==null))));}
+  function segmentDistance(p,a,b){const x=b[0]-a[0],y=b[1]-a[1],n=x*x+y*y,t=n?Math.max(0,Math.min(1,((p[0]-a[0])*x+(p[1]-a[1])*y)/n)):0;return Math.hypot(p[0]-a[0]-t*x,p[1]-a[1]-t*y);}
+  function distanceToPolygon(p,shape){if(contains(p,shape))return 0;let d=Infinity;for(const ring of shape.rings)edges(ring,(a,b)=>{d=Math.min(d,segmentDistance(p,a,b));return false;});return d;}
+  // Test coverage against the UNION of same-biome fragments. Tile seams do not
+  // become artificial field boundaries. A field is rejected, not cut, at water.
+  function covered(field,shapes){const near=shapes.filter(s=>overlaps(field.box,s.box));if(!near.length)return false;const allowed=p=>near.some(s=>contains(p,s));if(!allowed(field.center))return false;
+    const eps=field.mpu*5,segments=near.flatMap(s=>segmentsNear(s,field.box));
+    for(let i=1;i<field.ring.length;i++){
+      const a=field.ring[i-1],b=field.ring[i];if(!allowed(a)||!allowed(b))return false;const ts=[0,1],bb=bounds([a,b]);
+      for(const e of segments){if(!overlaps(bb,e.box))continue;const t=intersectionT(a,b,e.a,e.b);if(t!==null)ts.push(t);}
+      ts.sort((x,y)=>x-y);for(let k=1;k<ts.length;k++){if(ts[k]-ts[k-1]<1e-8)continue;const t=(ts[k]+ts[k-1])/2;if(!allowed([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]))return false;}
+    }
+    for(const {a,b}of segments){const dx=b[0]-a[0],dy=b[1]-a[1],len=Math.hypot(dx,dy);if(len<1e-15)continue;const c=[(a[0]+b[0])/2,(a[1]+b[1])/2];for(const sign of [-1,1]){const p=[c[0]-sign*dy/len*eps,c[1]+sign*dx/len*eps];if(inRing(p,field.ring)&&!allowed(p))return false;}}
+    return true;
+  }
+  function nearestRoadAngle(town,roads){const p=town.xy;let best=Infinity,angle=null;for(const r of roads){if(!overlaps([p[0]-town.outer*town.mpu,p[1]-town.outer*town.mpu,p[0]+town.outer*town.mpu,p[1]+town.outer*town.mpu],r.box))continue;for(let i=1;i<r.points.length;i++){const a=r.points[i-1],b=r.points[i],d=segmentDistance(p,a,b);if(d<best&&Math.hypot(b[0]-a[0],b[1]-a[1])>town.mpu*300){best=d;angle=Math.atan2(b[1]-a[1],b[0]-a[0]);}}}return best<town.outer*town.mpu?angle:null;}
+  function makeTown(raw){const p=world(raw.coords),pop=Math.max(0,raw.population||0),capital=!!raw.capital;
+    let outer=pop>=100000?21500:pop>=40000?17000:pop>=12000?13500:pop>=3000?10000:pop>0?7400:8800;
+    if(capital)outer=Math.max(outer,16500);
+    let urban=pop>=40000?3000:pop>=12000?2100:pop>=3000?1300:800;
+    const model=Number(raw.modelWidth)||0;if(model>0){urban=Math.max(urban,model*0.70+800);outer=urban+Math.min(22000,Math.max(10500,outer));}
+    return{...raw,xy:p,mpu:mpu(raw.coords[1]),outer,urban,seed:hash(raw.key),key:raw.key};
+  }
+  function makeCandidates(town,roadAngle=null){const random=rand(town.seed),fields=[];const outer=town.outer,inner=town.urban;const farmDepth=outer-inner;
+    const groups=town.population>=40000||town.capital?6:5;
+    const baseAngle=roadAngle??random()*Math.PI,offset=random()*Math.PI*2;
+    for(let g=0;g<groups;g++){
+      const theta=offset+(g/groups)*Math.PI*2+(random()-0.5)*0.52;
+      const distance=inner+farmDepth*(0.45+random()*0.23);
+      const cx=Math.cos(theta)*distance,cy=Math.sin(theta)*distance;
+      const angle=baseAngle+(g%3-1)*0.18+(random()-0.5)*0.30;
+      const ca=Math.cos(angle),sa=Math.sin(angle);
+      const width=Math.max(650,Math.min(2000,farmDepth*0.13))*(0.82+random()*0.30);
+      const length=width*(1.65+random()*0.7),gap=width*0.075;
+      const nx=4,ny=3,px=[0],py=[0];
+      for(let x=0;x<nx;x++)px.push(px[x]+width*(0.68+random()*0.65)+gap);
+      for(let y=0;y<ny;y++)py.push(py[y]+length*(0.76+random()*0.48)+gap);
+      const mx=px[nx]/2,my=py[ny]/2;for(let x=0;x<=nx;x++)px[x]-=mx;for(let y=0;y<=ny;y++)py[y]-=my;
+      const bendPhase=random()*Math.PI*2,bend=y=>Math.sin(y/length*1.2+bendPhase)*width*0.18;
+      const shear=(random()-0.5)*0.18;
+      const transform=(x,y)=>[town.xy[0]+(cx+ca*x-sa*y)*town.mpu,town.xy[1]+(cy+sa*x+ca*y)*town.mpu];
+      for(let x=0;x<nx;x++)for(let y=0;y<ny;y++){
+        const pick=random();const x0=px[x]+gap*0.55,x1=px[x+1]-gap*0.55,y0=py[y]+gap*0.55,y1=py[y+1]-gap*0.55;
+        if(pick<0.12)continue;const ring=[[x0+shear*y0+bend(y0),y0],[x1+shear*y0+bend(y0),y0],[x1+shear*y1+bend(y1),y1],[x0+shear*y1+bend(y1),y1]].map(p=>transform(...p));ring.push(ring[0]);
+        const center=transform((x0+x1)/2+shear*(y0+y1)/2+(bend(y0)+bend(y1))/2,(y0+y1)/2),rr=Math.hypot(center[0]-town.xy[0],center[1]-town.xy[1])/town.mpu;
+        if(rr>outer*0.99||rr<inner+width*0.7)continue;
+        const id=town.key+':'+g+':'+x+':'+y;
+        fields.push({id,town:town.key,ring,center,box:bounds(ring),mpu:town.mpu,random:random(),colorIndex:Math.floor(random()*21),pasture:pick>0.87,rows:[]});
+      }
+    }return fields.sort((a,b)=>hash(a.id)-hash(b.id));
+  }
+  function makeContext(biomeFeatures,waterFeatures,roadFeatures){const biomes=biomeFeatures.flatMap(prepare),water=waterFeatures.flatMap(prepare),roads=[];
+    for(const f of roadFeatures){const type=String(f.properties?.type||'').toLowerCase();if(type!=='roads'&&type!=='trails'&&type!=='river')continue;const g=f.geometry;const lines=g?.type==='LineString'?[g.coordinates]:g?.type==='MultiLineString'?g.coordinates:[];for(const line of lines){const points=line.map(world);if(points.length>1)roads.push({points,box:bounds(points),type});}}
+    return{biomes,water,roads};
+  }
+  function validate(field,ctx,towns,accepted,queryHeight,snowLimit=Infinity){
+    const b=field.box;const climates=ctx.biomes.filter(s=>inBox(field.center,s.box)&&contains(field.center,s));const selected=climates.find(s=>PROFILES[s.biome]);if(!selected)return{reason:climates.length?'biome':'missing-biome'};
+    const profile=PROFILES[selected.biome];if(field.random>profile.chance)return{reason:'density'};
+    if(!covered(field,ctx.biomes.filter(s=>s.biome===selected.biome)))return{reason:'biome-edge'};
+    const shape={box:b,rings:[field.ring]};
+    if(ctx.water.some(w=>polygonIntersects(shape,w)))return{reason:'water'};
+    for(const t of towns){if(distanceToPolygon(t.xy,shape)<t.urban*t.mpu)return{reason:'urban'};}
+    for(const other of accepted){if(overlaps(b,other.box)&&polygonIntersects(shape,{box:other.box,rings:[other.ring]}))return{reason:'overlap'};}
+    for(const r of ctx.roads){if(!overlaps(b,r.box))continue;for(let i=1;i<r.points.length;i++){const a=r.points[i-1],c=r.points[i];if(inRing(a,field.ring)||inRing(c,field.ring)||edges(field.ring,(u,v)=>intersectionT(u,v,a,c)!==null))return{reason:r.type==='river'?'river':'road'};}}
+    const coords=[field.center,...field.ring.slice(0,4)];const heights=coords.map(p=>queryHeight(lnglat(p)));
+    if(heights.some(h=>h==null||!Number.isFinite(h)))return{reason:'missing-terrain'};
+    if(Math.min(...heights)<0.5)return{reason:'zero-terrain'};
+    if(Math.max(...heights)>=snowLimit)return{reason:'snow'};
+    let maxSlope=0;
+    for(let i=1;i<5;i++){const dist=Math.hypot(coords[i][0]-coords[0][0],coords[i][1]-coords[0][1])/field.mpu;maxSlope=Math.max(maxSlope,Math.abs(heights[i]-heights[0])/Math.max(1,dist));}
+    for(let i=1;i<5;i++){const j=i===4?1:i+1,dist=Math.hypot(coords[i][0]-coords[j][0],coords[i][1]-coords[j][1])/field.mpu;maxSlope=Math.max(maxSlope,Math.abs(heights[i]-heights[j])/Math.max(1,dist));}
+    if(maxSlope>0.23)return{reason:'slope'};
+    const palette=PALETTES[profile.id];return{reason:null,biome:selected.biome,color:field.pasture?(profile.id==='dry'?'#9ca481':'#92a183'):palette[field.colorIndex%palette.length],slope:maxSlope};
+  }
+  function toFeatures(field,props){const coordinates=field.ring.map(p=>lnglat(p).map(v=>Math.round(v*1e7)/1e7));const fs=[{type:'Feature',id:field.id,properties:{role:'parcel',town:field.town,color:props.color,biome:props.biome},geometry:{type:'Polygon',coordinates:[coordinates]}}];
+    // Three understated strip lines, not thousands of crops or a tiled texture.
+    if(!field.pasture)for(let k=1;k<4;k++){
+      const a=field.ring[0],b=field.ring[1],c=field.ring[2],d=field.ring[3],t=k/4;
+      const p=[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t],q=[d[0]+(c[0]-d[0])*t,d[1]+(c[1]-d[1])*t];
+      const inset=0.05;const u=[p[0]+(q[0]-p[0])*inset,p[1]+(q[1]-p[1])*inset],v=[q[0]+(p[0]-q[0])*inset,q[1]+(p[1]-q[1])*inset];
+      fs.push({type:'Feature',id:field.id+':row'+k,properties:{role:'furrow'},geometry:{type:'LineString',coordinates:[lnglat(u),lnglat(v)]}});
+    }return fs;
+  }
+  return{EARTH,PROFILES,PALETTES,hash,rand,world,lnglat,mpu,bounds,overlaps,inBox,inRing,contains,prepare,polygonIntersects,covered,segmentDistance,makeTown,makeCandidates,makeContext,validate,toFeatures,nearestRoadAngle};
+}
+
+      let ruralLandscapeController = null;
+      function installBiganeRuralLayer() {
+        if(ruralLandscapeController)return;
+        const geo=createBiganeRuralGeometry();
+        const SOURCE='bigane-farms-v49-r1',FILL='bigane-farms-fill-v49-r1',EDGE='bigane-farms-edge-v49-r1',ROWS='bigane-farms-rows-v49-r1';
+        const MIN_ZOOM=4.7,MAX_TOWNS=96,MAX_PARCELS=1800,MAX_CACHE=280;
+        const toggle=document.getElementById('toggle-farmland'),statusEl=document.getElementById('farmland-status');
+        let enabled=toggle?.checked!==false,disposed=false,timer=null,task=null,epoch=0,pending=true,busy=false,lastKey='',sourceRevision=0;
+        let activeFields=[],sourceFeatures=[],maskBuckets=new Map(),publishedIds='',renderChanges=0,forestTimer=null;
+        let wasInRange=map.getZoom()>=MIN_ZOOM,lastModelSignature='',terrainRevision=0;
+        const cellWorld=24000/geo.EARTH,caches=new Map(),registry=new Map();
+        const stats={version:'v49-farmland-r1',phase:'waiting',parcels:0,towns:0,generatedTowns:0,cacheHits:0,sourceUpdates:0,lastComputeMs:0,maxChunkMs:0,terrainQueries:0,rejected:{},error:null};
+        const stamp=()=>performance.now();
+        function text(s){if(statusEl)statusEl.textContent=s;}
+        function activeMask(){return enabled&&map.getZoom()>=MIN_ZOOM;}
+        function invalidateTrees(){
+          clearTimeout(forestTimer);forestTimer=setTimeout(()=>{
+            if(disposed)return;
+            if(hybridForestController){hybridForestController.needsRebuild=true;hybridForestController.scheduleRebuild?.(true,160);}
+          },180);
+        }
+        function maskFromFields(fields){const buckets=new Map();for(const f of fields){const b=f.box;for(let x=Math.floor(b[0]/cellWorld);x<=Math.floor(b[2]/cellWorld);x++)for(let y=Math.floor(b[1]/cellWorld);y<=Math.floor(b[3]/cellWorld);y++){const k=x+':'+y;if(!buckets.has(k))buckets.set(k,[]);buckets.get(k).push(f);}}return buckets;}
+        function containsField(x,y){if(!activeMask())return false;const a=maskBuckets.get(Math.floor(x/cellWorld)+':'+Math.floor(y/cellWorld));if(!a)return false;const p=[x,y];return a.some(f=>geo.inBox(p,f.box)&&geo.inRing(p,f.ring));}
+        function queryLayer(id,unique){const l=map.getLayer(id);if(!l?.source)return[];const sl=l['source-layer']||l.sourceLayer,key=l.source+'|'+(sl||'');if(unique?.has(key))return[];unique?.add(key);try{return map.querySourceFeatures(l.source,sl?{sourceLayer:sl}:undefined)||[];}catch(_){return[];}}
+        function normalize(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');}
+        function population(v){if(typeof v==='number')return Math.max(0,v);return Number(String(v??'').replace(/[^0-9]/g,''))||0;}
+        function configForName(n){return LANDMARKS_3D.find(c=>[c.name,...(c.aliases||[])].some(a=>normalize(a)===normalize(n)));}
+        function currentLandmark(c){if(!c)return null;const s=landmarkStatesByName.get(c.name);return s?.config||c;}
+        function collectTowns(){
+          const seen=new Set();let features=[];
+          for(const id of ['Town names','Capitals','clickable'])features.push(...queryLayer(id,seen));
+          const towns=[];const dedup=new Set();
+          for(const f of features){if(f.geometry?.type!=='Point')continue;const p=f.properties||{},name=p.Burg||p.name||p.Name;if(!name||!f.geometry.coordinates?.every(Number.isFinite))continue;
+            const config=currentLandmark(configForName(name));
+            let coords=f.geometry.coordinates.slice(0,2),modelWidth=0;
+            if(config?.positionMode==='absolute'&&Number.isFinite(config.lng)&&Number.isFinite(config.lat)){coords=[config.lng,config.lat];if(config.visible!==false)modelWidth=Number(config.widthMeters)||0;}
+            const compact=normalize(name);
+            let key=config?'model:'+normalize(config.name):(f.id!=null?'city:'+f.id+':'+compact:null);
+            if(!key){const previous=[...registry.values()].find(t=>t.compact===compact&&Math.hypot(t.coords[0]-coords[0],t.coords[1]-coords[1])<0.08);key=previous?.key||'city:'+compact+':'+coords.map(v=>v.toFixed(2)).join(':');}
+            if(dedup.has(key))continue;dedup.add(key);
+            const prior=registry.get(key);
+            // Preserve the first resolved native point across vector tile LODs;
+            // absolute model edits explicitly replace it.
+            if(prior&&!config)coords=prior.coords;
+            const cap=p.Capital===true||/^(capital|yes|1|true)$/i.test(String(p.Capital??p.capital??''));
+            const t=geo.makeTown({key,name,compact,coords,population:population(p.Population??p.population),capital:cap,modelWidth});
+            registry.set(key,t);towns.push(t);
+          }
+          // Preserve loaded towns needed to protect neighboring built-up cores.
+          return towns;
+        }
+        function frame(){const b=map.getBounds(),a=geo.world([b.getWest(),b.getNorth()]),c=geo.world([b.getEast(),b.getSouth()]);const w=c[0]-a[0],h=c[1]-a[1];return[a[0]-w*0.16,a[1]-h*0.16,c[0]+w*0.16,c[1]+h*0.16];}
+        function snowLimit(){
+          if(!snowCalibrated)return null;
+          const ex=map.getPaintProperty(SNOW_LAYER_ID,'color-relief-color');
+          if(Array.isArray(ex))for(let i=5;i<ex.length;i+=2){const rgba=ex[i+1];if(Array.isArray(rgba)&&rgba[0]==='rgba'&&rgba[4]>0)return Number(ex[i-2]);}
+          return Infinity;
+        }
+        function fingerprint(features){let h=2166136261;for(const f of features){const s=String(f.id??'')+JSON.stringify(f.geometry?.coordinates?.[0]?.[0]??'')+String(f.geometry?.coordinates?.length??0);h^=geo.hash(s);h=Math.imul(h,16777619);}return h>>>0;}
+        function commit(fields,features,townCount){
+          const ids=fields.map(f=>f.id+':'+(f.renderColor||'')+':'+f.box.map(v=>v.toFixed(8)).join(':')).sort().join('|');
+          const changed=ids!==publishedIds;
+          if(changed){activeFields=fields;sourceFeatures=features;maskBuckets=maskFromFields(fields);publishedIds=ids;map.getSource(SOURCE)?.setData({type:'FeatureCollection',features});stats.sourceUpdates++;renderChanges++;invalidateTrees();}
+          stats.parcels=fields.length;stats.towns=townCount;stats.phase='ready';
+          text(enabled?(fields.length?`${fields.length} percelen bij ${townCount} plaatsen`:'Geen geschikt akkerland in het geladen gebied'):'Akkerland uit');
+        }
+        function collectJob(){
+          const box=frame(),center=geo.world([map.getCenter().lng,map.getCenter().lat]);
+          collectTowns();
+          // Use the resolved model position, never its former town anchor.
+          for(const [key,old] of registry){if(!key.startsWith('model:'))continue;const c=currentLandmark(configForName(old.name));if(c?.positionMode==='absolute'&&Number.isFinite(c.lng)&&Number.isFinite(c.lat))registry.set(key,geo.makeTown({...old,coords:[c.lng,c.lat],modelWidth:c.visible!==false?c.widthMeters:0}));}
+          let towns=[...registry.values()].filter(t=>geo.inBox(t.xy,box));
+          towns.sort((a,b)=>Math.hypot(a.xy[0]-center[0],a.xy[1]-center[1])-Math.hypot(b.xy[0]-center[0],b.xy[1]-center[1]));
+          towns=towns.slice(0,MAX_TOWNS).sort((a,b)=>a.key.localeCompare(b.key));
+          const requiredSources=[map.getLayer('Biomes')?.source,map.getLayer('Routes')?.source].filter(Boolean);
+          if(requiredSources.some(id=>!map.isSourceLoaded(id)))return null;
+          const bs=queryLayer('Biomes'),ws=[...queryLayer('Ocean'),...queryLayer('lakes')];
+          const routeSeen=new Set();const rs=[];
+          for(const id of ['Routes','Trail 7000'])for(const f of queryLayer(id,routeSeen)){if(['roads','trails'].includes(String(f.properties?.type||'').toLowerCase()))rs.push(f);}
+          for(const f of queryLayer('Rivers'))rs.push({...f,properties:{...f.properties,type:'river'}});
+          const limit=snowLimit();
+          if(!bs.length||!towns.length||limit===null)return null;
+          const townSig=towns.map(t=>`${t.key}:${t.coords.join(',')}:${t.modelWidth}:${t.population}`).join('|');
+          const key=[townSig,fingerprint(bs),fingerprint(ws),fingerprint(rs),terrainRevision,Math.floor(map.getZoom()),Number.isFinite(limit)?limit.toFixed(3):'none'].join('/');
+          return{box,towns,bs,ws,rs,limit,key};
+        }
+        function *generate(job){
+          const ctx=geo.makeContext(job.bs,job.ws,job.rs),accepted=[],features=[],byTown=new Set(),rejected={};let terrainQueries=0;
+          const perTownBudget=Math.min(32,Math.max(8,Math.floor(MAX_PARCELS/Math.max(1,job.towns.length))));
+          const allTowns=[...registry.values()].filter(t=>geo.overlaps([t.xy[0]-t.urban*t.mpu,t.xy[1]-t.urban*t.mpu,t.xy[0]+t.urban*t.mpu,t.xy[1]+t.urban*t.mpu],job.box));
+          const exaggeration=Number(map.getTerrain?.()?.exaggeration)||1.5;
+          const height=p=>{terrainQueries++;try{const h=map.queryTerrainElevation(p);return h==null?null:h/exaggeration;}catch(_){return null;}};
+          for(const town of job.towns){
+            const def=[town.coords[0],town.coords[1],town.outer,town.urban].join(':');let cache=caches.get(town.key);
+            if(!cache||cache.def!==def){const angle=geo.nearestRoadAngle(town,ctx.roads.filter(r=>r.type!=='river'));cache={def,fields:geo.makeCandidates(town,angle)};caches.delete(town.key);caches.set(town.key,cache);stats.generatedTowns++;}else{stats.cacheHits++;caches.delete(town.key);caches.set(town.key,cache);}
+            // Cache keeps the parcel plan stable; constraints are checked again
+            // when new terrain/water/biome data arrives, not on render frames.
+            let townFields=0;
+            const localBox=[town.xy[0]-town.outer*town.mpu,town.xy[1]-town.outer*town.mpu,town.xy[0]+town.outer*town.mpu,town.xy[1]+town.outer*town.mpu];
+            const local={biomes:ctx.biomes.filter(s=>geo.overlaps(localBox,s.box)),water:ctx.water.filter(s=>geo.overlaps(localBox,s.box)),roads:ctx.roads.filter(s=>geo.overlaps(localBox,s.box))};
+            for(const field of cache.fields){
+              if(accepted.length>=MAX_PARCELS||townFields>=perTownBudget)break;
+              if(!geo.overlaps(field.box,job.box))continue;
+              const result=geo.validate(field,local,allTowns,accepted,height,job.limit);
+              if(result.reason)rejected[result.reason]=(rejected[result.reason]||0)+1;
+              else{accepted.push({...field,renderColor:result.color});features.push(...geo.toFeatures(field,result));townFields++;byTown.add(town.key);}
+              yield;
+            }
+          }
+          while(caches.size>MAX_CACHE)caches.delete(caches.keys().next().value);
+          // Town registry is a small CPU cache, not an ever-growing draw list.
+          if(registry.size>1400){for(const [key,t]of registry){if(!geo.inBox(t.xy,job.box)&&!key.startsWith('model:'))registry.delete(key);if(registry.size<=1100)break;}}
+          stats.rejected=rejected;stats.terrainQueries=terrainQueries;
+          if(rejected['missing-terrain']||rejected['zero-terrain'])lastKey='';
+          return{accepted,features,towns:byTown.size};
+        }
+        function begin(){
+          timer=null;if(disposed||!enabled||map.getZoom()<MIN_ZOOM){busy=false;return;}
+          if(map.isMoving?.()){schedule(350);return;}
+          let job;try{job=collectJob();}catch(error){fail(error);return;}
+          if(!job){stats.phase='waiting';text('Akkerland: wacht op kaart- en terreingegevens');pending=true;return;}
+          if(job.key===lastKey){pending=false;return;}
+          lastKey=job.key;pending=false;busy=true;stats.phase='preparing';text('Akkerland wordt per gebied voorbereid...');
+          const id=++epoch,iterator=generate(job);let computeMs=0;
+          function step(){
+            if(disposed||!enabled||id!==epoch){busy=false;return;}
+            if(map.isMoving?.()){task=setTimeout(step,180);return;}
+            const start=stamp();try{let next;do{next=iterator.next();if(next.done){computeMs+=stamp()-start;stats.lastComputeMs=Math.round(computeMs);busy=false;task=null;commit(next.value.accepted,next.value.features,next.value.towns);if(pending)schedule(650);return;}}while(stamp()-start<4);
+              const used=stamp()-start;computeMs+=used;stats.maxChunkMs=Math.max(stats.maxChunkMs,Math.round(used*100)/100);task=setTimeout(step,24);
+            }catch(error){busy=false;fail(error);}
+          }task=setTimeout(step,24);
+        }
+        function fail(error){stats.error=String(error?.message||error);stats.phase='error';text('Akkerland niet beschikbaar; kaart blijft werken');console.warn('Bigane akkerland:',error);}
+        function schedule(delay=600){if(disposed)return;pending=true;clearTimeout(timer);if(!enabled||map.getZoom()<MIN_ZOOM)return;timer=setTimeout(()=>{if(busy){pending=true;return;}begin();},delay);}
+        function onMoveEnd(){const inRange=map.getZoom()>=MIN_ZOOM;if(inRange!==wasInRange){wasInRange=inRange;invalidateTrees();}schedule(650);}
+        const watched=new Set(['bigane-dem',map.getLayer('Biomes')?.source,map.getLayer('Routes')?.source,map.getLayer('Town names')?.source].filter(Boolean));
+        function onData(e){if(watched.has(e?.sourceId)&&e.isSourceLoaded){sourceRevision++;if(e.sourceId==='bigane-dem'&&(!e.sourceDataType||e.sourceDataType==='content'))terrainRevision++;schedule(1000);}}
+        function onIdle(){
+          const sig=LANDMARKS_3D.map(c=>[c.name,c.lng,c.lat,c.widthMeters,c.visible].join(':')).join('|');
+          if(sig!==lastModelSignature){lastModelSignature=sig;pending=true;lastKey='';}
+          if(pending&&!timer&&!busy)schedule(650);
+        }
+        function setEnabled(value){enabled=!!value;toggle&&(toggle.checked=enabled);for(const id of[FILL,EDGE,ROWS])if(map.getLayer(id))map.setLayoutProperty(id,'visibility',enabled?'visible':'none');invalidateTrees();if(enabled){lastKey='';schedule(300);}else{++epoch;clearTimeout(timer);clearTimeout(task);timer=task=null;busy=false;text('Akkerland uit');}}
+        const onToggle=()=>setEnabled(toggle.checked);
+        const before=['Rivers','Ocean','lakes','Town names'].find(id=>map.getLayer(id));
+        try{
+          map.addSource(SOURCE,{type:'geojson',data:{type:'FeatureCollection',features:[]},maxzoom:12,tolerance:0.35,buffer:32});
+          map.addLayer({id:FILL,type:'fill',source:SOURCE,minzoom:MIN_ZOOM,filter:['==',['get','role'],'parcel'],paint:{'fill-color':['get','color'],'fill-antialias':false,'fill-opacity':['interpolate',['linear'],['zoom'],4.7,0.15,5.5,0.55,7,0.72,10,0.76]}},before);
+          map.addLayer({id:EDGE,type:'line',source:SOURCE,minzoom:6,filter:['==',['get','role'],'parcel'],layout:{'line-join':'round'},paint:{'line-color':'#69785b','line-opacity':['interpolate',['linear'],['zoom'],6,0.12,8,0.30,11,0.40],'line-width':['interpolate',['linear'],['zoom'],6,0.35,9,0.65,12,1.0]}},before);
+          map.addLayer({id:ROWS,type:'line',source:SOURCE,minzoom:7.5,filter:['==',['get','role'],'furrow'],paint:{'line-color':'#e0d5b6','line-opacity':['interpolate',['linear'],['zoom'],7.5,0,9,0.22,12,0.30],'line-width':['interpolate',['linear'],['zoom'],7.5,0.35,10,0.6,13,0.85]}},before);
+          map.on('moveend',onMoveEnd);map.on('sourcedata',onData);map.on('idle',onIdle);toggle?.addEventListener('change',onToggle);
+          ruralLandscapeController={containsField,setEnabled,getStats:()=>({...stats,enabled,minZoom:MIN_ZOOM,activeSourceFeatures:sourceFeatures.length,cachedTownPlans:caches.size,sourceRevision,renderChanges}),refresh:()=>{lastKey='';schedule(0);},dispose(){disposed=true;++epoch;clearTimeout(timer);clearTimeout(task);clearTimeout(forestTimer);map.off('moveend',onMoveEnd);map.off('sourcedata',onData);map.off('idle',onIdle);toggle?.removeEventListener('change',onToggle);for(const id of[ROWS,EDGE,FILL])if(map.getLayer(id))map.removeLayer(id);if(map.getSource(SOURCE))map.removeSource(SOURCE);}};
+          window.biganeRuralDebug=()=>ruralLandscapeController?.getStats();
+          window.biganeRuralExport=()=>JSON.parse(JSON.stringify({type:'FeatureCollection',features:sourceFeatures}));
+          text('Akkerland: wacht op kaart- en terreingegevens');schedule(1200);
+        }catch(error){fail(error);}
+      }
+
+      let biganeRoadStylingController=null;
+      function installBiganeRoadStyling(){
+        if(biganeRoadStylingController)return;
+        const toggle=document.getElementById('toggle-roadstyle');
+        const initial=map.getStyle().layers||[],snapshots=new Map(),added=[];
+        const targets=[{id:'Routes',kind:'road',type:'roads'},{id:'Trail 7000',kind:'trail',type:'trails'}]
+          .map(t=>({...t,layer:initial.find(l=>l.id===t.id)}))
+          .filter(t=>t.layer?.type==='line'&&JSON.stringify(t.layer.filter||'').includes('"'+t.type+'"'));
+        // Clone the actual source and filter for the casing. Never redirect or
+        // edit the route geometries, Searoutes, Underway, labels or water.
+        for(const t of targets)snapshots.set(t.id,JSON.parse(JSON.stringify(t.layer)));
+        const oldShadow=initial.find(l=>l.id==='Trail 7000 black');
+        if(oldShadow&&targets.some(t=>t.kind==='trail'))snapshots.set(oldShadow.id,JSON.parse(JSON.stringify(oldShadow)));
+        let enabled=false;
+        const roadW=['interpolate',['linear'],['zoom'],4,0.0,5,0.75,6,1.35,8,2.5,11,4.7,15,8.8];
+        const trailW=['interpolate',['linear'],['zoom'],4,0.0,5,0.40,6,0.8,8,1.45,11,2.5,15,4.6];
+        function set(enabledNow){
+          const want=!!enabledNow;if(want===enabled)return;enabled=want;if(toggle)toggle.checked=want;
+          if(!want){for(const id of added)if(map.getLayer(id))map.removeLayer(id);added.length=0;for(const[id,l]of snapshots){if(!map.getLayer(id))continue;const props=['line-color','line-width','line-opacity','line-blur','line-translate'];for(const p of props)map.setPaintProperty(id,p,l.paint?.[p]??null);for(const p of['line-cap','line-join','visibility'])map.setLayoutProperty(id,p,l.layout?.[p]??null);}return;}
+          for(const t of targets){
+            const w=t.kind==='road'?roadW:trailW,id='bigane-road-casing-'+t.kind+'-v49-r1',l=t.layer;
+            const casingW=t.kind==='road'?['interpolate',['linear'],['zoom'],4,0,5,1.50,6,2.15,8,3.55,11,5.95,15,10.2]:['interpolate',['linear'],['zoom'],4,0,5,0.90,6,1.4,8,2.05,11,3.2,15,5.4];
+            map.addLayer({id,type:'line',source:l.source,...(l['source-layer']?{'source-layer':l['source-layer']}:{}),...(l.minzoom!==undefined?{minzoom:l.minzoom}:{}),...(l.maxzoom!==undefined?{maxzoom:l.maxzoom}:{}),filter:JSON.parse(JSON.stringify(l.filter)),layout:{'line-cap':'round','line-join':'round',visibility:l.layout?.visibility||'visible'},paint:{'line-color':t.kind==='road'?'#5d604c':'#67705b','line-width':casingW,'line-opacity':t.kind==='road'?0.52:0.36}},t.id);added.push(id);
+            map.setPaintProperty(t.id,'line-color',t.kind==='road'?'#d2c5a4':'#bab89b');map.setPaintProperty(t.id,'line-width',w);map.setPaintProperty(t.id,'line-opacity',t.kind==='road'?0.95:0.88);map.setPaintProperty(t.id,'line-blur',0);map.setPaintProperty(t.id,'line-translate',[0,0]);map.setLayoutProperty(t.id,'line-cap','round');map.setLayoutProperty(t.id,'line-join','round');
+          }
+          if(oldShadow&&snapshots.has(oldShadow.id))map.setLayoutProperty(oldShadow.id,'visibility','none');
+        }
+        const onToggle=()=>{try{set(toggle.checked);}catch(error){console.warn('Landwegen stijl:',error);}};
+        try{set(toggle?.checked!==false);toggle?.addEventListener('change',onToggle);biganeRoadStylingController={setEnabled:set,getStats:()=>({enabled,restyled:targets.map(t=>t.id),added:added.slice(),seaAndUndergroundUntouched:true})};window.biganeRoadDebug=()=>biganeRoadStylingController.getStats();}catch(error){console.warn('Landwegen stijl; oorspronkelijke routes blijven beschikbaar:',error);}
+      }
+
+      /* BIGANE_RURAL_MODULE_END */
 
       // ---------------------------------------------------------------------
       // HYBRID GPU FOREST
@@ -2986,6 +3320,9 @@
                   if (norm > 1.30 && hfHash(ix, iy, 71) > 0.56) continue;
                   if (norm > 1.90 && hfHash(ix, iy, 72) > 0.34) continue;
                   const lng = hfLng(x), lat = hfLat(y);
+                  /* BIGANE_RURAL_ROOT_GUARD_BEGIN */
+                  if (ruralLandscapeController?.containsField(x, y)) continue;
+                  /* BIGANE_RURAL_ROOT_GUARD_END */
                   // Cache the expensive polygon membership across camera moves.
                   // The key includes the source fragment, not merely the biome name.
                   const memoKey=`${entry.cacheKey || entry.biome}:${ix}:${iy}`;
@@ -4697,6 +5034,16 @@
       map.on("error", (event) => {
         console.error("MapLibre error:", event.error || event);
       });
+
+      /* BIGANE_RURAL_START_BEGIN */
+      map.on("load", () => {
+        try { installBiganeRoadStyling(); } catch (error) { console.warn("Landwegen blijven oorspronkelijk:", error); }
+        // Defer new scenery; never change the original startup/snow sequence.
+        setTimeout(() => {
+          try { installBiganeRuralLayer(); } catch (error) { console.warn("Akkerland overgeslagen:", error); }
+        }, 1500);
+      });
+      /* BIGANE_RURAL_START_END */
 
       /* BIGANE_V49_PASSIVE_LOADER_HOOK_BEGIN */
       // Read-only observer attached AFTER v49's own initialization handlers.
