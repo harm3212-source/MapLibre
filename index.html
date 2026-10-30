@@ -1102,7 +1102,7 @@
       // One GPU quad adds the gentle shore colour and directional lighting.
       // ---------------------------------------------------------------
       const ROCK_LAYER_ID = 'bigane-highland-rock';
-      const BIGANE_WATER_LAYER_ID = 'bigane-water-v45';
+      const BIGANE_WATER_LAYER_ID = 'bigane-water-v46';
       const BIGANE_WATER_EARTH = 40075016.68557849;
       const BIGANE_WATER_TEXTURE_SIZE = 1280;
       let waterPolishController = null;
@@ -1377,32 +1377,55 @@
             vec2 border=min(v_uv,1.0-v_uv);
             float margin=smooth01(min(border.x,border.y)/0.12);
             if(margin<0.005)discard;
-            vec3 coast=mix(vec3(0.40,0.72,0.76),vec3(0.46,0.73,0.75),lake);
-            vec3 deep=mix(vec3(0.29,0.52,0.62),vec3(0.33,0.61,0.67),lake);
-            vec3 color=mix(coast,deep,smooth01(distance01));
 
-            // Directional stationary reflection (no moving textures, no new
-            // draw calls), using gentle world-anchored wave normals.
+            // Three-step bathymetry: bright shallows, shelf water, then a
+            // darker offshore body so the sea no longer reads as a flat fill.
+            float tMid=smoothstep(0.05,0.45,distance01);
+            float tDeep=smoothstep(0.38,1.00,distance01);
+            vec3 coast=mix(vec3(0.53,0.83,0.89),vec3(0.56,0.84,0.88),lake);
+            vec3 mid=mix(vec3(0.34,0.64,0.77),vec3(0.38,0.69,0.76),lake);
+            vec3 deep=mix(vec3(0.16,0.39,0.56),vec3(0.23,0.54,0.65),lake);
+            vec3 color=mix(coast,mid,tMid);
+            color=mix(color,deep,tDeep);
+
+            // Large-scale body variation, world anchored, to break the flat look
+            // without adding moving textures or extra draw calls.
             vec2 world=v_world*40075016.68557849*0.00008;
-            float a=dot(world,vec2(0.97,0.33))*2.0;
-            float b=dot(world,vec2(-0.26,0.96))*3.4;
-            vec2 slope=vec2(0.97,0.33)*cos(a)*0.15 +
-                       vec2(-0.26,0.96)*cos(b)*0.08;
-            vec3 normal=normalize(vec3(slope*mix(0.65,0.31,lake),1.0));
+            float macro=0.5+0.5*sin(dot(world,vec2(0.11,0.04))*1.8 + sin(dot(world,vec2(-0.03,0.09))*1.2));
+            float macro2=0.5+0.5*sin(dot(world,vec2(-0.06,0.08))*1.1);
+            float offshore=(0.06*macro + 0.04*macro2) * (0.20 + 0.80*tDeep) * (1.0-lake*0.55);
+            color *= 1.0 - offshore;
+
+            // Directional stationary reflection using gentle world-anchored wave normals.
+            float a=dot(world,vec2(0.97,0.33))*2.4;
+            float b=dot(world,vec2(-0.26,0.96))*3.8;
+            float c=dot(world,vec2(0.53,-0.85))*1.5;
+            vec2 slope=vec2(0.97,0.33)*cos(a)*0.18 +
+                       vec2(-0.26,0.96)*cos(b)*0.10 +
+                       vec2(0.53,-0.85)*cos(c)*0.06;
+            vec3 normal=normalize(vec3(slope*mix(0.80,0.35,lake),1.0));
             vec3 sun=normalize(vec3(-0.55,-0.70,1.25));
             vec3 view=normalize(vec3(sin(u_bearing)*sin(u_pitch),
               -cos(u_bearing)*sin(u_pitch),max(cos(u_pitch),0.12)));
-            float reflection=pow(max(dot(normal,normalize(sun+view)),0.0),32.0);
-            float fresnel=pow(1.0-max(dot(normal,view),0.0),3.0);
-            float glint=(0.105*reflection+0.06*fresnel)*mix(1.0,0.40,lake);
-            color+=vec3(glint*0.65,glint*0.85,glint);
+            float reflection=pow(max(dot(normal,normalize(sun+view)),0.0),42.0);
+            float fresnel=pow(1.0-max(dot(normal,view),0.0),2.4);
+            float glint=(0.11*reflection+0.07*fresnel)*mix(1.0,0.45,lake);
+            color+=vec3(glint*0.55,glint*0.75,glint*0.95);
 
-            // Small crisp light rim tied to the actual SDF coast (not the
-            // LOD boundary). A derivative gives roughly one screen pixel.
-            float shoreWidth=max(fwidth(distance01)*2.3,0.012);
-            float shore=1.0-smooth01(distance01/shoreWidth);
-            color=mix(color,vec3(0.79,0.94,0.92),shore*0.27);
-            float opacity=(0.56*shelf + 0.025*glint)*data.a*margin;
+            // Make the actual coastline clearly readable: a subtle darker water
+            // contact band plus a crisp bright shoreline, both derived from the
+            // real SDF coast rather than the LOD boundary.
+            float px=max(fwidth(distance01),0.0016);
+            float contact=1.0-smoothstep(px*1.6,px*7.5,distance01);
+            float shoreLine=1.0-smoothstep(px*0.35,px*2.0,distance01);
+            float shoreGlow=1.0-smoothstep(px*2.0,px*10.0,distance01);
+            color=mix(color,color*vec3(0.76,0.88,0.96),contact*0.35);
+            color=mix(color,vec3(0.93,0.98,0.99),shoreLine*0.92);
+            color+=vec3(0.05,0.10,0.10)*shoreGlow*0.18;
+
+            float bodyOpacity=(0.18 + 0.56*shelf + 0.08*tDeep + 0.03*glint)*data.a*margin;
+            float lineBoost=(shoreLine*0.32 + shoreGlow*0.10)*data.a*margin;
+            float opacity=clamp(bodyOpacity + lineBoost, 0.0, 0.95);
             if(opacity<0.002)discard;
             fragColor=vec4(color,opacity);
           }
