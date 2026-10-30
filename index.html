@@ -394,8 +394,8 @@
     <p class="bg49-brand">BIGANE</p>
     <h1 id="bg49-progress-title">Je kaart wordt geopend</h1>
     <p class="bg49-intro">De eerste kaartweergave wordt geladen.</p>
-    <div class="bg49-meter-label"><span>Voortgang per onderdeel</span><span id="bg49-progress-count">0 / 7</span></div>
-    <div class="bg49-track" id="bg49-progress-bar" role="progressbar" aria-label="Opstartonderdelen" aria-valuemin="0" aria-valuemax="7" aria-valuenow="0">
+    <div class="bg49-meter-label"><span>Voortgang per onderdeel</span><span id="bg49-progress-count">0 / 8</span></div>
+    <div class="bg49-track" id="bg49-progress-bar" role="progressbar" aria-label="Opstartonderdelen" aria-valuemin="0" aria-valuemax="8" aria-valuenow="0">
       <div class="bg49-fill" id="bg49-progress-fill"></div>
     </div>
     <ul class="bg49-stages">
@@ -406,6 +406,7 @@
       <li class="bg49-stage" data-stage="forest" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Bomen</span><span class="bg49-state">Wachten</span></li>
       <li class="bg49-stage" data-stage="snow" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Sneeuwinstellingen</span><span class="bg49-state">Wachten</span></li>
       <li class="bg49-stage" data-stage="models" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Nabije 3D-steden</span><span class="bg49-state">Wachten</span></li>
+      <li class="bg49-stage" data-stage="farmland" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Akkerland en weiden</span><span class="bg49-state">Wachten</span></li>
     </ul>
     <p class="bg49-note" id="bg49-progress-note" role="status" aria-live="polite">Je kunt de kaart ook alvast openen. Het laden gaat dan gewoon door.</p>
     <button id="bg49-progress-open" type="button">Kaart alvast openen</button>
@@ -500,6 +501,14 @@
         else if (models.loading > 0) stage('models', 'pending', `${models.loaded || 0} geladen`);
         else if (models.errors > 0) stage('models', 'warning', `${models.errors} niet geladen`);
         else stage('models', 'ready', models.loaded ? `${models.loaded} geladen` : 'Geen aanvraag in dit beeld');
+        const farms = state.farmland;
+        if (!state.farmlandRequired) stage('farmland', 'skip', 'Niet nodig in dit beeld');
+        else if (state.farmlandError || farms?.phase === 'error' || errors.has('bigane-farms-v49-r1')) stage('farmland', 'warning', 'Niet beschikbaar');
+        else if (farms?.rendered && farms?.phase === 'partial') stage('farmland', 'warning', `${farms.parcels || 0} percelen; deels gereed`);
+        else if (farms?.rendered && farms?.phase === 'ready') stage('farmland', 'ready', farms.parcels ? `${farms.parcels} percelen` : 'Geen geschikte percelen');
+        else if (farms?.phase === 'preparing') stage('farmland', 'pending', `${farms.checkedTowns || 0}/${farms.totalTowns || 0} plaatsen`);
+        else if (farms?.phase === 'rendering') stage('farmland', 'pending', 'Op kaart zetten');
+        else stage('farmland', 'pending', farms?.waitingFor || 'Gegevens afwachten');
       }
       const states = Array.from(rows.values(), row => row.dataset.state);
       const settled = states.filter(value => value !== 'pending').length;
@@ -560,7 +569,10 @@
       listen('remove', close);
       inspect();
     },
-    close
+    close,
+    // Read-only: only the new farmland scheduler uses this to work in shorter
+    // pauses while the overlay is covering the first view. Other tasks unchanged.
+    isOpen: () => !closed
   });
   window.BiganeV49Progress = api;
   button.addEventListener('click', onOpen);
@@ -1673,6 +1685,7 @@ function createBiganeRuralGeometry() {
 }
 
       let ruralLandscapeController = null;
+      let ruralStartupError = null;
       function installBiganeRuralLayer() {
         if(ruralLandscapeController)return;
         const geo=createBiganeRuralGeometry();
@@ -1682,8 +1695,13 @@ function createBiganeRuralGeometry() {
         let enabled=toggle?.checked!==false,disposed=false,timer=null,task=null,epoch=0,pending=true,busy=false,lastKey='',sourceRevision=0;
         let activeFields=[],sourceFeatures=[],maskBuckets=new Map(),publishedIds='',renderChanges=0,forestTimer=null;
         let wasInRange=map.getZoom()>=MIN_ZOOM,lastModelSignature='',terrainRevision=0;
+        // Farmland only: no change to snow calibration, terrain loading or storage.
+        let timerDue=Infinity,firstPrepared=false,publication=0,hasPublished=false;
+        let awaitingRender=false,renderSubscribed=false,dataAccepted=false,pendingDataPromise=false;
+        const initialPriority=()=>!firstPrepared && window.BiganeV49Progress?.isOpen?.()===true;
+        const pauseBetweenChunks=()=>initialPriority()?0:24;
         const cellWorld=24000/geo.EARTH,caches=new Map(),registry=new Map();
-        const stats={version:'v49-farmland-r1',phase:'waiting',parcels:0,towns:0,generatedTowns:0,cacheHits:0,sourceUpdates:0,lastComputeMs:0,maxChunkMs:0,terrainQueries:0,rejected:{},error:null};
+        const stats={version:'v49-farmland-startup-r2',phase:'waiting',parcels:0,towns:0,generatedTowns:0,cacheHits:0,sourceUpdates:0,lastComputeMs:0,maxChunkMs:0,terrainQueries:0,rejected:{},error:null,waitingFor:'Kaartgegevens',checkedTowns:0,totalTowns:0,checkedParcels:0,rendered:false,incompleteTerrain:0};
         const stamp=()=>performance.now();
         function text(s){if(statusEl)statusEl.textContent=s;}
         function activeMask(){return enabled&&map.getZoom()>=MIN_ZOOM;}
@@ -1731,29 +1749,58 @@ function createBiganeRuralGeometry() {
           return Infinity;
         }
         function fingerprint(features){let h=2166136261;for(const f of features){const s=String(f.id??'')+JSON.stringify(f.geometry?.coordinates?.[0]?.[0]??'')+String(f.geometry?.coordinates?.length??0);h^=geo.hash(s);h=Math.imul(h,16777619);}return h>>>0;}
+        function sourceLoaded(id){try{return !!map.getSource(id)&&map.isSourceLoaded(id);}catch(_){return false;}}
+        function detachRenderCheck(){if(renderSubscribed){map.off('render',onFarmRender);renderSubscribed=false;}}
+        function onFarmRender(){
+          // A generated GeoJSON is not yet a visible layer. Observe one actual
+          // render AFTER its worker update and visible source tiles are ready.
+          if(disposed||!enabled||busy||!awaitingRender||!dataAccepted||!sourceLoaded(SOURCE))return;
+          awaitingRender=false;detachRenderCheck();firstPrepared=true;
+          stats.rendered=true;stats.phase=stats.incompleteTerrain?'partial':'ready';
+          text(stats.incompleteTerrain?
+            `${stats.parcels} percelen; enkele terreinhoogtes ontbreken nog`:
+            (stats.parcels?`${stats.parcels} percelen bij ${stats.towns} plaatsen`:'Geen geschikt akkerland in het geladen gebied'));
+        }
         function commit(fields,features,townCount){
           const ids=fields.map(f=>f.id+':'+(f.renderColor||'')+':'+f.box.map(v=>v.toFixed(8)).join(':')).sort().join('|');
-          const changed=ids!==publishedIds;
-          if(changed){activeFields=fields;sourceFeatures=features;maskBuckets=maskFromFields(fields);publishedIds=ids;map.getSource(SOURCE)?.setData({type:'FeatureCollection',features});stats.sourceUpdates++;renderChanges++;invalidateTrees();}
-          stats.parcels=fields.length;stats.towns=townCount;stats.phase='ready';
-          text(enabled?(fields.length?`${fields.length} percelen bij ${townCount} plaatsen`:'Geen geschikt akkerland in het geladen gebied'):'Akkerland uit');
+          const changed=ids!==publishedIds,needsUpload=changed||!hasPublished;
+          const token=++publication;
+          stats.parcels=fields.length;stats.towns=townCount;stats.phase='rendering';stats.rendered=false;
+          awaitingRender=true;dataAccepted=!needsUpload;pendingDataPromise=false;
+          if(!renderSubscribed){map.on('render',onFarmRender);renderSubscribed=true;}
+          if(needsUpload){
+            activeFields=fields;sourceFeatures=features;maskBuckets=maskFromFields(fields);publishedIds=ids;hasPublished=true;
+            const source=map.getSource(SOURCE);if(!source)throw new Error('Akkerlandbron ontbreekt');
+            // MapLibre 6 returns a promise; older versions are observed through
+            // the source data events below. Neither route invents completion.
+            const update=source.setData({type:'FeatureCollection',features});
+            stats.sourceUpdates++;if(changed){renderChanges++;invalidateTrees();}
+            if(update&&typeof update.then==='function'){pendingDataPromise=true;update.then(()=>{
+              if(disposed||token!==publication)return;
+              dataAccepted=true;map.triggerRepaint();
+            }).catch(error=>{if(!disposed&&token===publication)fail(error);});}
+          }
+          text('Akkerland: percelen worden op de kaart gezet');map.triggerRepaint();
         }
         function collectJob(){
           const box=frame(),center=geo.world([map.getCenter().lng,map.getCenter().lat]);
+          const requiredSources=new Set(['bigane-dem',...['Biomes','Ocean','lakes','Rivers','Routes','Trail 7000','Town names','Capitals','clickable'].map(id=>map.getLayer(id)?.source)].filter(Boolean));
+          if([...requiredSources].some(id=>!sourceLoaded(id))){stats.waitingFor='Terrein en kaartgegevens';return null;}
+          const limit=snowLimit();
+          if(limit===null){stats.waitingFor='Sneeuwinstellingen';return null;}
+          stats.waitingFor='';
           collectTowns();
           // Use the resolved model position, never its former town anchor.
           for(const [key,old] of registry){if(!key.startsWith('model:'))continue;const c=currentLandmark(configForName(old.name));if(c?.positionMode==='absolute'&&Number.isFinite(c.lng)&&Number.isFinite(c.lat))registry.set(key,geo.makeTown({...old,coords:[c.lng,c.lat],modelWidth:c.visible!==false?c.widthMeters:0}));}
           let towns=[...registry.values()].filter(t=>geo.inBox(t.xy,box));
           towns.sort((a,b)=>Math.hypot(a.xy[0]-center[0],a.xy[1]-center[1])-Math.hypot(b.xy[0]-center[0],b.xy[1]-center[1]));
           towns=towns.slice(0,MAX_TOWNS).sort((a,b)=>a.key.localeCompare(b.key));
-          const requiredSources=[map.getLayer('Biomes')?.source,map.getLayer('Routes')?.source].filter(Boolean);
-          if(requiredSources.some(id=>!map.isSourceLoaded(id)))return null;
           const bs=queryLayer('Biomes'),ws=[...queryLayer('Ocean'),...queryLayer('lakes')];
           const routeSeen=new Set();const rs=[];
           for(const id of ['Routes','Trail 7000'])for(const f of queryLayer(id,routeSeen)){if(['roads','trails'].includes(String(f.properties?.type||'').toLowerCase()))rs.push(f);}
           for(const f of queryLayer('Rivers'))rs.push({...f,properties:{...f.properties,type:'river'}});
-          const limit=snowLimit();
-          if(!bs.length||!towns.length||limit===null)return null;
+          // Loaded open sea / an area with no towns is a valid empty result,
+          // not a reason for the loading screen to wait forever.
           const townSig=towns.map(t=>`${t.key}:${t.coords.join(',')}:${t.modelWidth}:${t.population}`).join('|');
           const key=[townSig,fingerprint(bs),fingerprint(ws),fingerprint(rs),terrainRevision,Math.floor(map.getZoom()),Number.isFinite(limit)?limit.toFixed(3):'none'].join('/');
           return{box,towns,bs,ws,rs,limit,key};
@@ -1778,43 +1825,83 @@ function createBiganeRuralGeometry() {
               const result=geo.validate(field,local,allTowns,accepted,height,job.limit);
               if(result.reason)rejected[result.reason]=(rejected[result.reason]||0)+1;
               else{accepted.push({...field,renderColor:result.color});features.push(...geo.toFeatures(field,result));townFields++;byTown.add(town.key);}
+              stats.checkedParcels++;
               yield;
             }
+            stats.checkedTowns++;
           }
           while(caches.size>MAX_CACHE)caches.delete(caches.keys().next().value);
           // Town registry is a small CPU cache, not an ever-growing draw list.
           if(registry.size>1400){for(const [key,t]of registry){if(!geo.inBox(t.xy,job.box)&&!key.startsWith('model:'))registry.delete(key);if(registry.size<=1100)break;}}
           stats.rejected=rejected;stats.terrainQueries=terrainQueries;
+          stats.incompleteTerrain=rejected['missing-terrain']||0;
           if(rejected['missing-terrain']||rejected['zero-terrain'])lastKey='';
           return{accepted,features,towns:byTown.size};
         }
         function begin(){
-          timer=null;if(disposed||!enabled||map.getZoom()<MIN_ZOOM){busy=false;return;}
+          timer=null;timerDue=Infinity;
+          if(disposed||!enabled||map.getZoom()<MIN_ZOOM){busy=false;return;}
+          if(busy){pending=true;return;}
           if(map.isMoving?.()){schedule(350);return;}
           let job;try{job=collectJob();}catch(error){fail(error);return;}
-          if(!job){stats.phase='waiting';text('Akkerland: wacht op kaart- en terreingegevens');pending=true;return;}
+          if(!job){stats.phase='waiting';text('Akkerland: wacht op '+(stats.waitingFor||'kaartgegevens'));pending=true;if(initialPriority())schedule(250);return;}
           if(job.key===lastKey){pending=false;return;}
-          lastKey=job.key;pending=false;busy=true;stats.phase='preparing';text('Akkerland wordt per gebied voorbereid...');
+          lastKey=job.key;pending=false;busy=true;stats.phase='preparing';stats.error=null;ruralStartupError=null;stats.rendered=false;
+          stats.totalTowns=job.towns.length;stats.checkedTowns=0;stats.checkedParcels=0;stats.incompleteTerrain=0;
+          text('Akkerland wordt per gebied voorbereid...');
           const id=++epoch,iterator=generate(job);let computeMs=0;
           function step(){
             if(disposed||!enabled||id!==epoch){busy=false;return;}
             if(map.isMoving?.()){task=setTimeout(step,180);return;}
-            const start=stamp();try{let next;do{next=iterator.next();if(next.done){computeMs+=stamp()-start;stats.lastComputeMs=Math.round(computeMs);busy=false;task=null;commit(next.value.accepted,next.value.features,next.value.towns);if(pending)schedule(650);return;}}while(stamp()-start<4);
-              const used=stamp()-start;computeMs+=used;stats.maxChunkMs=Math.max(stats.maxChunkMs,Math.round(used*100)/100);task=setTimeout(step,24);
+            const start=stamp(),budget=initialPriority()?6:4;
+            try{
+              let next;
+              do{next=iterator.next();if(next.done){
+                const used=stamp()-start;computeMs+=used;stats.maxChunkMs=Math.max(stats.maxChunkMs,Math.round(used*100)/100);
+                stats.lastComputeMs=Math.round(computeMs);busy=false;task=null;
+                commit(next.value.accepted,next.value.features,next.value.towns);if(pending)schedule(650);return;
+              }}while(stamp()-start<budget);
+              const used=stamp()-start;computeMs+=used;stats.maxChunkMs=Math.max(stats.maxChunkMs,Math.round(used*100)/100);
+              task=setTimeout(step,pauseBetweenChunks());
             }catch(error){busy=false;fail(error);}
-          }task=setTimeout(step,24);
+          }task=setTimeout(step,pauseBetweenChunks());
         }
-        function fail(error){stats.error=String(error?.message||error);stats.phase='error';text('Akkerland niet beschikbaar; kaart blijft werken');console.warn('Bigane akkerland:',error);}
-        function schedule(delay=600){if(disposed)return;pending=true;clearTimeout(timer);if(!enabled||map.getZoom()<MIN_ZOOM)return;timer=setTimeout(()=>{if(busy){pending=true;return;}begin();},delay);}
+        function fail(error){
+          stats.error=String(error?.message||error);stats.phase='error';stats.rendered=false;if(!ruralLandscapeController)ruralStartupError=stats.error;
+          pending=false;busy=false;awaitingRender=false;++publication;
+          clearTimeout(timer);clearTimeout(task);timer=task=null;timerDue=Infinity;detachRenderCheck();
+          text('Akkerland niet beschikbaar; kaart blijft werken');console.warn('Bigane akkerland:',error);
+        }
+        function schedule(delay=600){
+          if(disposed)return;pending=true;
+          if(!enabled||map.getZoom()<MIN_ZOOM||busy)return;
+          // Keep the earliest request. A stream of source events must not keep
+          // pushing the first generation into the future (trailing-debounce starvation).
+          const due=stamp()+Math.max(0,delay);
+          if(timer!==null&&timerDue<=due)return;
+          clearTimeout(timer);timerDue=due;
+          timer=setTimeout(()=>{timer=null;timerDue=Infinity;begin();},Math.max(0,due-stamp()));
+        }
         function onMoveEnd(){const inRange=map.getZoom()>=MIN_ZOOM;if(inRange!==wasInRange){wasInRange=inRange;invalidateTrees();}schedule(650);}
         const watched=new Set(['bigane-dem',map.getLayer('Biomes')?.source,map.getLayer('Routes')?.source,map.getLayer('Town names')?.source].filter(Boolean));
-        function onData(e){if(watched.has(e?.sourceId)&&e.isSourceLoaded){sourceRevision++;if(e.sourceId==='bigane-dem'&&(!e.sourceDataType||e.sourceDataType==='content'))terrainRevision++;schedule(1000);}}
+        function onData(e){
+          if(e?.sourceId===SOURCE){
+            if(awaitingRender&&!pendingDataPromise&&e.isSourceLoaded){dataAccepted=true;map.triggerRepaint();}
+            return;
+          }
+          if(watched.has(e?.sourceId)&&e.isSourceLoaded){
+            sourceRevision++;
+            if(e.sourceId==='bigane-dem'&&(!e.sourceDataType||e.sourceDataType==='content'))terrainRevision++;
+            schedule(initialPriority()?60:1000);
+          }
+        }
+        function onSourceError(e){if(e?.sourceId===SOURCE)fail(e.error||new Error('Akkerlandbron kon niet worden verwerkt'));}
         function onIdle(){
           const sig=LANDMARKS_3D.map(c=>[c.name,c.lng,c.lat,c.widthMeters,c.visible].join(':')).join('|');
           if(sig!==lastModelSignature){lastModelSignature=sig;pending=true;lastKey='';}
-          if(pending&&!timer&&!busy)schedule(650);
+          if(pending&&timer===null&&!busy)schedule(initialPriority()?0:650);
         }
-        function setEnabled(value){enabled=!!value;toggle&&(toggle.checked=enabled);for(const id of[FILL,EDGE,ROWS])if(map.getLayer(id))map.setLayoutProperty(id,'visibility',enabled?'visible':'none');invalidateTrees();if(enabled){lastKey='';schedule(300);}else{++epoch;clearTimeout(timer);clearTimeout(task);timer=task=null;busy=false;text('Akkerland uit');}}
+        function setEnabled(value){enabled=!!value;toggle&&(toggle.checked=enabled);for(const id of[FILL,EDGE,ROWS])if(map.getLayer(id))map.setLayoutProperty(id,'visibility',enabled?'visible':'none');invalidateTrees();if(enabled){lastKey='';schedule(initialPriority()?0:300);}else{++epoch;++publication;clearTimeout(timer);clearTimeout(task);timer=task=null;timerDue=Infinity;busy=false;awaitingRender=false;detachRenderCheck();stats.phase='disabled';stats.rendered=false;text('Akkerland uit');}}
         const onToggle=()=>setEnabled(toggle.checked);
         const before=['Rivers','Ocean','lakes','Town names'].find(id=>map.getLayer(id));
         try{
@@ -1822,11 +1909,11 @@ function createBiganeRuralGeometry() {
           map.addLayer({id:FILL,type:'fill',source:SOURCE,minzoom:MIN_ZOOM,filter:['==',['get','role'],'parcel'],paint:{'fill-color':['get','color'],'fill-antialias':false,'fill-opacity':['interpolate',['linear'],['zoom'],4.7,0.15,5.5,0.55,7,0.72,10,0.76]}},before);
           map.addLayer({id:EDGE,type:'line',source:SOURCE,minzoom:6,filter:['==',['get','role'],'parcel'],layout:{'line-join':'round'},paint:{'line-color':'#69785b','line-opacity':['interpolate',['linear'],['zoom'],6,0.12,8,0.30,11,0.40],'line-width':['interpolate',['linear'],['zoom'],6,0.35,9,0.65,12,1.0]}},before);
           map.addLayer({id:ROWS,type:'line',source:SOURCE,minzoom:7.5,filter:['==',['get','role'],'furrow'],paint:{'line-color':'#e0d5b6','line-opacity':['interpolate',['linear'],['zoom'],7.5,0,9,0.22,12,0.30],'line-width':['interpolate',['linear'],['zoom'],7.5,0.35,10,0.6,13,0.85]}},before);
-          map.on('moveend',onMoveEnd);map.on('sourcedata',onData);map.on('idle',onIdle);toggle?.addEventListener('change',onToggle);
-          ruralLandscapeController={containsField,setEnabled,getStats:()=>({...stats,enabled,minZoom:MIN_ZOOM,activeSourceFeatures:sourceFeatures.length,cachedTownPlans:caches.size,sourceRevision,renderChanges}),refresh:()=>{lastKey='';schedule(0);},dispose(){disposed=true;++epoch;clearTimeout(timer);clearTimeout(task);clearTimeout(forestTimer);map.off('moveend',onMoveEnd);map.off('sourcedata',onData);map.off('idle',onIdle);toggle?.removeEventListener('change',onToggle);for(const id of[ROWS,EDGE,FILL])if(map.getLayer(id))map.removeLayer(id);if(map.getSource(SOURCE))map.removeSource(SOURCE);}};
+          map.on('moveend',onMoveEnd);map.on('sourcedata',onData);map.on('idle',onIdle);map.on('error',onSourceError);toggle?.addEventListener('change',onToggle);
+          ruralLandscapeController={containsField,setEnabled,getStats:()=>({...stats,enabled,minZoom:MIN_ZOOM,firstPrepared,startupPriority:initialPriority(),sourceLoaded:sourceLoaded(SOURCE),activeSourceFeatures:sourceFeatures.length,cachedTownPlans:caches.size,sourceRevision,renderChanges}),refresh:()=>{lastKey='';schedule(0);},dispose(){disposed=true;++epoch;++publication;clearTimeout(timer);clearTimeout(task);clearTimeout(forestTimer);detachRenderCheck();map.off('moveend',onMoveEnd);map.off('sourcedata',onData);map.off('idle',onIdle);map.off('error',onSourceError);toggle?.removeEventListener('change',onToggle);for(const id of[ROWS,EDGE,FILL])if(map.getLayer(id))map.removeLayer(id);if(map.getSource(SOURCE))map.removeSource(SOURCE);}};
           window.biganeRuralDebug=()=>ruralLandscapeController?.getStats();
           window.biganeRuralExport=()=>JSON.parse(JSON.stringify({type:'FeatureCollection',features:sourceFeatures}));
-          text('Akkerland: wacht op kaart- en terreingegevens');schedule(1200);
+          text('Akkerland: wacht op kaart- en terreingegevens');schedule(0);
         }catch(error){fail(error);}
       }
 
@@ -5332,10 +5419,11 @@ function createBiganeRuralGeometry() {
       /* BIGANE_RURAL_START_BEGIN */
       map.on("load", () => {
         try { installBiganeRoadStyling(); } catch (error) { console.warn("Landwegen blijven oorspronkelijk:", error); }
-        // Defer new scenery; never change the original startup/snow sequence.
+        // Start only this extra scenery on the next task. All original load
+        // handlers and snow calibration keep their original order and code.
         setTimeout(() => {
-          try { installBiganeRuralLayer(); } catch (error) { console.warn("Akkerland overgeslagen:", error); }
-        }, 1500);
+          try { installBiganeRuralLayer(); } catch (error) { ruralStartupError=String(error?.message||error);console.warn("Akkerland overgeslagen:", error); }
+        }, 0);
       });
       /* BIGANE_RURAL_START_END */
 
@@ -5347,6 +5435,9 @@ function createBiganeRuralGeometry() {
           const models = [...landmarkStatesByName.values()];
           return {
             water: waterPolishController?.getStats?.() || null,
+            farmland: ruralLandscapeController?.getStats?.() || null,
+            farmlandRequired: document.getElementById('toggle-farmland')?.checked !== false && map.getZoom() >= 4.7,
+            farmlandError: ruralStartupError,
             snowReady: snowCalibrated,
             forestRequired: document.getElementById('toggle-forests')?.checked !== false && map.getZoom() >= HF_SETTINGS.minZoom,
             forestReady: Boolean(hybridForestController?.lastBuildKey && hybridForestController?.heightReady),
