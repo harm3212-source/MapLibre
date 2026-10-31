@@ -1687,234 +1687,533 @@ function createBiganeRuralGeometry() {
       let ruralLandscapeController = null;
       let ruralStartupError = null;
       function installBiganeRuralLayer() {
-        if(ruralLandscapeController)return;
-        const geo=createBiganeRuralGeometry();
-        const SOURCE='bigane-farms-v49-r1',FILL='bigane-farms-fill-v49-r1',EDGE='bigane-farms-edge-v49-r1',ROWS='bigane-farms-rows-v49-r1';
-        const MIN_ZOOM=4.7,MAX_TOWNS=96,MAX_PARCELS=1800,MAX_CACHE=280;
-        const toggle=document.getElementById('toggle-farmland'),statusEl=document.getElementById('farmland-status');
-        let enabled=toggle?.checked!==false,disposed=false,timer=null,task=null,epoch=0,pending=true,busy=false,lastKey='',sourceRevision=0;
-        let activeFields=[],sourceFeatures=[],maskBuckets=new Map(),publishedIds='',renderChanges=0,forestTimer=null;
-        let wasInRange=map.getZoom()>=MIN_ZOOM,lastModelSignature='',terrainRevision=0;
-        // Farmland only: no change to snow calibration, terrain loading or storage.
-        let timerDue=Infinity,firstPrepared=false,publication=0,hasPublished=false;
-        let awaitingRender=false,renderSubscribed=false,dataAccepted=false,pendingDataPromise=false;
-        const initialPriority=()=>!firstPrepared && window.BiganeV49Progress?.isOpen?.()===true;
-        const pauseBetweenChunks=()=>initialPriority()?0:24;
-        const cellWorld=24000/geo.EARTH,caches=new Map(),registry=new Map();
-        const stats={version:'v49-farmland-startup-r2',phase:'waiting',parcels:0,towns:0,generatedTowns:0,cacheHits:0,sourceUpdates:0,lastComputeMs:0,maxChunkMs:0,terrainQueries:0,rejected:{},error:null,waitingFor:'Kaartgegevens',checkedTowns:0,totalTowns:0,checkedParcels:0,rendered:false,incompleteTerrain:0};
-        const stamp=()=>performance.now();
-        function text(s){if(statusEl)statusEl.textContent=s;}
-        function activeMask(){return enabled&&map.getZoom()>=MIN_ZOOM;}
-        function invalidateTrees(){
-          clearTimeout(forestTimer);forestTimer=setTimeout(()=>{
-            if(disposed)return;
-            if(hybridForestController){hybridForestController.needsRebuild=true;hybridForestController.scheduleRebuild?.(true,160);}
-          },180);
+        if (ruralLandscapeController) return;
+        const geo = createBiganeRuralGeometry();
+        const SOURCE = 'bigane-farms-v49-r1', FILL = 'bigane-farms-fill-v49-r1';
+        const EDGE = 'bigane-farms-edge-v49-r1', ROWS = 'bigane-farms-rows-v49-r1';
+        const MIN_ZOOM = 4.7, MAX_TOWNS = 96, MAX_PARCELS = 1800;
+        // Fixed for EACH town. The number of other towns on screen must never
+        // alter a town's plan. Render limits select WHOLE plans, not new fields.
+        const PARCELS_PER_TOWN = 32;
+        const toggle = document.getElementById('toggle-farmland');
+        const statusEl = document.getElementById('farmland-status');
+        const registry = new Map(), names = new Map(), plans = new Map();
+        const cellWorld = 24000 / geo.EARTH;
+        let enabled = toggle?.checked !== false, disposed = false;
+        let timer = null, timerDue = Infinity, task = null, iterator = null, forestTimer = null;
+        let busy = false, pending = true, epoch = 0, viewRevision = 0, sourceRevision = 0;
+        let firstPrepared = false, lastKey = '', lastModelSignature = '';
+        let activeFields = [], sourceFeatures = [], maskBuckets = new Map();
+        let residentKeys = new Set(), publishedIds = '', renderChanges = 0;
+        let publication = 0, hasPublished = false, awaitingRender = false;
+        let renderSubscribed = false, dataAccepted = false, pendingDataPromise = false;
+        let wasInRange = map.getZoom() >= MIN_ZOOM;
+        const stats = {
+          version: 'v49-fixed-town-farms-r3', phase: 'waiting', parcels: 0, towns: 0,
+          generatedTowns: 0, cacheHits: 0, sourceUpdates: 0, lastComputeMs: 0,
+          maxChunkMs: 0, terrainQueries: 0, rejected: {}, error: null,
+          waitingFor: 'Kaartgegevens', checkedTowns: 0, totalTowns: 0,
+          checkedParcels: 0, rendered: false, incompleteTerrain: 0,
+          frozenPlans: 0, reusedPlans: 0, cancelledJobs: 0, staleResultsSkipped: 0,
+          deferredTowns: 0, deferredByBudget: 0, explicitPlanEdits: 0
+        };
+        const stamp = () => performance.now();
+        const initialPriority = () => !firstPrepared && window.BiganeV49Progress?.isOpen?.() === true;
+        const pauseBetweenChunks = () => initialPriority() ? 0 : 24;
+        const text = value => { if (statusEl) statusEl.textContent = value; };
+        const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const population = value => typeof value === 'number' ? Math.max(0, value) : Number(String(value ?? '').replace(/[^0-9]/g, '')) || 0;
+        const sourceLoaded = id => { try { return !!map.getSource(id) && map.isSourceLoaded(id); } catch (_) { return false; } };
+        const configForName = name => LANDMARKS_3D.find(c => [c.name, ...(c.aliases || [])].some(a => normalize(a) === normalize(name)));
+        const currentLandmark = c => c ? landmarkStatesByName.get(c.name)?.config || c : null;
+        const coversBox = (a, b) => a[0] <= b[0] && a[1] <= b[1] && a[2] >= b[2] && a[3] >= b[3];
+        const townBox = town => {
+          const r = town.outer * town.mpu * 1.25;
+          return [town.xy[0] - r, town.xy[1] - r, town.xy[0] + r, town.xy[1] + r];
+        };
+        const definition = town => [town.coords[0], town.coords[1], town.outer, town.urban].join(':');
+        function activeMask() { return enabled && map.getZoom() >= MIN_ZOOM; }
+        function invalidateTrees() {
+          clearTimeout(forestTimer);
+          forestTimer = setTimeout(() => {
+            if (disposed) return;
+            if (hybridForestController) {
+              hybridForestController.needsRebuild = true;
+              hybridForestController.scheduleRebuild?.(true, 160);
+            }
+          }, 180);
         }
-        function maskFromFields(fields){const buckets=new Map();for(const f of fields){const b=f.box;for(let x=Math.floor(b[0]/cellWorld);x<=Math.floor(b[2]/cellWorld);x++)for(let y=Math.floor(b[1]/cellWorld);y<=Math.floor(b[3]/cellWorld);y++){const k=x+':'+y;if(!buckets.has(k))buckets.set(k,[]);buckets.get(k).push(f);}}return buckets;}
-        function containsField(x,y){if(!activeMask())return false;const a=maskBuckets.get(Math.floor(x/cellWorld)+':'+Math.floor(y/cellWorld));if(!a)return false;const p=[x,y];return a.some(f=>geo.inBox(p,f.box)&&geo.inRing(p,f.ring));}
-        function queryLayer(id,unique){const l=map.getLayer(id);if(!l?.source)return[];const sl=l['source-layer']||l.sourceLayer,key=l.source+'|'+(sl||'');if(unique?.has(key))return[];unique?.add(key);try{return map.querySourceFeatures(l.source,sl?{sourceLayer:sl}:undefined)||[];}catch(_){return[];}}
-        function normalize(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');}
-        function population(v){if(typeof v==='number')return Math.max(0,v);return Number(String(v??'').replace(/[^0-9]/g,''))||0;}
-        function configForName(n){return LANDMARKS_3D.find(c=>[c.name,...(c.aliases||[])].some(a=>normalize(a)===normalize(n)));}
-        function currentLandmark(c){if(!c)return null;const s=landmarkStatesByName.get(c.name);return s?.config||c;}
-        function collectTowns(){
-          const seen=new Set();let features=[];
-          for(const id of ['Town names','Capitals','clickable'])features.push(...queryLayer(id,seen));
-          const towns=[];const dedup=new Set();
-          for(const f of features){if(f.geometry?.type!=='Point')continue;const p=f.properties||{},name=p.Burg||p.name||p.Name;if(!name||!f.geometry.coordinates?.every(Number.isFinite))continue;
-            const config=currentLandmark(configForName(name));
-            let coords=f.geometry.coordinates.slice(0,2),modelWidth=0;
-            if(config?.positionMode==='absolute'&&Number.isFinite(config.lng)&&Number.isFinite(config.lat)){coords=[config.lng,config.lat];if(config.visible!==false)modelWidth=Number(config.widthMeters)||0;}
-            const compact=normalize(name);
-            let key=config?'model:'+normalize(config.name):(f.id!=null?'city:'+f.id+':'+compact:null);
-            if(!key){const previous=[...registry.values()].find(t=>t.compact===compact&&Math.hypot(t.coords[0]-coords[0],t.coords[1]-coords[1])<0.08);key=previous?.key||'city:'+compact+':'+coords.map(v=>v.toFixed(2)).join(':');}
-            if(dedup.has(key))continue;dedup.add(key);
-            const prior=registry.get(key);
-            // Preserve the first resolved native point across vector tile LODs;
-            // absolute model edits explicitly replace it.
-            if(prior&&!config)coords=prior.coords;
-            const cap=p.Capital===true||/^(capital|yes|1|true)$/i.test(String(p.Capital??p.capital??''));
-            const t=geo.makeTown({key,name,compact,coords,population:population(p.Population??p.population),capital:cap,modelWidth});
-            registry.set(key,t);towns.push(t);
+        function maskFromFields(fields) {
+          const buckets = new Map();
+          for (const f of fields) {
+            const b = f.box;
+            for (let x = Math.floor(b[0] / cellWorld); x <= Math.floor(b[2] / cellWorld); x++) {
+              for (let y = Math.floor(b[1] / cellWorld); y <= Math.floor(b[3] / cellWorld); y++) {
+                const key = x + ':' + y;
+                if (!buckets.has(key)) buckets.set(key, []);
+                buckets.get(key).push(f);
+              }
+            }
           }
-          // Preserve loaded towns needed to protect neighboring built-up cores.
-          return towns;
+          return buckets;
         }
-        function frame(){const b=map.getBounds(),a=geo.world([b.getWest(),b.getNorth()]),c=geo.world([b.getEast(),b.getSouth()]);const w=c[0]-a[0],h=c[1]-a[1];return[a[0]-w*0.16,a[1]-h*0.16,c[0]+w*0.16,c[1]+h*0.16];}
-        function snowLimit(){
-          if(!snowCalibrated)return null;
-          const ex=map.getPaintProperty(SNOW_LAYER_ID,'color-relief-color');
-          if(Array.isArray(ex))for(let i=5;i<ex.length;i+=2){const rgba=ex[i+1];if(Array.isArray(rgba)&&rgba[0]==='rgba'&&rgba[4]>0)return Number(ex[i-2]);}
+        function containsField(x, y) {
+          if (!activeMask()) return false;
+          const bucket = maskBuckets.get(Math.floor(x / cellWorld) + ':' + Math.floor(y / cellWorld));
+          return !!bucket?.some(f => geo.inBox([x, y], f.box) && geo.inRing([x, y], f.ring));
+        }
+        function queryLayer(id, unique) {
+          const layer = map.getLayer(id);
+          if (!layer?.source) return [];
+          const sourceLayer = layer['source-layer'] || layer.sourceLayer;
+          const key = layer.source + '|' + (sourceLayer || '');
+          if (unique?.has(key)) return [];
+          unique?.add(key);
+          try { return map.querySourceFeatures(layer.source, sourceLayer ? {sourceLayer} : undefined) || []; }
+          catch (_) { return []; }
+        }
+        function getView() {
+          const b = map.getBounds();
+          const a = geo.world([b.getWest(), b.getNorth()]);
+          const c = geo.world([b.getEast(), b.getSouth()]);
+          const view = [Math.min(a[0], c[0]), Math.min(a[1], c[1]), Math.max(a[0], c[0]), Math.max(a[1], c[1])];
+          const w = view[2] - view[0], h = view[3] - view[1];
+          return {view, box: [view[0] - w * 0.16, view[1] - h * 0.16, view[2] + w * 0.16, view[3] + h * 0.16]};
+        }
+        function cameraToken() {
+          const {view} = getView();
+          return [...view, map.getZoom(), map.getPitch?.() || 0, map.getBearing?.() || 0].map(v => Number(v).toFixed(10)).join(':');
+        }
+        function snowLimit() {
+          if (!snowCalibrated) return null;
+          const ex = map.getPaintProperty(SNOW_LAYER_ID, 'color-relief-color');
+          if (Array.isArray(ex)) {
+            for (let i = 5; i < ex.length; i += 2) {
+              const rgba = ex[i + 1];
+              if (Array.isArray(rgba) && rgba[0] === 'rgba' && rgba[4] > 0) return Number(ex[i - 2]);
+            }
+          }
           return Infinity;
         }
-        function fingerprint(features){let h=2166136261;for(const f of features){const s=String(f.id??'')+JSON.stringify(f.geometry?.coordinates?.[0]?.[0]??'')+String(f.geometry?.coordinates?.length??0);h^=geo.hash(s);h=Math.imul(h,16777619);}return h>>>0;}
-        function sourceLoaded(id){try{return !!map.getSource(id)&&map.isSourceLoaded(id);}catch(_){return false;}}
-        function detachRenderCheck(){if(renderSubscribed){map.off('render',onFarmRender);renderSubscribed=false;}}
-        function onFarmRender(){
-          // A generated GeoJSON is not yet a visible layer. Observe one actual
-          // render AFTER its worker update and visible source tiles are ready.
-          if(disposed||!enabled||busy||!awaitingRender||!dataAccepted||!sourceLoaded(SOURCE))return;
-          awaitingRender=false;detachRenderCheck();firstPrepared=true;
-          stats.rendered=true;stats.phase=stats.incompleteTerrain?'partial':'ready';
-          text(stats.incompleteTerrain?
-            `${stats.parcels} percelen; enkele terreinhoogtes ontbreken nog`:
-            (stats.parcels?`${stats.parcels} percelen bij ${stats.towns} plaatsen`:'Geen geschikt akkerland in het geladen gebied'));
+        function modelSignature() {
+          return LANDMARKS_3D.map(c => {
+            const v = currentLandmark(c);
+            return [v.name, v.lng, v.lat, v.widthMeters, v.visible, v.positionMode].join(':');
+          }).join('|');
         }
-        function commit(fields,features,townCount){
-          const ids=fields.map(f=>f.id+':'+(f.renderColor||'')+':'+f.box.map(v=>v.toFixed(8)).join(':')).sort().join('|');
-          const changed=ids!==publishedIds,needsUpload=changed||!hasPublished;
-          const token=++publication;
-          stats.parcels=fields.length;stats.towns=townCount;stats.phase='rendering';stats.rendered=false;
-          awaitingRender=true;dataAccepted=!needsUpload;pendingDataPromise=false;
-          if(!renderSubscribed){map.on('render',onFarmRender);renderSubscribed=true;}
-          if(needsUpload){
-            activeFields=fields;sourceFeatures=features;maskBuckets=maskFromFields(fields);publishedIds=ids;hasPublished=true;
-            const source=map.getSource(SOURCE);if(!source)throw new Error('Akkerlandbron ontbreekt');
-            // MapLibre 6 returns a promise; older versions are observed through
-            // the source data events below. Neither route invents completion.
-            const update=source.setData({type:'FeatureCollection',features});
-            stats.sourceUpdates++;if(changed){renderChanges++;invalidateTrees();}
-            if(update&&typeof update.then==='function'){pendingDataPromise=true;update.then(()=>{
-              if(disposed||token!==publication)return;
-              dataAccepted=true;map.triggerRepaint();
-            }).catch(error=>{if(!disposed&&token===publication)fail(error);});}
-          }
-          text('Akkerland: percelen worden op de kaart gezet');map.triggerRepaint();
+        function removePlan(key) {
+          if (plans.delete(key)) stats.explicitPlanEdits++;
+          // Only actual landmark edits remove established plans, never camera
+          // position, zoom, DEM detail changes or missing source fragments.
         }
-        function collectJob(){
-          const box=frame(),center=geo.world([map.getCenter().lng,map.getCenter().lat]);
-          const requiredSources=new Set(['bigane-dem',...['Biomes','Ocean','lakes','Rivers','Routes','Trail 7000','Town names','Capitals','clickable'].map(id=>map.getLayer(id)?.source)].filter(Boolean));
-          if([...requiredSources].some(id=>!sourceLoaded(id))){stats.waitingFor='Terrein en kaartgegevens';return null;}
-          const limit=snowLimit();
-          if(limit===null){stats.waitingFor='Sneeuwinstellingen';return null;}
-          stats.waitingFor='';
-          collectTowns();
-          // Use the resolved model position, never its former town anchor.
-          for(const [key,old] of registry){if(!key.startsWith('model:'))continue;const c=currentLandmark(configForName(old.name));if(c?.positionMode==='absolute'&&Number.isFinite(c.lng)&&Number.isFinite(c.lat))registry.set(key,geo.makeTown({...old,coords:[c.lng,c.lat],modelWidth:c.visible!==false?c.widthMeters:0}));}
-          let towns=[...registry.values()].filter(t=>geo.inBox(t.xy,box));
-          towns.sort((a,b)=>Math.hypot(a.xy[0]-center[0],a.xy[1]-center[1])-Math.hypot(b.xy[0]-center[0],b.xy[1]-center[1]));
-          towns=towns.slice(0,MAX_TOWNS).sort((a,b)=>a.key.localeCompare(b.key));
-          const bs=queryLayer('Biomes'),ws=[...queryLayer('Ocean'),...queryLayer('lakes')];
-          const routeSeen=new Set();const rs=[];
-          for(const id of ['Routes','Trail 7000'])for(const f of queryLayer(id,routeSeen)){if(['roads','trails'].includes(String(f.properties?.type||'').toLowerCase()))rs.push(f);}
-          for(const f of queryLayer('Rivers'))rs.push({...f,properties:{...f.properties,type:'river'}});
-          // Loaded open sea / an area with no towns is a valid empty result,
-          // not a reason for the loading screen to wait forever.
-          const townSig=towns.map(t=>`${t.key}:${t.coords.join(',')}:${t.modelWidth}:${t.population}`).join('|');
-          const key=[townSig,fingerprint(bs),fingerprint(ws),fingerprint(rs),terrainRevision,Math.floor(map.getZoom()),Number.isFinite(limit)?limit.toFixed(3):'none'].join('/');
-          return{box,towns,bs,ws,rs,limit,key};
-        }
-        function *generate(job){
-          const ctx=geo.makeContext(job.bs,job.ws,job.rs),accepted=[],features=[],byTown=new Set(),rejected={};let terrainQueries=0;
-          const perTownBudget=Math.min(32,Math.max(8,Math.floor(MAX_PARCELS/Math.max(1,job.towns.length))));
-          const allTowns=[...registry.values()].filter(t=>geo.overlaps([t.xy[0]-t.urban*t.mpu,t.xy[1]-t.urban*t.mpu,t.xy[0]+t.urban*t.mpu,t.xy[1]+t.urban*t.mpu],job.box));
-          const exaggeration=Number(map.getTerrain?.()?.exaggeration)||1.5;
-          const height=p=>{terrainQueries++;try{const h=map.queryTerrainElevation(p);return h==null?null:h/exaggeration;}catch(_){return null;}};
-          for(const town of job.towns){
-            const def=[town.coords[0],town.coords[1],town.outer,town.urban].join(':');let cache=caches.get(town.key);
-            if(!cache||cache.def!==def){const angle=geo.nearestRoadAngle(town,ctx.roads.filter(r=>r.type!=='river'));cache={def,fields:geo.makeCandidates(town,angle)};caches.delete(town.key);caches.set(town.key,cache);stats.generatedTowns++;}else{stats.cacheHits++;caches.delete(town.key);caches.set(town.key,cache);}
-            // Cache keeps the parcel plan stable; constraints are checked again
-            // when new terrain/water/biome data arrives, not on render frames.
-            let townFields=0;
-            const localBox=[town.xy[0]-town.outer*town.mpu,town.xy[1]-town.outer*town.mpu,town.xy[0]+town.outer*town.mpu,town.xy[1]+town.outer*town.mpu];
-            const local={biomes:ctx.biomes.filter(s=>geo.overlaps(localBox,s.box)),water:ctx.water.filter(s=>geo.overlaps(localBox,s.box)),roads:ctx.roads.filter(s=>geo.overlaps(localBox,s.box))};
-            for(const field of cache.fields){
-              if(accepted.length>=MAX_PARCELS||townFields>=perTownBudget)break;
-              if(!geo.overlaps(field.box,job.box))continue;
-              const result=geo.validate(field,local,allTowns,accepted,height,job.limit);
-              if(result.reason)rejected[result.reason]=(rejected[result.reason]||0)+1;
-              else{accepted.push({...field,renderColor:result.color});features.push(...geo.toFeatures(field,result));townFields++;byTown.add(town.key);}
-              stats.checkedParcels++;
-              yield;
+        function reconcileModelEdits() {
+          const sig = modelSignature();
+          if (sig === lastModelSignature) return false;
+          lastModelSignature = sig;
+          let changed = false;
+          for (const [key, old] of registry) {
+            if (!key.startsWith('model:')) continue;
+            const c = currentLandmark(configForName(old.name));
+            if (!c || c.positionMode !== 'absolute' || !Number.isFinite(c.lng) || !Number.isFinite(c.lat)) continue;
+            const next = geo.makeTown({...old, coords: [c.lng, c.lat], modelWidth: c.visible !== false ? Number(c.widthMeters) || 0 : 0});
+            if (definition(next) !== definition(old)) {
+              registry.set(key, next); removePlan(key); changed = true;
             }
-            stats.checkedTowns++;
           }
-          while(caches.size>MAX_CACHE)caches.delete(caches.keys().next().value);
-          // Town registry is a small CPU cache, not an ever-growing draw list.
-          if(registry.size>1400){for(const [key,t]of registry){if(!geo.inBox(t.xy,job.box)&&!key.startsWith('model:'))registry.delete(key);if(registry.size<=1100)break;}}
-          stats.rejected=rejected;stats.terrainQueries=terrainQueries;
-          stats.incompleteTerrain=rejected['missing-terrain']||0;
-          if(rejected['missing-terrain']||rejected['zero-terrain'])lastKey='';
-          return{accepted,features,towns:byTown.size};
+          return changed;
         }
-        function begin(){
-          timer=null;timerDue=Infinity;
-          if(disposed||!enabled||map.getZoom()<MIN_ZOOM){busy=false;return;}
-          if(busy){pending=true;return;}
-          if(map.isMoving?.()){schedule(350);return;}
-          let job;try{job=collectJob();}catch(error){fail(error);return;}
-          if(!job){stats.phase='waiting';text('Akkerland: wacht op '+(stats.waitingFor||'kaartgegevens'));pending=true;if(initialPriority())schedule(250);return;}
-          if(job.key===lastKey){pending=false;return;}
-          lastKey=job.key;pending=false;busy=true;stats.phase='preparing';stats.error=null;ruralStartupError=null;stats.rendered=false;
-          stats.totalTowns=job.towns.length;stats.checkedTowns=0;stats.checkedParcels=0;stats.incompleteTerrain=0;
-          text('Akkerland wordt per gebied voorbereid...');
-          const id=++epoch,iterator=generate(job);let computeMs=0;
-          function step(){
-            if(disposed||!enabled||id!==epoch){busy=false;return;}
-            if(map.isMoving?.()){task=setTimeout(step,180);return;}
-            const start=stamp(),budget=initialPriority()?6:4;
-            try{
-              let next;
-              do{next=iterator.next();if(next.done){
-                const used=stamp()-start;computeMs+=used;stats.maxChunkMs=Math.max(stats.maxChunkMs,Math.round(used*100)/100);
-                stats.lastComputeMs=Math.round(computeMs);busy=false;task=null;
-                commit(next.value.accepted,next.value.features,next.value.towns);if(pending)schedule(650);return;
-              }}while(stamp()-start<budget);
-              const used=stamp()-start;computeMs+=used;stats.maxChunkMs=Math.max(stats.maxChunkMs,Math.round(used*100)/100);
-              task=setTimeout(step,pauseBetweenChunks());
-            }catch(error){busy=false;fail(error);}
-          }task=setTimeout(step,pauseBetweenChunks());
+        function collectTowns() {
+          const unique = new Set();
+          const features = ['Town names', 'Capitals', 'clickable'].flatMap(id => queryLayer(id, unique));
+          // Sort first-arrival records, so a different vector tile order cannot
+          // select another duplicate point or population inside the same job.
+          features.sort((a, b) => {
+            const ap = a.properties || {}, bp = b.properties || {};
+            return String(ap.Burg || ap.name || ap.Name || '').localeCompare(String(bp.Burg || bp.name || bp.Name || '')) ||
+              Number(a.geometry?.coordinates?.[0]) - Number(b.geometry?.coordinates?.[0]) ||
+              Number(a.geometry?.coordinates?.[1]) - Number(b.geometry?.coordinates?.[1]);
+          });
+          for (const feature of features) {
+            if (feature.geometry?.type !== 'Point') continue;
+            const p = feature.properties || {}, name = p.Burg || p.name || p.Name;
+            const raw = feature.geometry.coordinates?.slice(0, 2);
+            if (!name || !raw || !raw.every(Number.isFinite)) continue;
+            const compact = normalize(name), config = currentLandmark(configForName(name));
+            let coords = raw, width = 0, key = config ? 'model:' + normalize(config.name) : null;
+            if (config?.positionMode === 'absolute' && Number.isFinite(config.lng) && Number.isFinite(config.lat)) {
+              coords = [config.lng, config.lat];
+              width = config.visible !== false ? Number(config.widthMeters) || 0 : 0;
+            }
+            if (!key) {
+              const xy = geo.world(coords), scale = geo.mpu(coords[1]);
+              // IDs/rounded coordinates in vector tiles can change with LOD.
+              // Reuse the closest canonical same-name town, not the new tile ID.
+              const matches = (names.get(compact) || []).map(k => registry.get(k)).filter(Boolean)
+                .map(t => ({t, distance: Math.hypot(t.xy[0] - xy[0], t.xy[1] - xy[1]) / scale}))
+                .filter(v => v.distance < 10000).sort((a, b) => a.distance - b.distance);
+              key = matches[0]?.t.key || (feature.id != null ? 'city:' + feature.id + ':' + compact : 'city:' + compact + ':' + coords.map(v => v.toFixed(2)).join(':'));
+            }
+            const previous = registry.get(key);
+            if (previous) continue; // Canonical native coordinates AND dimensions stay fixed.
+            const capital = p.Capital === true || /^(capital|yes|1|true)$/i.test(String(p.Capital ?? p.capital ?? ''));
+            const town = geo.makeTown({key, name, compact, coords, population: population(p.Population ?? p.population), capital, modelWidth: width});
+            registry.set(key, town);
+            if (!names.has(compact)) names.set(compact, []);
+            names.get(compact).push(key);
+          }
+          reconcileModelEdits();
         }
-        function fail(error){
-          stats.error=String(error?.message||error);stats.phase='error';stats.rendered=false;if(!ruralLandscapeController)ruralStartupError=stats.error;
-          pending=false;busy=false;awaitingRender=false;++publication;
-          clearTimeout(timer);clearTimeout(task);timer=task=null;timerDue=Infinity;detachRenderCheck();
-          text('Akkerland niet beschikbaar; kaart blijft werken');console.warn('Bigane akkerland:',error);
+        function createPlan(town, context) {
+          const extent = townBox(town);
+          const roads = context.roads.filter(r => r.type !== 'river' && geo.overlaps(r.box, extent));
+          // Canonical segment order/direction for equal-distance road fragments.
+          roads.sort((a, b) => a.box.join(':').localeCompare(b.box.join(':')));
+          let angle = geo.nearestRoadAngle(town, roads);
+          if (angle !== null) angle = ((angle % Math.PI) + Math.PI) % Math.PI;
+          const candidates = geo.makeCandidates(town, angle);
+          const plan = {
+            key: town.key, def: definition(town), town, extent, angle,
+            candidates, approved: [], rejected: new Set(), complete: false,
+            unresolved: candidates.length, revision: 0, attempt: ''
+          };
+          plans.set(town.key, plan); stats.generatedTowns++;
+          return plan;
         }
-        function schedule(delay=600){
-          if(disposed)return;pending=true;
-          if(!enabled||map.getZoom()<MIN_ZOOM||busy)return;
-          // Keep the earliest request. A stream of source events must not keep
-          // pushing the first generation into the future (trailing-debounce starvation).
-          const due=stamp()+Math.max(0,delay);
-          if(timer!==null&&timerDue<=due)return;
-          clearTimeout(timer);timerDue=due;
-          timer=setTimeout(()=>{timer=null;timerDue=Infinity;begin();},Math.max(0,due-stamp()));
+        function detachRenderCheck() {
+          if (renderSubscribed) { map.off('render', onFarmRender); renderSubscribed = false; }
         }
-        function onMoveEnd(){const inRange=map.getZoom()>=MIN_ZOOM;if(inRange!==wasInRange){wasInRange=inRange;invalidateTrees();}schedule(650);}
-        const watched=new Set(['bigane-dem',map.getLayer('Biomes')?.source,map.getLayer('Routes')?.source,map.getLayer('Town names')?.source].filter(Boolean));
-        function onData(e){
-          if(e?.sourceId===SOURCE){
-            if(awaitingRender&&!pendingDataPromise&&e.isSourceLoaded){dataAccepted=true;map.triggerRepaint();}
+        function onFarmRender() {
+          if (disposed || !enabled || busy || !awaitingRender || !dataAccepted || !sourceLoaded(SOURCE)) return;
+          awaitingRender = false; detachRenderCheck(); firstPrepared = true;
+          stats.rendered = true; stats.phase = stats.incompleteTerrain ? 'partial' : 'ready';
+          text(stats.incompleteTerrain ?
+            `${stats.parcels} vaste percelen; een nieuw gebied wacht nog op gegevens` :
+            (stats.parcels ? `${stats.parcels} vaste percelen bij ${stats.towns} plaatsen` : 'Geen geschikt akkerland in het geladen gebied'));
+        }
+        function publish() {
+          if (disposed || !enabled || map.isMoving?.() || map.getZoom() < MIN_ZOOM) return;
+          const {view, box} = getView();
+          const pool = [...plans.values()].filter(p => p.approved.length && geo.overlaps(p.extent, box));
+          // Keep already visible towns first. Capacity pressure can postpone a
+          // whole new town; it can NEVER change an existing town's parcel list.
+          const priority = p => {
+            const onScreen = p.approved.some(f => geo.overlaps(f.box, view));
+            return onScreen ? (residentKeys.has(p.key) ? 0 : 1) : (residentKeys.has(p.key) ? 2 : 3);
+          };
+          pool.sort((a, b) => priority(a) - priority(b) || geo.hash(a.key) - geo.hash(b.key) || a.key.localeCompare(b.key));
+          const chosen = [], fields = []; let deferred = 0, reserved = 0;
+          for (const p of pool) {
+            const cost = p.complete ? p.approved.length : PARCELS_PER_TOWN;
+            if (chosen.length >= MAX_TOWNS || reserved + cost > MAX_PARCELS) { deferred++; continue; }
+            reserved += cost; chosen.push(p); fields.push(...p.approved);
+          }
+          fields.sort((a, b) => a.id.localeCompare(b.id));
+          const signature = chosen.map(p => p.key + '/' + p.def + '/' + p.revision).sort().join('|');
+          stats.parcels = fields.length; stats.towns = chosen.length; stats.deferredByBudget = deferred;
+          stats.frozenPlans = [...plans.values()].filter(p => p.complete).length;
+          residentKeys = new Set(chosen.map(p => p.key));
+          if (hasPublished && signature === publishedIds) {
+            if (!awaitingRender) {
+              stats.phase = stats.incompleteTerrain ? 'partial' : 'ready';
+              stats.rendered = firstPrepared;
+              text(fields.length ? `${fields.length} vaste percelen bij ${chosen.length} plaatsen` : 'Geen geschikt akkerland in het geladen gebied');
+            }
             return;
           }
-          if(watched.has(e?.sourceId)&&e.isSourceLoaded){
-            sourceRevision++;
-            if(e.sourceId==='bigane-dem'&&(!e.sourceDataType||e.sourceDataType==='content'))terrainRevision++;
-            schedule(initialPriority()?60:1000);
+          const features = fields.flatMap(f => geo.toFeatures(f, {color: f.renderColor, biome: f.renderBiome}));
+          const token = ++publication;
+          stats.phase = 'rendering'; stats.rendered = false;
+          awaitingRender = true; dataAccepted = false; pendingDataPromise = false;
+          if (!renderSubscribed) { map.on('render', onFarmRender); renderSubscribed = true; }
+          const source = map.getSource(SOURCE);
+          if (!source) throw new Error('Akkerlandbron ontbreekt');
+          activeFields = fields; sourceFeatures = features; maskBuckets = maskFromFields(fields);
+          publishedIds = signature; hasPublished = true;
+          const update = source.setData({type: 'FeatureCollection', features});
+          stats.sourceUpdates++; renderChanges++; invalidateTrees();
+          if (update && typeof update.then === 'function') {
+            pendingDataPromise = true;
+            update.then(() => {
+              if (disposed || token !== publication) return;
+              dataAccepted = true; map.triggerRepaint();
+            }).catch(error => { if (!disposed && token === publication) fail(error); });
+          }
+          text('Akkerland: vaste percelen op de kaart zetten'); map.triggerRepaint();
+        }
+        function collectJob() {
+          const {view, box} = getView();
+          const required = new Set(['bigane-dem', ...['Biomes', 'Ocean', 'lakes', 'Rivers', 'Routes', 'Trail 7000', 'Town names', 'Capitals', 'clickable'].map(id => map.getLayer(id)?.source)].filter(Boolean));
+          if ([...required].some(id => !sourceLoaded(id))) { stats.waitingFor = 'Terrein en kaartgegevens'; return null; }
+          const limit = snowLimit();
+          if (limit === null) { stats.waitingFor = 'Sneeuwinstellingen'; return null; }
+          stats.waitingFor = '';
+          collectTowns();
+          let towns = [...registry.values()].filter(t => geo.overlaps(townBox(t), box));
+          towns.sort((a, b) => {
+            const av = geo.inBox(a.xy, view), bv = geo.inBox(b.xy, view);
+            return Number(bv) - Number(av) || a.key.localeCompare(b.key);
+          });
+          towns = towns.slice(0, MAX_TOWNS);
+          const todo = towns.filter(t => !plans.get(t.key)?.complete);
+          stats.cacheHits += towns.length - todo.length;
+          stats.reusedPlans = towns.length - todo.length;
+          const bs = todo.length ? queryLayer('Biomes') : [];
+          const ws = todo.length ? [...queryLayer('Ocean'), ...queryLayer('lakes')] : [];
+          const rs = [], seen = new Set();
+          if (todo.length) {
+            for (const id of ['Routes', 'Trail 7000']) for (const f of queryLayer(id, seen)) {
+              if (['roads', 'trails'].includes(String(f.properties?.type || '').toLowerCase())) rs.push(f);
+            }
+            for (const f of queryLayer('Rivers')) rs.push({...f, properties: {...f.properties, type: 'river'}});
+          }
+          const key = [todo.map(t => t.key + ':' + definition(t)).join('|'), sourceRevision, view.map(v => v.toFixed(8)).join(':'), Number.isFinite(limit) ? limit.toFixed(3) : 'none'].join('/');
+          return {view, box, towns, todo, bs, ws, rs, limit, key,
+            camera: cameraToken(), viewRevision, sourceRevision, models: modelSignature()};
+        }
+        function *generate(job) {
+          const context = geo.makeContext(job.bs, job.ws, job.rs);
+          const staged = new Map(), rejected = {};
+          let terrainQueries = 0, incomplete = 0, deferredTowns = 0;
+          const exaggeration = Number(map.getTerrain?.()?.exaggeration) || 1.5;
+          const heightCache = new Map();
+          const height = p => {
+            const key = p[0].toFixed(9) + ':' + p[1].toFixed(9);
+            if (heightCache.has(key)) return heightCache.get(key);
+            terrainQueries++;
+            let h = null;
+            try { const v = map.queryTerrainElevation(p); if (v != null && Number.isFinite(v)) h = v / exaggeration; } catch (_) {}
+            heightCache.set(key, h); return h;
+          };
+          for (const town of job.todo) {
+            const extent = townBox(town);
+            const local = {
+              biomes: context.biomes.filter(s => geo.overlaps(extent, s.box)),
+              water: context.water.filter(s => geo.overlaps(extent, s.box)),
+              roads: context.roads.filter(s => geo.overlaps(extent, s.box))
+            };
+            let plan = plans.get(town.key);
+            if (!plan) {
+              // Freeze the road alignment at the first resolved local plan;
+              // its individual parcels wait for complete coverage below.
+              if (!geo.inBox(town.xy, job.view) || !local.biomes.some(s => geo.contains(town.xy, s))) {
+                deferredTowns++; stats.checkedTowns++; yield; continue;
+              }
+              plan = createPlan(town, local);
+            }
+            const approved = plan.approved.slice(), known = new Set(approved.map(f => f.id));
+            const decisions = new Set(plan.rejected);
+            const neighbors = [...registry.values()].filter(t => geo.overlaps(townBox(t), extent));
+            // Established neighbors always win. New source order/camera changes
+            // cannot evict their accepted fields through the overlap test.
+            const occupied = [];
+            for (const [key, p] of plans) {
+              if (key === town.key || !geo.overlaps(p.extent, extent)) continue;
+              occupied.push(...(staged.get(key)?.approved || p.approved));
+            }
+            occupied.push(...approved);
+            let unresolved = 0;
+            for (const field of plan.candidates || []) {
+              if (known.has(field.id) || decisions.has(field.id)) continue;
+              if (approved.length >= PARCELS_PER_TOWN) break;
+              // Unknown is not land, water or a permanent rejection. Validate
+              // the full parcel, not just its intersection with the viewport.
+              if (!coversBox(job.view, field.box) || !geo.covered(field, [...local.biomes, ...local.water])) {
+                unresolved++; stats.checkedParcels++; yield; continue;
+              }
+              const result = geo.validate(field, local, neighbors, occupied, height, job.limit);
+              if (result.reason === 'missing-terrain' || result.reason === 'zero-terrain' || result.reason === 'missing-biome') {
+                unresolved++;
+                rejected[result.reason] = (rejected[result.reason] || 0) + 1;
+              } else if (result.reason) {
+                decisions.add(field.id); rejected[result.reason] = (rejected[result.reason] || 0) + 1;
+              } else {
+                const kept = {...field, renderColor: result.color, renderBiome: result.biome};
+                approved.push(kept); occupied.push(kept); known.add(field.id);
+              }
+              stats.checkedParcels++; yield;
+            }
+            const complete = approved.length >= PARCELS_PER_TOWN || unresolved === 0;
+            if (!complete && coversBox(job.view, extent)) incomplete++;
+            if (!complete) deferredTowns++;
+            staged.set(town.key, {approved, rejected: decisions, complete, unresolved});
+            stats.checkedTowns++; yield;
+          }
+          return {staged, rejected, terrainQueries, incomplete, deferredTowns};
+        }
+        function jobStillCurrent(job, id) {
+          return !disposed && enabled && id === epoch && !map.isMoving?.() &&
+            job.viewRevision === viewRevision && job.sourceRevision === sourceRevision &&
+            job.camera === cameraToken() && job.models === modelSignature();
+        }
+        function adopt(result) {
+          for (const [key, delta] of result.staged) {
+            const plan = plans.get(key);
+            if (!plan) continue;
+            if (delta.approved.length !== plan.approved.length) plan.revision++;
+            plan.approved = delta.approved;
+            plan.rejected = delta.rejected;
+            plan.complete = delta.complete; plan.unresolved = delta.unresolved;
+            // Store the APPROVED plan, not an evictable candidate-only cache.
+            // Closed plans keep compact rings/features for the whole session.
+            if (plan.complete) { plan.candidates = null; plan.rejected.clear(); }
+          }
+          stats.terrainQueries = result.terrainQueries; stats.rejected = result.rejected;
+          stats.incompleteTerrain = result.incomplete; stats.deferredTowns = result.deferredTowns;
+        }
+        function begin() {
+          timer = null; timerDue = Infinity;
+          if (disposed || !enabled || map.getZoom() < MIN_ZOOM) return;
+          if (busy) { pending = true; return; }
+          if (map.isMoving?.()) { schedule(350); return; }
+          try {
+            reconcileModelEdits();
+            // Cached fields can be shown without waiting for fresh DEM/tiles.
+            if (hasPublished || [...plans.values()].some(p => p.approved.length)) publish();
+            const job = collectJob();
+            if (!job) {
+              pending = true;
+              if (!firstPrepared) { stats.phase = 'waiting'; text('Akkerland: wacht op ' + (stats.waitingFor || 'kaartgegevens')); }
+              if (initialPriority()) schedule(250);
+              return;
+            }
+            if (!job.todo.length) {
+              pending = false; stats.incompleteTerrain = 0; stats.deferredTowns = 0;
+              publish(); return;
+            }
+            if (job.key === lastKey) { pending = false; publish(); return; }
+            lastKey = job.key; pending = false; busy = true;
+            stats.phase = 'preparing'; stats.error = null; ruralStartupError = null;
+            stats.totalTowns = job.todo.length; stats.checkedTowns = 0; stats.checkedParcels = 0;
+            const id = ++epoch; iterator = generate(job); let computeMs = 0;
+            text('Akkerland: nieuwe plaatsen voorbereiden, bestaande percelen blijven vast');
+            function step() {
+              task = null;
+              if (disposed || id !== epoch) return;
+              if (!jobStillCurrent(job, id)) {
+                stats.staleResultsSkipped++; cancelWork(false); schedule(120); return;
+              }
+              const start = stamp(), budget = initialPriority() ? 6 : 4;
+              try {
+                let next;
+                do {
+                  next = iterator.next();
+                  if (next.done) {
+                    const used = stamp() - start; computeMs += used;
+                    stats.maxChunkMs = Math.max(stats.maxChunkMs, Math.round(used * 100) / 100);
+                    if (!jobStillCurrent(job, id)) { stats.staleResultsSkipped++; cancelWork(false); schedule(120); return; }
+                    iterator = null; busy = false; stats.lastComputeMs = Math.round(computeMs);
+                    adopt(next.value); publish(); if (pending) schedule(400); return;
+                  }
+                } while (stamp() - start < budget);
+                const used = stamp() - start; computeMs += used;
+                stats.maxChunkMs = Math.max(stats.maxChunkMs, Math.round(used * 100) / 100);
+                task = setTimeout(step, pauseBetweenChunks());
+              } catch (error) { busy = false; iterator = null; fail(error); }
+            }
+            task = setTimeout(step, pauseBetweenChunks());
+          } catch (error) { fail(error); }
+        }
+        function cancelWork(count = true) {
+          if (busy && count) stats.cancelledJobs++;
+          ++epoch;
+          if (iterator) { try { iterator.return(); } catch (_) {} }
+          iterator = null; clearTimeout(task); task = null;
+          busy = false; pending = true; lastKey = '';
+          // DO NOT clear accepted plans, visible features or the tree mask.
+        }
+        function fail(error) {
+          cancelWork(false);
+          stats.error = String(error?.message || error); stats.phase = 'error';
+          if (!ruralLandscapeController) ruralStartupError = stats.error;
+          clearTimeout(timer); timer = null; timerDue = Infinity; pending = false;
+          detachRenderCheck(); awaitingRender = false;
+          text('Nieuwe akkers niet beschikbaar; bestaande percelen blijven staan');
+          console.warn('Bigane akkerland:', error);
+        }
+        function schedule(delay = 600) {
+          if (disposed) return; pending = true;
+          if (!enabled || map.getZoom() < MIN_ZOOM || busy) return;
+          const due = stamp() + Math.max(0, delay);
+          if (timer !== null && timerDue <= due) return;
+          clearTimeout(timer); timerDue = due;
+          timer = setTimeout(() => { timer = null; timerDue = Infinity; begin(); }, Math.max(0, due - stamp()));
+        }
+        function onMoveStart() {
+          viewRevision++; cancelWork();
+          clearTimeout(timer); timer = null; timerDue = Infinity;
+        }
+        function onMoveEnd() {
+          const inRange = map.getZoom() >= MIN_ZOOM;
+          if (inRange !== wasInRange) { wasInRange = inRange; invalidateTrees(); }
+          // Immediately reuse final plans; only new places need preparation.
+          try { publish(); } catch (error) { fail(error); }
+          schedule(180);
+        }
+        const watched = new Set(['bigane-dem', ...['Biomes', 'Ocean', 'lakes', 'Rivers', 'Routes', 'Trail 7000', 'Town names', 'Capitals', 'clickable'].map(id => map.getLayer(id)?.source)].filter(Boolean));
+        function onData(event) {
+          if (event?.sourceId === SOURCE) {
+            if (awaitingRender && !pendingDataPromise && event.isSourceLoaded) { dataAccepted = true; map.triggerRepaint(); }
+            return;
+          }
+          if (!watched.has(event?.sourceId) || !event.isSourceLoaded) return;
+          // Ignore visibility/style-only notifications. Real source content can
+          // unlock pending/new parcels, but never revalidate frozen fields.
+          if (event.sourceDataType && !['content', 'metadata'].includes(event.sourceDataType)) return;
+          sourceRevision++;
+          if (busy) { stats.staleResultsSkipped++; cancelWork(false); }
+          schedule(initialPriority() ? 60 : 350);
+        }
+        function onSourceError(event) { if (event?.sourceId === SOURCE) fail(event.error || new Error('Akkerlandbron kon niet worden verwerkt')); }
+        function onIdle() {
+          if (modelSignature() !== lastModelSignature) {
+            cancelWork(false); reconcileModelEdits(); pending = true;
+          }
+          if (pending && timer === null && !busy) schedule(initialPriority() ? 0 : 350);
+        }
+        function setEnabled(value) {
+          enabled = !!value; if (toggle) toggle.checked = enabled;
+          for (const id of [FILL, EDGE, ROWS]) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', enabled ? 'visible' : 'none');
+          invalidateTrees(); cancelWork(false);
+          if (enabled) { publish(); schedule(initialPriority() ? 0 : 100); }
+          else {
+            clearTimeout(timer); timer = null; timerDue = Infinity;
+            ++publication; awaitingRender = false; detachRenderCheck();
+            stats.phase = 'disabled'; stats.rendered = false; text('Akkerland uit');
           }
         }
-        function onSourceError(e){if(e?.sourceId===SOURCE)fail(e.error||new Error('Akkerlandbron kon niet worden verwerkt'));}
-        function onIdle(){
-          const sig=LANDMARKS_3D.map(c=>[c.name,c.lng,c.lat,c.widthMeters,c.visible].join(':')).join('|');
-          if(sig!==lastModelSignature){lastModelSignature=sig;pending=true;lastKey='';}
-          if(pending&&timer===null&&!busy)schedule(initialPriority()?0:650);
-        }
-        function setEnabled(value){enabled=!!value;toggle&&(toggle.checked=enabled);for(const id of[FILL,EDGE,ROWS])if(map.getLayer(id))map.setLayoutProperty(id,'visibility',enabled?'visible':'none');invalidateTrees();if(enabled){lastKey='';schedule(initialPriority()?0:300);}else{++epoch;++publication;clearTimeout(timer);clearTimeout(task);timer=task=null;timerDue=Infinity;busy=false;awaitingRender=false;detachRenderCheck();stats.phase='disabled';stats.rendered=false;text('Akkerland uit');}}
-        const onToggle=()=>setEnabled(toggle.checked);
-        const before=['Rivers','Ocean','lakes','Town names'].find(id=>map.getLayer(id));
-        try{
-          map.addSource(SOURCE,{type:'geojson',data:{type:'FeatureCollection',features:[]},maxzoom:12,tolerance:0.35,buffer:32});
+        const onToggle = () => setEnabled(toggle.checked);
+        const before = ['Rivers', 'Ocean', 'lakes', 'Town names'].find(id => map.getLayer(id));
+        try {
+          map.addSource(SOURCE, {type: 'geojson', data: {type: 'FeatureCollection', features: []}, maxzoom: 12, tolerance: 0.35, buffer: 32});
           map.addLayer({id:FILL,type:'fill',source:SOURCE,minzoom:MIN_ZOOM,filter:['==',['get','role'],'parcel'],paint:{'fill-color':['get','color'],'fill-antialias':false,'fill-opacity':['interpolate',['linear'],['zoom'],4.7,0.15,5.5,0.55,7,0.72,10,0.76]}},before);
           map.addLayer({id:EDGE,type:'line',source:SOURCE,minzoom:6,filter:['==',['get','role'],'parcel'],layout:{'line-join':'round'},paint:{'line-color':'#69785b','line-opacity':['interpolate',['linear'],['zoom'],6,0.12,8,0.30,11,0.40],'line-width':['interpolate',['linear'],['zoom'],6,0.35,9,0.65,12,1.0]}},before);
           map.addLayer({id:ROWS,type:'line',source:SOURCE,minzoom:7.5,filter:['==',['get','role'],'furrow'],paint:{'line-color':'#e0d5b6','line-opacity':['interpolate',['linear'],['zoom'],7.5,0,9,0.22,12,0.30],'line-width':['interpolate',['linear'],['zoom'],7.5,0.35,10,0.6,13,0.85]}},before);
-          map.on('moveend',onMoveEnd);map.on('sourcedata',onData);map.on('idle',onIdle);map.on('error',onSourceError);toggle?.addEventListener('change',onToggle);
-          ruralLandscapeController={containsField,setEnabled,getStats:()=>({...stats,enabled,minZoom:MIN_ZOOM,firstPrepared,startupPriority:initialPriority(),sourceLoaded:sourceLoaded(SOURCE),activeSourceFeatures:sourceFeatures.length,cachedTownPlans:caches.size,sourceRevision,renderChanges}),refresh:()=>{lastKey='';schedule(0);},dispose(){disposed=true;++epoch;++publication;clearTimeout(timer);clearTimeout(task);clearTimeout(forestTimer);detachRenderCheck();map.off('moveend',onMoveEnd);map.off('sourcedata',onData);map.off('idle',onIdle);map.off('error',onSourceError);toggle?.removeEventListener('change',onToggle);for(const id of[ROWS,EDGE,FILL])if(map.getLayer(id))map.removeLayer(id);if(map.getSource(SOURCE))map.removeSource(SOURCE);}};
-          window.biganeRuralDebug=()=>ruralLandscapeController?.getStats();
-          window.biganeRuralExport=()=>JSON.parse(JSON.stringify({type:'FeatureCollection',features:sourceFeatures}));
-          text('Akkerland: wacht op kaart- en terreingegevens');schedule(0);
-        }catch(error){fail(error);}
+          lastModelSignature = modelSignature();
+          map.on('movestart', onMoveStart); map.on('moveend', onMoveEnd);
+          map.on('sourcedata', onData); map.on('idle', onIdle); map.on('error', onSourceError);
+          toggle?.addEventListener('change', onToggle);
+          ruralLandscapeController = {
+            containsField, setEnabled,
+            getStats: () => ({...stats, enabled, minZoom: MIN_ZOOM, firstPrepared, startupPriority: initialPriority(),
+              sourceLoaded: sourceLoaded(SOURCE), activeSourceFeatures: sourceFeatures.length,
+              cachedTownPlans: plans.size, knownTowns: registry.size, sourceRevision, renderChanges,
+              parcelLimitPerTown: PARCELS_PER_TOWN, planStorage: 'session-frozen-accepted-plans',
+              activeTownKeys: [...residentKeys], viewRevision, busy}),
+            refresh: () => { lastKey = ''; schedule(0); },
+            dispose() {
+              disposed = true; cancelWork(false); ++publication;
+              clearTimeout(timer); clearTimeout(task); clearTimeout(forestTimer); detachRenderCheck();
+              map.off('movestart', onMoveStart); map.off('moveend', onMoveEnd); map.off('sourcedata', onData);
+              map.off('idle', onIdle); map.off('error', onSourceError); toggle?.removeEventListener('change', onToggle);
+              for (const id of [ROWS, EDGE, FILL]) if (map.getLayer(id)) map.removeLayer(id);
+              if (map.getSource(SOURCE)) map.removeSource(SOURCE);
+              plans.clear(); registry.clear(); names.clear(); maskBuckets.clear();
+            }
+          };
+          window.biganeRuralDebug = () => ruralLandscapeController?.getStats();
+          window.biganeRuralExport = () => JSON.parse(JSON.stringify({type:'FeatureCollection', features:sourceFeatures}));
+          text('Akkerland: vaste plaatsplannen voorbereiden'); schedule(0);
+        } catch (error) { fail(error); }
       }
 
       // BEGIN BIGANE_ROMAN_ROADS_V49
