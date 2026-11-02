@@ -1,0 +1,29 @@
+{
+  "tilejson": "3.0.0",
+  "name": "Bigane vaste biomes en landbouw",
+  "scheme": "xyz",
+  "minzoom": 0,
+  "maxzoom": 7,
+  "bounds": [
+    -86.36,
+    -52.400000000000006,
+    91.55,
+    51.68
+  ],
+  "tiles": [
+    "./{z}/{x}/{y}.pbf"
+  ],
+  "vector_layers": [
+    {
+      "id": "biomes",
+      "minzoom": 0,
+      "maxzoom": 7,
+      "fields": {
+        "Biome": "String",
+        "Color": "String",
+        "OriginalBiome": "String",
+        "OriginalColor": "String"
+      }
+    }
+  ]
+}
