@@ -929,6 +929,33 @@
       map.addControl(new maplibregl.NavigationControl(), "top-right");
       map.addControl(new KankaTokenControl(), "top-right");
 
+      // Verified article identities are independent of saved model placement.
+      // Keep these canonical links usable even when the Kanka API is unavailable.
+      const LANDMARK_KANKA_ARTICLES = Object.freeze({
+        "Stonefront": Object.freeze({"entityId":4628947,"articleName":"Stonefront"}),
+        "Ehlehuak": Object.freeze({"entityId":4610556,"articleName":"Ehuleak"}),
+        "Khuktul": Object.freeze({"entityId":4629041,"articleName":"Kuktul"}),
+        "Ambrezzo": Object.freeze({"entityId":4573770,"articleName":"Ambrezzo"}),
+        "Yumizen": Object.freeze({"entityId":5512528,"articleName":"Yumizen"}),
+        "Seawatch": Object.freeze({"entityId":4629005,"articleName":"Seawatch"}),
+        "Old Hill": Object.freeze({"entityId":5894022,"articleName":"Old Hill"}),
+        "Ecbashah": Object.freeze({"entityId":4718381,"articleName":"Ecbashah"}),
+        "Morbus": Object.freeze({"entityId":4598090,"articleName":"Morbus"}),
+        "Matronass": Object.freeze({"entityId":4597952,"articleName":"Matronass"}),
+        "Padin": Object.freeze({"entityId":4637513,"articleName":"Padin"}),
+        "Tillfort": Object.freeze({"entityId":4610373,"articleName":"Tillfort"}),
+        "Khypir Tul": Object.freeze({"entityId":4629006,"articleName":"Khypir Tul"}),
+        "Priddam": Object.freeze({"entityId":4660109,"articleName":"Priddam"}),
+        "Vinboa": Object.freeze({"entityId":4597947,"articleName":"Vinboa"}),
+        "Kibumun": Object.freeze({"entityId":10104145,"articleName":"Kibumun"}),
+        "Copper": Object.freeze({"entityId":4622579,"articleName":"Copper"}),
+        "Baktul": Object.freeze({"entityId":4629075,"articleName":"Baktul"}),
+        "Homebase Stijn": Object.freeze({"entityId":4796864,"articleName":"The Grove of Korijeth"}),
+        "Jeruma": Object.freeze({"entityId":8008992,"articleName":"Jeruma"}),
+        "Prav": Object.freeze({"entityId":4794449,"articleName":"Prav"}),
+        "Buryfort": Object.freeze({"entityId":4629003,"articleName":"Buryfort"})
+      });
+
       const kankaLocationsByName = new Map();
       const kankaCityMarkers = new Map();
       let kankaLocationsLoaded = false;
@@ -941,6 +968,34 @@
           "Accept": "application/json",
           "Authorization": `Bearer ${getKankaToken()}`
         };
+      }
+
+      function findLandmarkKankaArticle(name) {
+        const wanted = normalizeLocationName(name);
+        if (!wanted) return null;
+        for (const [mapName, article] of Object.entries(LANDMARK_KANKA_ARTICLES)) {
+          if (normalizeLocationName(mapName) === wanted ||
+              normalizeLocationName(article.articleName) === wanted) return article;
+        }
+        // Only an existing landmark name or one of its explicit aliases may
+        // resolve to a differently named article. Never use prefix matching.
+        const config = LANDMARKS_3D.find(item => landmarkNameMatches(name, item));
+        return config ? LANDMARK_KANKA_ARTICLES[config.name] || null : null;
+      }
+
+      function cachedLandmarkKankaImage(article) {
+        const imageOf = location => location?.popupImage || location?.image_full || location?.image_thumb || null;
+        const entityIdOf = location => Number(location?.entity_id ?? location?.entity?.id);
+        const named = kankaLocationsByName.get(normalizeLocationName(article.articleName));
+        const namedId = entityIdOf(named);
+        if (named && (!(Number.isSafeInteger(namedId) && namedId > 0) || namedId === article.entityId)) {
+          const image = imageOf(named);
+          if (image) return image;
+        }
+        for (const location of kankaLocationsByName.values()) {
+          if (entityIdOf(location) === article.entityId) return imageOf(location);
+        }
+        return null;
       }
 
       function findExactKankaEntity(entities, expectedName) {
@@ -1006,6 +1061,13 @@
 
       async function openKankaPopup(feature) {
         const name = feature.properties?.Burg;
+        const article = findLandmarkKankaArticle(name);
+        if (article) {
+          createLocationPopup(feature,
+            `https://app.kanka.io/w/${KANKA_CAMPAIGN_ID}/entities/${article.entityId}`,
+            cachedLandmarkKankaImage(article));
+          return;
+        }
         if (!name || !getKankaToken()) {
           createLocationPopup(feature);
           return;
@@ -4768,7 +4830,12 @@
         {"name":"Kibumun","model":"./Kibumun_Dwarven_Greenhouse_Farm.glb","visible":true,"widthMeters":32000,"rotationDeg":-125,"lng":-15.9397888,"lat":50.0703622,"positionMode":"absolute","elevationOffsetMeters":-3700,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Copper","model":"./Copper_MapLibre_Textured.glb","visible":true,"widthMeters":32000,"rotationDeg":0,"lng":-13.5186767578125,"lat":46.77937368205562,"positionMode":"absolute","elevationOffsetMeters":-3300,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Baktul","model":"./Baktul_v3.glb","visible":true,"widthMeters":42000,"rotationDeg":0,"positionMode":"anchor","elevationOffsetMeters":-4200,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Baktul"]},
-        {"name":"Erlenkonig","model":"./Erlenkonig_Kneeling_Elven_King.glb","visible":true,"widthMeters":12000,"rotationDeg":0,"positionMode":"anchor","elevationOffsetMeters":-200,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ruby Observatory","Ruby observatory"]}
+        {"name":"Erlenkonig","model":"./Erlenkonig_Kneeling_Elven_King.glb","visible":true,"widthMeters":12000,"rotationDeg":0,"positionMode":"anchor","elevationOffsetMeters":-200,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ruby Observatory","Ruby observatory"]},
+        {"name":"Kagagawagi","model":"./Elven_Japanese_War_Camp.glb","visible":true,"widthMeters":22000,"rotationDeg":0,"lng":-13.16986083984375,"lat":46.17008319939009,"positionMode":"absolute","elevationOffsetMeters":-4971.486,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Homebase Stijn","model":"./White_Willow_Druidic_Grove.glb","visible":true,"widthMeters":14000,"rotationDeg":0,"lng":-9.250144958496094,"lat":47.03994817488845,"positionMode":"absolute","elevationOffsetMeters":-8138.599,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["The Grove of Korijeth"]},
+        {"name":"Jeruma","model":"./Jeruma_v1_MapLibre_Textured.glb","visible":true,"widthMeters":40000,"rotationDeg":-110,"lng":-20.401205966387,"lat":-37.834452412208385,"positionMode":"absolute","elevationOffsetMeters":-6403.736,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Prav","model":"./Prav_v4_Floating_Fix.glb","visible":true,"widthMeters":30000,"rotationDeg":0,"lng":-12.95013427734375,"lat":45.63996763988404,"positionMode":"absolute","elevationOffsetMeters":-5745.94,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Buryfort","model":"./Buryfort_Compact.glb","visible":true,"widthMeters":20000,"rotationDeg":0,"lng":-15.039939880371094,"lat":44.910116028706625,"positionMode":"absolute","elevationOffsetMeters":-8381.248,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0}
       ].map(config => ({
         visible: true,
         terrainMode: "point",
@@ -5029,6 +5096,8 @@
             this.selectedName = null;
             this.hoveredName = null;
             this.auditStartedAt = new Date().toISOString();
+            this.terrainRefreshPending = false;
+            this.terrainRefreshForce = false;
 
             this.scene.add(new THREE.HemisphereLight(0xf5f1df, 0x3f463d, 2.15));
             const sun = new THREE.DirectionalLight(0xffe7ba, 2.5);
@@ -5050,6 +5119,7 @@
                 error: null,
                 renderVisible: false,
                 elevationCacheKey: "",
+                lastValidElevationKey: "",
                 elevation: 0,
                 audit: {
                   status: "not-loaded",
@@ -5142,14 +5212,26 @@
                 }
               }
 
-              let elevation = 0;
-              if (values.length) {
-                if (mode === "coast") elevation = landmarkPercentile(values, 0.25);
-                else if (mode === "high") elevation = landmarkPercentile(values, 0.75);
-                else elevation = landmarkPercentile(values, 0.50);
+              if (!values.length) {
+                // Keep a previous real height only for the same sample context.
+                // A missing DEM is not a measured sea-level value.
+                if (state.lastValidElevationKey !== key) {
+                  state.lastValidElevationKey = "";
+                  state.elevation = Number(config.elevationOffsetMeters || 0);
+                }
+                state.elevationCacheKey = "";
+                this.terrainRefreshPending = true;
+                return state.elevation;
               }
+              let elevation;
+              if (mode === "coast") elevation = landmarkPercentile(values, 0.25);
+              else if (mode === "high") elevation = landmarkPercentile(values, 0.75);
+              else elevation = landmarkPercentile(values, 0.50);
               state.elevation = elevation + Number(config.elevationOffsetMeters || 0);
-              state.elevationCacheKey = key;
+              state.lastValidElevationKey = key;
+              const complete = values.length === (mode === "point" ? 1 : 25);
+              state.elevationCacheKey = complete ? key : "";
+              if (!complete) this.terrainRefreshPending = true;
               return state.elevation;
             };
 
@@ -5241,6 +5323,7 @@
                   state.error = null;
                   this.auditModel(state, root, bbox);
                   this.updateStatePlacement(state, true);
+                  this.queueTerrainRefresh(true);
                   this.updateVisibilityAndLoading(false);
                   this.map.triggerRepaint();
                 } catch (error) {
@@ -5306,9 +5389,9 @@
               this.map.triggerRepaint();
             };
 
-            this.updateVisibilityAndLoading = (allowLoad = true) => {
+            this.updateVisibilityAndLoading = (allowLoad = true, deferTerrain = false) => {
               const zoom = this.map.getZoom();
-              let visibleCount = 0;
+              let visibleCount = 0, changed = false;
               for (const state of landmarkStatesByName.values()) {
                 const config = state.config;
                 const coordinates = this.resolveCoordinate(state, true);
@@ -5318,16 +5401,24 @@
                 const shouldRender = config.visible !== false && coordinates && zoom >= LANDMARK_MIN_ZOOM && (norm <= LANDMARK_RENDER_RADIUS || forceSelected);
                 if (allowLoad && shouldLoad && !state.loaded && !state.loading) this.ensureModel(state);
                 if (state.loaded && state.placement) {
-                  state.renderVisible = Boolean(shouldRender);
-                  state.placement.visible = state.renderVisible;
-                  if (state.renderVisible) {
+                  const renderVisible = Boolean(shouldRender);
+                  if (state.renderVisible !== renderVisible) changed = true;
+                  state.renderVisible = renderVisible;
+                  state.placement.visible = renderVisible;
+                  if (renderVisible) {
                     visibleCount++;
-                    if (allowLoad || !state.baseScale) this.updateStatePlacement(state, false);
+                    if ((allowLoad || !state.baseScale) && (!deferTerrain || !state.baseScale)) {
+                      const previousZ = state.placement.position.z;
+                      this.updateStatePlacement(state, false);
+                      if (state.placement.position.z !== previousZ) changed = true;
+                    }
                   }
                 }
               }
               this.visibleCount = visibleCount;
-              if (allowLoad) this.map.triggerRepaint();
+              // Loading completion already requests its own frame. Repainting
+              // an unchanged scene on every idle event would create a loop.
+              if (allowLoad && changed) this.map.triggerRepaint();
             };
 
             this.getCoordinate = name => {
@@ -5385,16 +5476,48 @@
               errors: [...landmarkStatesByName.values()].filter(state => state.error).length
             });
 
-            this.onMove = () => this.updateVisibilityAndLoading(false);
-            this.onMoveEnd = () => {
-              for (const state of landmarkStatesByName.values()) state.elevationCacheKey = "";
-              this.updateVisibilityAndLoading(true);
+            this.queueTerrainRefresh = (force = false) => {
+              if (force && !this.terrainRefreshForce) {
+                for (const state of landmarkStatesByName.values()) state.elevationCacheKey = "";
+              }
+              this.terrainRefreshForce = this.terrainRefreshForce || force;
+              this.terrainRefreshPending = true;
             };
-            this.onZoom = () => this.updateVisibilityAndLoading(false);
-            this.onZoomEnd = () => this.updateVisibilityAndLoading(true);
-            this.onIdle = () => this.updateVisibilityAndLoading(true);
+            this.onTerrainRender = () => {
+              if (!this.terrainRefreshPending) return;
+              const force = this.terrainRefreshForce;
+              this.terrainRefreshPending = false;
+              this.terrainRefreshForce = false;
+              let changed = false;
+              for (const state of landmarkStatesByName.values()) {
+                if (!state.loaded || !state.renderVisible || !state.placement || state.config.visible === false) continue;
+                const previousZ = state.placement.position.z;
+                this.updateStatePlacement(state, force);
+                if (!state.elevationCacheKey) this.terrainRefreshPending = true;
+                if (state.placement.position.z !== previousZ) changed = true;
+              }
+              // The updated placement needs one following frame. Unknown or
+              // unchanged heights wait for natural renders, never self-poll.
+              if (changed) this.map.triggerRepaint();
+            };
+            this.onMove = () => {
+              this.updateVisibilityAndLoading(false);
+              this.queueTerrainRefresh();
+            };
+            this.onMoveEnd = () => {
+              this.queueTerrainRefresh(true);
+              this.updateVisibilityAndLoading(true, true);
+            };
+            this.onZoom = this.onMove;
+            this.onZoomEnd = this.onMoveEnd;
+            this.onIdle = () => this.updateVisibilityAndLoading(true, this.terrainRefreshPending);
             this.onSourceData = event => {
-              if (event?.isSourceLoaded) this.updateVisibilityAndLoading(true);
+              if (event?.sourceId === "bigane-dem" &&
+                  (event.sourceDataType === "content" || event.isSourceLoaded === true)) {
+                this.queueTerrainRefresh(true);
+                return;
+              }
+              if (event?.isSourceLoaded) this.updateVisibilityAndLoading(true, this.terrainRefreshPending);
             };
             this.onMouseMove = event => {
               if (document.body.classList.contains("landmark-edit-mode")) return;
@@ -5429,6 +5552,7 @@
             mapInstance.on("zoomend", this.onZoomEnd);
             mapInstance.on("idle", this.onIdle);
             mapInstance.on("sourcedata", this.onSourceData);
+            mapInstance.on("render", this.onTerrainRender);
             mapInstance.on("mousemove", this.onMouseMove);
             mapInstance.on("click", this.onClick);
             this.updateVisibilityAndLoading(true);
@@ -5456,10 +5580,13 @@
               ["move", this.onMove], ["moveend", this.onMoveEnd],
               ["zoom", this.onZoom], ["zoomend", this.onZoomEnd],
               ["idle", this.onIdle], ["sourcedata", this.onSourceData],
+              ["render", this.onTerrainRender],
               ["mousemove", this.onMouseMove], ["click", this.onClick]
             ]) {
               if (handler) this.map.off(event, handler);
             }
+            this.terrainRefreshPending = false;
+            this.terrainRefreshForce = false;
             this.renderer?.dispose();
             landmarkController = null;
           }
