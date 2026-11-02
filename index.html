@@ -386,194 +386,7 @@
 <!-- BIGANE_V49_PASSIVE_LOADER_STYLE_END -->
 </head>
 <body>
-<!-- BIGANE_INTEGRATED_DIAGNOSTIC_BEGIN -->
-<style id="bigane-vegen-v2-style">
-  #bigane-vegen-v2, #bigane-vegen-v2 * { box-sizing: border-box; }
-  #bigane-vegen-v2 {
-    position: fixed !important; top: 12px !important; left: 12px !important;
-    z-index: 2147483000 !important; display: block !important;
-    width: min(345px, calc(100vw - 24px)); margin: 0;
-    border: 2px solid #272b30; border-radius: 9px;
-    background: #fff; color: #182128; box-shadow: 0 3px 14px #0005;
-    font: 13px/1.45 Arial, sans-serif; pointer-events: auto !important;
-  }
-  #bigane-vegen-v2 > summary {
-    display: list-item; padding: 12px 14px; cursor: pointer;
-    background: #ffc443; color: #182128; font-weight: 800;
-    border-radius: 7px; font-size: 14px;
-  }
-  #bigane-vegen-v2[open] > summary { border-radius: 7px 7px 0 0; }
-  #bigane-vegen-v2 .vegen-body {
-    padding: 12px 14px; overflow-y: auto; max-height: calc(100vh - 95px);
-    max-height: calc(100dvh - 95px); overscroll-behavior: contain;
-  }
-  #bigane-vegen-v2 p { margin: 0 0 10px; }
-  #bigane-vegen-v2 label { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; cursor: pointer; }
-  #bigane-vegen-v2 input { flex: 0 0 auto; width: 16px; height: 16px; margin: 1px 0 0; }
-  #bigane-vegen-v2 label:has(input:disabled) { opacity: .55; }
-  #bigane-vegen-v2 .vegen-actions { display: flex; gap: 7px; flex-wrap: wrap; margin: 12px 0; }
-  #bigane-vegen-v2 button { padding: 7px 9px; border: 1px solid #8999a1; border-radius: 5px; background: #edf2f5; color: #182128; font: inherit; cursor: pointer; }
-  #bigane-vegen-v2 button:disabled { opacity: .5; cursor: default; }
-  #bigane-vegen-v2 summary:focus-visible, #bigane-vegen-v2 button:focus-visible, #bigane-vegen-v2 input:focus-visible { outline: 3px solid #14659c; outline-offset: 2px; }
-  #vegen-v2-connection { font-size: 12px; color: #435860; }
-  #vegen-v2-status { padding: 8px; background: #f1f4f5; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
-</style>
-<details id="bigane-vegen-v2" open>
-  <summary>VEGEN TESTEN</summary>
-  <div class="vegen-body">
-    <p><strong>Vergelijk dezelfde veeg.</strong> Zet eerst hillshade uit en daarna de biome-afbeelding. Vinkje = zichtbaar. Met de herstelknop krijg je de oorspronkelijke kaartweergave terug.</p>
-    <p id="vegen-v2-connection" role="status">De testknop staat klaar. De kaart wordt nog gekoppeld.</p>
-    <div id="vegen-v2-layers"></div>
-    <label style="border-top:1px solid #ddd;padding-top:9px"><input id="vegen-v2-terrain" type="checkbox" disabled><span>3D-terrein (uit = platte testkaart)</span></label>
-    <div class="vegen-actions">
-      <button id="vegen-v2-shade-off" type="button" disabled>Hillshade uit</button>
-      <button id="vegen-v2-off" type="button" disabled>Extra inkleuring uit</button>
-      <button id="vegen-v2-reset" type="button" disabled>Herstel kaartweergave</button>
-      <button id="vegen-v2-refresh" type="button">Lagen opnieuw controleren</button>
-    </div>
-    <p id="vegen-v2-status" role="status">Dit paneel is direct zichtbaar, ook als de kaart nog niet klaar is. Klik op de gele balk om het in te klappen. Testkeuzes worden niet opgeslagen.</p>
-    <noscript>JavaScript staat uit. De knop werkt, maar laagtests hebben JavaScript nodig.</noscript>
-  </div>
-</details>
-<script id="bigane-vegen-v2-script">
-(() => {
-  'use strict';
-  const byId = id => document.getElementById(id);
-  const root = byId('bigane-vegen-v2');
-  const list = byId('vegen-v2-layers');
-  const status = byId('vegen-v2-status');
-  const connection = byId('vegen-v2-connection');
-  const terrainInput = byId('vegen-v2-terrain');
-  const names = new Map([
-    ['Biome soft blend', 'Biome-afbeelding (soft blend)'],
-    ['Biomes', 'Biome-texturen'],
-    ['Simple biome', 'Vereenvoudigde biomekleuren'],
-    ['bigane-landscape-wash', 'Landschapskleurlaag'],
-    ['bigane-highland-rock', 'Grijze rotsinkleuring'],
-    ['bigane-snow-overlay', 'Sneeuwinkleuring']
-  ]);
-  const original = new Map();
-  const rows = new Map();
-  const shadeIds = new Set();
-  let map = null, timer = 0, initialTerrain = null, started = false;
-  const clone = value => value ? JSON.parse(JSON.stringify(value)) : null;
-  const fail = error => { status.textContent = 'Testfout: ' + (error.message || error); };
-  const repaint = () => map?.triggerRepaint();
-  function addRow(id, text) {
-    const label = document.createElement('label');
-    const input = document.createElement('input');
-    input.type = 'checkbox'; input.disabled = true;
-    input.dataset.layerId = id;
-    const caption = document.createElement('span'); caption.textContent = text;
-    label.append(input, caption); list.append(label); rows.set(id, {input, label});
-    input.addEventListener('change', () => {
-      try {
-        if (!map?.getLayer(id)) return;
-        map.setLayoutProperty(id, 'visibility', input.checked ? 'visible' : 'none');
-        status.textContent = (input.checked ? 'Aangezet: ' : 'Uitgezet: ') + text;
-        repaint();
-      } catch (error) { fail(error); }
-    });
-  }
-  names.forEach((text, id) => addRow(id, text));
-  function refresh() {
-    if (!map) {
-      connection.textContent = 'De kaart is nog niet gekoppeld. Controleer of style-maplibre.json naast index.html staat.';
-      return;
-    }
-    try {
-      const layers = map.getStyle()?.layers;
-      if (!layers) { connection.textContent = 'De kaartstijl wordt nog geladen.'; return; }
-      for (const layer of layers) {
-        if (layer.type !== 'hillshade') continue;
-        shadeIds.add(layer.id);
-        if (!rows.has(layer.id)) addRow(layer.id, 'Hillshade: ' + layer.id);
-      }
-      let available = 0;
-      for (const [id, {input}] of rows) {
-        const exists = !!map.getLayer(id);
-        input.disabled = !exists;
-        if (!exists) { input.checked = false; continue; }
-        available++;
-        if (!original.has(id)) {
-          original.set(id, map.getLayoutProperty(id, 'visibility') || 'visible');
-          // Keep the normal map unchanged until the user runs a test.
-        }
-        input.checked = map.getLayoutProperty(id, 'visibility') !== 'none';
-      }
-      const terrain = map.getTerrain();
-      if (!initialTerrain && terrain) initialTerrain = clone(terrain);
-      terrainInput.disabled = !initialTerrain;
-      terrainInput.checked = !!terrain;
-      byId('vegen-v2-shade-off').disabled = ![...shadeIds].some(id => map.getLayer(id));
-      byId('vegen-v2-off').disabled = !available;
-      byId('vegen-v2-reset').disabled = !available;
-      const visibleShades = [...shadeIds].filter(id => map.getLayer(id) && map.getLayoutProperty(id, 'visibility') !== 'none').length;
-      connection.textContent = available + ' testlagen beschikbaar. ' + (shadeIds.size ? (visibleShades ? visibleShades + ' hillshade-laag/lagen aan.' : 'Hillshade volledig uit.') : 'Nog geen hillshade-laag geladen.');
-      if (available && !started) {
-        started = true;
-        status.textContent = 'De gewone kaartinstellingen zijn behouden. Gebruik Hillshade uit en schakel daarna Biome-afbeelding (soft blend) uit om de veeg te vergelijken.';
-      }
-    } catch (error) { fail(error); }
-  }
-  function schedule() { if (!timer) timer = setTimeout(() => { timer = 0; refresh(); }, 150); }
-  byId('vegen-v2-refresh').addEventListener('click', refresh);
-  byId('vegen-v2-shade-off').addEventListener('click', () => {
-    try {
-      for (const id of shadeIds) if (map.getLayer(id)) {
-        map.setLayoutProperty(id, 'visibility', 'none');
-        rows.get(id).input.checked = false;
-      }
-      refresh();
-      status.textContent = 'Hillshade volledig uit. Vergelijk de veeg; zet daarna eventueel Biome-afbeelding (soft blend) uit.';
-      repaint();
-    } catch (error) { fail(error); }
-  });
-  byId('vegen-v2-off').addEventListener('click', () => {
-    try {
-      for (const [id, {input}] of rows) if (map.getLayer(id)) { map.setLayoutProperty(id, 'visibility', 'none'); input.checked = false; }
-      status.textContent = 'De hierboven genoemde inkleuringslagen zijn uit. 3D-terrein en modellen zijn niet uitgeschakeld.';
-      repaint();
-    } catch (error) { fail(error); }
-  });
-  byId('vegen-v2-reset').addEventListener('click', () => {
-    try {
-      for (const [id, value] of original) if (map.getLayer(id)) {
-        const visibility = value;
-        map.setLayoutProperty(id, 'visibility', visibility);
-      }
-      if (initialTerrain) map.setTerrain(clone(initialTerrain));
-      refresh(); status.textContent = 'Oorspronkelijke kaartweergave hersteld, inclusief hillshade en 3D-terrein.'; repaint();
-    } catch (error) { fail(error); }
-  });
-  terrainInput.addEventListener('change', () => {
-    try {
-      map.setTerrain(terrainInput.checked ? clone(initialTerrain) : null);
-      status.textContent = terrainInput.checked ? '3D-terrein hersteld.' : 'Tijdelijk een platte testkaart. Hoogtebestanden en modelposities zijn niet gewijzigd.';
-      repaint();
-    } catch (error) { fail(error); }
-  });
-  document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && root.open && root.contains(document.activeElement)) { root.open = false; root.querySelector('summary').focus(); }
-  });
-  window.BiganeVegenTestV2 = {
-    attach(instance) {
-      if (map === instance) return;
-      if (map) { map.off('load', schedule); map.off('styledata', schedule); }
-      map = instance;
-      map.on('load', schedule); map.on('styledata', schedule); schedule();
-    },
-    refresh
-  };
-  window.biganeShadowDiagnostic = () => ({
-    version: 'integrated-index-v1', attached: !!map, terrain: clone(map?.getTerrain()),
-    layers: [...rows.keys()].filter(id => map?.getLayer(id)).map(id => ({id, type: map.getLayer(id).type, visibility: map.getLayoutProperty(id, 'visibility') || 'visible'}))
-  });
-})();
-</script>
-<!-- BIGANE_INTEGRATED_DIAGNOSTIC_END -->
-
-  <div id="map"></div>
+<div id="map"></div>
   <div id="status">Bigane + Kanka initialiseren...</div>
 <!-- BIGANE_V49_PASSIVE_LOADER_BODY_BEGIN -->
 <section id="bg49-progress" aria-labelledby="bg49-progress-title" hidden>
@@ -1112,8 +925,6 @@
         renderWorldCopies: false
       });
 
-      // Layer diagnostics are part of the standard index; no persistent settings are changed.
-      window.BiganeVegenTestV2.attach(map);
 
       map.on('error', rememberBiganeLanduseSourceError);
       map.addControl(new maplibregl.NavigationControl(), "top-right");
@@ -1150,6 +961,191 @@
       const kankaCityMarkers = new Map();
       let kankaLocationsLoaded = false;
       let refreshingKankaMarkers = false;
+
+      /* BIGANE_CITY_LABEL_POLICY_V1_BEGIN */
+      // Display importance only. Never rewrite Population, tiles or popup data.
+      const CITY_LABEL_SETTINGS = Object.freeze({
+        kankaMultiplier: 4,
+        kankaMinimum: 80000,
+        capitalMinimum: 80000,
+        maxPopulationForRanking: 10000000,
+        thresholds: Object.freeze([
+          Object.freeze({population: 250000, zoom: 4}),
+          Object.freeze({population: 80000, zoom: 5}),
+          Object.freeze({population: 20000, zoom: 6}),
+          Object.freeze({population: 5000, zoom: 7}),
+          Object.freeze({population: 1000, zoom: 8}),
+          Object.freeze({population: 0, zoom: 9})
+        ])
+      });
+      // Same exact-key normalization in JavaScript and native style expressions.
+      // No fuzzy/prefix matching: Khaza never matches Khazamarch.
+      const CITY_NAME_REPLACEMENTS = [
+        ['\u00e0','a'],['\u00e1','a'],['\u00e2','a'],['\u00e3','a'],['\u00e4','a'],['\u00e5','a'],
+        ['\u00e7','c'],['\u00e8','e'],['\u00e9','e'],['\u00ea','e'],['\u00eb','e'],
+        ['\u00ec','i'],['\u00ed','i'],['\u00ee','i'],['\u00ef','i'],['\u00f1','n'],
+        ['\u00f2','o'],['\u00f3','o'],['\u00f4','o'],['\u00f5','o'],['\u00f6','o'],
+        ['\u00f9','u'],['\u00fa','u'],['\u00fb','u'],['\u00fc','u'],['\u00fd','y'],['\u00ff','y'],
+        ['\u0300',''],['\u0301',''],['\u0302',''],['\u0303',''],['\u0308',''],['\u0327',''],
+        [' ',''],['\u00a0',''],['\t',''],['-',''],['_',''],["'",''],['\u2019',''],['\u2018','']
+      ];
+      let cityLabelKankaNames = new Set();
+      let cityLabelImportantKeys = new Set();
+      let cityLabelPolicyInstalled = false;
+      let cityLabelLastSignature = '';
+      const cityLabelOriginalFilters = new Map();
+
+      function cityLabelNameKey(value) {
+        let key = String(value ?? '').toLowerCase();
+        for (const [from, to] of CITY_NAME_REPLACEMENTS) key = key.split(from).join(to);
+        return key;
+      }
+      function cityLabelReplaceExpression(input, replacements) {
+        for (const [from, to] of replacements) input = ['join', ['split', input, from], to];
+        return input;
+      }
+      function cityLabelNameExpression() {
+        return cityLabelReplaceExpression(
+          ['downcase', ['to-string', ['coalesce', ['get','Burg'], ['get','name'], ['get','Name'], '']]],
+          CITY_NAME_REPLACEMENTS);
+      }
+      function cityLabelPopulation(value) {
+        // Population is a head count. Accept plain numbers and grouped integer
+        // strings (12,000 / 12.000 / 12 000); preserve actual numeric decimals.
+        let n;
+        if (typeof value === 'number') n = value;
+        else {
+          const s = String(value ?? '').replace(/[\s\u00a0\u202f']/g, '');
+          const parts = s.replaceAll(',', '.').split('.');
+          const grouped = parts.length > 1 && parts.at(-1).length === 3 && parts[0].length <= 3;
+          n = Number(parts.join(grouped ? '' : '.'));
+        }
+        return Number.isFinite(n) ? Math.max(0, Math.min(CITY_LABEL_SETTINGS.maxPopulationForRanking, n)) : 0;
+      }
+      function cityLabelPopulationExpression() {
+        // Handle the common numeric source directly; string fallback accepts
+        // thousands separators. No source feature/state updates are necessary.
+        const raw = ['coalesce', ['get','Population'], ['get','population'], 0];
+        const compact = cityLabelReplaceExpression(['to-string', raw],
+          [[' ',''],['\u00a0',''],['\u202f',''],['\t',''],['\n',''],['\r',''],["'",'']]);
+        const stringNumber = ['let', 's', compact,
+          ['let', 'parts', ['split', ['join', ['split', ['var','s'], ','], '.'], '.'],
+          ['case', ['all', ['>', ['length', ['var','parts']], 1],
+             ['==', ['length', ['at', ['-', ['length', ['var','parts']], 1], ['var','parts']]], 3],
+             ['<=', ['length', ['at', 0, ['var','parts']]], 3]],
+            ['to-number', ['join', ['var','parts'], ''], 0],
+            ['to-number', ['join', ['var','parts'], '.'], 0]]]];
+        return ['max', 0, ['min', CITY_LABEL_SETTINGS.maxPopulationForRanking,
+          ['case', ['==', ['typeof', raw], 'number'], ['number', raw], stringNumber]]];
+      }
+      function cityLabelIsCapital(properties) {
+        return String(properties?.Capital ?? properties?.capital ?? '').toLowerCase() === 'capital';
+      }
+      function cityLabelImportance(properties) {
+        const population = cityLabelPopulation(properties?.Population ?? properties?.population);
+        const key = cityLabelNameKey(properties?.Burg ?? properties?.name ?? properties?.Name);
+        const kanka = cityLabelImportantKeys.has(key);
+        return Math.max(kanka ? Math.max(population * CITY_LABEL_SETTINGS.kankaMultiplier,
+          CITY_LABEL_SETTINGS.kankaMinimum) : population,
+          cityLabelIsCapital(properties) ? CITY_LABEL_SETTINGS.capitalMinimum : 0);
+      }
+      function cityLabelZoom(properties) {
+        const score = cityLabelImportance(properties);
+        return CITY_LABEL_SETTINGS.thresholds.find(t => score >= t.population).zoom;
+      }
+      function cityLabelEligible(properties, zoom = map.getZoom()) {
+        const layerId = cityLabelIsCapital(properties) ? 'Capitals' : 'Town names';
+        return !!map.getLayer(layerId) && map.getLayoutProperty(layerId, 'visibility') !== 'none'
+          && zoom >= cityLabelZoom(properties);
+      }
+      function cityLabelCacheKey() {
+        // Separate accounts without persisting the access token in this cache.
+        let h = 2166136261;
+        for (const ch of getKankaToken() || '') { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+        return `bigane-city-label-names-v1-${KANKA_CAMPAIGN_ID}-${h >>> 0}`;
+      }
+      function readCityLabelCache() {
+        try {
+          if (!getKankaToken()) return;
+          const cached = JSON.parse(localStorage.getItem(cityLabelCacheKey()) || 'null');
+          if (!cached || !Number.isFinite(cached.savedAt) || Date.now() - cached.savedAt > 7 * 86400000 || !Array.isArray(cached.names)) return;
+          cityLabelKankaNames = new Set(cached.names.slice(0, 20000).filter(n => typeof n === 'string' && n.length <= 250));
+        } catch (_) { /* Cache is optional; the map still works. */ }
+      }
+      function updateCityLabelKankaNames(names, complete = false) {
+        const clean = [...names].filter(n => typeof n === 'string' && n.trim() && n.length <= 250);
+        cityLabelKankaNames = new Set(complete ? clean : [...cityLabelKankaNames, ...clean]);
+        if (complete) try {
+          localStorage.setItem(cityLabelCacheKey(), JSON.stringify({savedAt: Date.now(), names: [...cityLabelKankaNames]}));
+        } catch (_) { /* Private mode / storage quota must not break labels. */ }
+        if (cityLabelPolicyInstalled) applyCityLabelPolicy();
+      }
+      function collectCityLabelImportantKeys() {
+        const keys = new Set([...cityLabelKankaNames].map(cityLabelNameKey).filter(Boolean));
+        for (const [mapName, article] of Object.entries(LANDMARK_KANKA_ARTICLES)) {
+          keys.add(cityLabelNameKey(mapName)); keys.add(cityLabelNameKey(article.articleName));
+        }
+        // Only aliases of a VERIFIED or loaded Kanka location inherit a boost.
+        // Having a GLB alone does not imply a Kanka article exists.
+        for (const config of LANDMARKS_3D) {
+          const aliases = [config.name, ...(config.aliases || [])].map(cityLabelNameKey).filter(Boolean);
+          if (aliases.some(key => keys.has(key))) aliases.forEach(key => keys.add(key));
+        }
+        return keys;
+      }
+      function cityLabelScoreExpression() {
+        const names = [...cityLabelImportantKeys].sort();
+        const hasArticle = names.length ? ['match', cityLabelNameExpression(), names, true, false] : false;
+        const capital = ['==', ['downcase', ['to-string', ['coalesce', ['get','Capital'], ['get','capital'], '']]], 'capital'];
+        return ['let', 'p', cityLabelPopulationExpression(),
+          ['max', ['case', hasArticle,
+            ['max', CITY_LABEL_SETTINGS.kankaMinimum, ['*', ['var','p'], CITY_LABEL_SETTINGS.kankaMultiplier]],
+            ['var','p']], ['case', capital, CITY_LABEL_SETTINGS.capitalMinimum, 0]]];
+      }
+      function applyCityLabelPolicy() {
+        cityLabelImportantKeys = collectCityLabelImportantKeys();
+        const signature = JSON.stringify([...cityLabelImportantKeys].sort());
+        if (signature === cityLabelLastSignature) return;
+        const score = cityLabelScoreExpression();
+        const minZoom = ['let', 'importance', score, ['case',
+          ...CITY_LABEL_SETTINGS.thresholds.slice(0, -1).flatMap(t => [['>=', ['var','importance'], t.population], t.zoom]),
+          CITY_LABEL_SETTINGS.thresholds.at(-1).zoom]];
+        for (const id of ['Town names', 'Capitals']) {
+          const layer = map.getLayer(id);
+          if (!layer || layer.type !== 'symbol') continue;
+          if (!cityLabelOriginalFilters.has(id)) cityLabelOriginalFilters.set(id, map.getFilter(id) || null);
+          const original = cityLabelOriginalFilters.get(id);
+          // Integer thresholds match native filter evaluation. Hidden labels do
+          // not enter collision placement at all (unlike opacity-only hiding).
+          const visible = ['>=', ['zoom'], minZoom];
+          map.setFilter(id, original ? ['all', original, visible] : visible);
+          map.setLayerZoomRange(id, CITY_LABEL_SETTINGS.thresholds[0].zoom, 24);
+          map.setLayoutProperty(id, 'text-allow-overlap', false);
+          map.setLayoutProperty(id, 'text-ignore-placement', false);
+          map.setLayoutProperty(id, 'icon-allow-overlap', false);
+          map.setLayoutProperty(id, 'icon-ignore-placement', false);
+          map.setLayoutProperty(id, 'icon-optional', true);
+          map.setLayoutProperty(id, 'text-optional', true);
+          map.setLayoutProperty(id, 'symbol-z-order', 'auto');
+          map.setLayoutProperty(id, 'symbol-sort-key', ['-', 0, score]);
+          map.setLayoutProperty(id, 'text-padding', 5);
+          map.setPaintProperty(id, 'text-opacity', 1);
+          map.setPaintProperty(id, 'icon-opacity', 1);
+          // Moderate label sizes; original font, colour and halo are preserved.
+          map.setLayoutProperty(id, 'text-size', ['interpolate', ['linear'], ['zoom'],
+            4, id === 'Capitals' ? 16 : 13,
+            7, id === 'Capitals' ? 18 : 14,
+            10, id === 'Capitals' ? 21 : 17]);
+        }
+        cityLabelLastSignature = signature;
+        updateKankaMarkerVisuals();
+      }
+      function installCityLabelPolicy() {
+        readCityLabelCache();
+        cityLabelPolicyInstalled = true;
+        applyCityLabelPolicy();
+      }
+      /* BIGANE_CITY_LABEL_POLICY_V1_END */
 
       function getKankaToken() { return localStorage.getItem(KANKA_ACCESS_TOKEN_KEY) || KANKA_ACCESS_TOKEN; }
 
@@ -1206,7 +1202,9 @@
         const res = await fetch(url, { headers: authHeaders() });
         if (!res.ok) throw new Error(`Kanka entities API: HTTP ${res.status}`);
         const data = await res.json();
-        return findExactKankaEntity(data.data, name);
+        const exact = findExactKankaEntity(data.data, name);
+        if (exact) updateCityLabelKankaNames([name, exact.name], false);
+        return exact;
       }
 
       async function getKankaLocation(childId) {
@@ -1288,41 +1286,48 @@
           status.textContent = "Kaart werkt. Klik rechtsboven op K om je Kanka-token in te stellen.";
           return;
         }
-
         let nextUrl = `https://api.kanka.io/1.0/campaigns/${KANKA_CAMPAIGN_ID}/locations`;
-        let pageCount = 0;
-
+        const seenPages = new Set();
+        const articleNames = new Set();
         try {
-          while (nextUrl && pageCount < 30) {
-            pageCount++;
-            const res = await fetch(nextUrl, { headers: authHeaders() });
+          while (nextUrl) {
+            const page = new URL(nextUrl, 'https://api.kanka.io');
+            if (page.origin !== 'https://api.kanka.io' || seenPages.has(page.href)) {
+              throw new Error('Ongeldige of herhaalde Kanka-vervolgpagina');
+            }
+            seenPages.add(page.href);
+            const res = await fetch(page.href, { headers: authHeaders() });
             if (!res.ok) throw new Error(`Kanka locations API: HTTP ${res.status}`);
             const result = await res.json();
-
             for (const location of (result.data || [])) {
+              if (!location.name) continue;
+              articleNames.add(location.name); // Also pages WITHOUT an image.
               const imageUrl = location.image_thumb || location.image_full || null;
-              if (!location.name || !imageUrl) continue;
               kankaLocationsByName.set(normalizeLocationName(location.name), {
-                ...location,
-                markerImage: imageUrl,
+                ...location, markerImage: imageUrl,
                 popupImage: location.image_full || location.image_thumb || null
               });
             }
-
             nextUrl = result.links?.next || null;
           }
-
+          // Refresh native style rules once, not on every API page or map move.
+          updateCityLabelKankaNames(articleNames, true);
           kankaLocationsLoaded = true;
-          status.textContent = `MapLibre + Kanka werkt. ${kankaLocationsByName.size} locaties met afbeelding geladen.`;
+          const imageCount = [...kankaLocationsByName.values()].filter(l => l.markerImage).length;
+          status.textContent = `MapLibre + Kanka werkt. ${articleNames.size} locaties krijgen labelvoorrang; ${imageCount} met afbeelding.`;
           refreshKankaCityMarkers();
         } catch (error) {
+          // Preserve cached identities and any pages already received.
+          updateCityLabelKankaNames(articleNames, false);
+          kankaLocationsLoaded = kankaLocationsByName.size > 0;
+          refreshKankaCityMarkers();
           console.warn(error);
-          status.textContent = `Kaart werkt, maar Kanka kon niet laden: ${error.message}`;
+          status.textContent = `Kaart werkt, maar Kanka kon niet volledig laden: ${error.message}`;
         }
       }
 
       function getVisibleCityFeatures() {
-        const layers = ["Town names", "Capitals", "clickable"].filter(id => map.getLayer(id));
+        const layers = ["Town names", "Capitals"].filter(id => map.getLayer(id));
         if (!layers.length) return [];
         return map.queryRenderedFeatures({ layers });
       }
@@ -1400,9 +1405,10 @@
           if (!el) continue;
           const visual = el.querySelector('.kanka-city-marker-visual');
           if (!visual) continue;
-          visual.style.opacity = String(opacity);
-          visual.style.visibility = opacity <= 0.001 ? 'hidden' : 'visible';
-          el.style.pointerEvents = opacity < 0.12 ? 'none' : 'auto';
+          const shown = cityLabelEligible(marker.biganeCityProperties || {}, zoom) ? opacity : 0;
+          visual.style.opacity = String(shown);
+          visual.style.visibility = shown <= 0.001 ? 'hidden' : 'visible';
+          el.style.pointerEvents = shown < 0.12 ? 'none' : 'auto';
         }
       }
 
@@ -1429,7 +1435,7 @@
             if (cityHas3DLandmark(cityName)) continue;
 
             const location = kankaLocationsByName.get(normalizeLocationName(cityName));
-            if (!location) continue;
+            if (!location?.markerImage || !cityLabelEligible(feature.properties)) continue;
             if (feature.geometry?.type !== "Point" || !Array.isArray(feature.geometry.coordinates)) continue;
 
             const coordinates = feature.geometry.coordinates.slice(0, 2);
@@ -1479,6 +1485,7 @@
             visual.style.visibility = initialOpacity <= 0.001 ? "hidden" : "visible";
             el.style.pointerEvents = initialOpacity < 0.12 ? "none" : "auto";
 
+            marker.biganeCityProperties = {...feature.properties};
             kankaCityMarkers.set(key, marker);
           }
 
@@ -1501,16 +1508,14 @@
         map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
       }
 
-      // Preserve the style's original population/zoom rules and original text
-      // colours. In v43 we accidentally replaced text-opacity with an almost
-      // constant value and made capitals reddish; restore both behaviours.
+      // Restrained halo styling. The label policy below supplies population /
+      // Kanka importance, visibility and collision rules; colours stay original.
       function improveCityLabelReadability() {
         for (const name of ["Town names", "Capitals"]) {
           const layer = map.getLayer(name);
           if (!layer || layer.type !== "symbol") continue;
           try {
-            // Only make a restrained contrast improvement. Never replace
-            // text-opacity, text-color, collision layout or zoom thresholds.
+            // Preserve text colour. Visibility is handled by native filters.
             map.setPaintProperty(name, "text-halo-color", "rgba(253,251,246,0.93)");
             map.setPaintProperty(name, "text-halo-width",
               name === "Capitals" ? 1.6 : 0.9);
@@ -1547,6 +1552,7 @@
             for (const id of townLayerIds) {
               setLayerVisibility(id, townsToggle.checked);
             }
+            updateKankaMarkerVisuals();
           });
         }
 
@@ -6514,6 +6520,8 @@
         installBiomeTextures().catch(error => console.warn("Biome textures overgeslagen:", error));
         installBiomeSoftBlend();
         improveCityLabelReadability();
+        try { installCityLabelPolicy(); }
+        catch (error) { console.warn("Plaatsnaamselectie kon niet starten:", error); }
 
         setupLayerSwitcher();
 
