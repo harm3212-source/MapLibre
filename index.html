@@ -962,22 +962,46 @@
       let kankaLocationsLoaded = false;
       let refreshingKankaMarkers = false;
 
-      /* BIGANE_CITY_LABEL_POLICY_V1_BEGIN */
+      /* BIGANE_CITY_LABEL_POLICY_V2_BEGIN */
       // Display importance only. Never rewrite Population, tiles or popup data.
       const CITY_LABEL_SETTINGS = Object.freeze({
         kankaMultiplier: 4,
         kankaMinimum: 80000,
         capitalMinimum: 80000,
         maxPopulationForRanking: 10000000,
+        markerMinZoom: 8,
+        markerFadeEndZoom: 8.5,
         thresholds: Object.freeze([
-          Object.freeze({population: 250000, zoom: 4}),
-          Object.freeze({population: 80000, zoom: 5}),
-          Object.freeze({population: 20000, zoom: 6}),
-          Object.freeze({population: 5000, zoom: 7}),
-          Object.freeze({population: 1000, zoom: 8}),
-          Object.freeze({population: 0, zoom: 9})
+          Object.freeze({population: 250000, zoom: 6}),
+          Object.freeze({population: 80000, zoom: 7}),
+          Object.freeze({population: 20000, zoom: 8}),
+          Object.freeze({population: 5000, zoom: 9}),
+          Object.freeze({population: 1000, zoom: 10}),
+          Object.freeze({population: 0, zoom: 11})
         ])
       });
+      const PLACE_INTERACTION_MIN_ZOOM = 6;
+      let placeInteractionEpoch = 0;
+      let placeInteractionsWereEnabled = null;
+      const placePopups = new Set();
+
+      function placeInteractionAllowed(zoom = map.getZoom()) {
+        return Number.isFinite(zoom) && zoom >= PLACE_INTERACTION_MIN_ZOOM;
+      }
+      function updatePlaceInteractionState() {
+        const enabled = placeInteractionAllowed();
+        if (!enabled) {
+          // Cancel pending popup results even when the user zooms back in
+          // before a Kanka response arrives. Do not change any model placement.
+          if (placeInteractionsWereEnabled !== false) placeInteractionEpoch++;
+          for (const popup of [...placePopups]) popup.remove();
+          placePopups.clear();
+          map.getCanvas().style.cursor = '';
+          landmarkController?.setHovered?.(null);
+        }
+        placeInteractionsWereEnabled = enabled;
+      }
+
       // Same exact-key normalization in JavaScript and native style expressions.
       // No fuzzy/prefix matching: Khaza never matches Khazamarch.
       const CITY_NAME_REPLACEMENTS = [
@@ -1058,6 +1082,10 @@
         return !!map.getLayer(layerId) && map.getLayoutProperty(layerId, 'visibility') !== 'none'
           && zoom >= cityLabelZoom(properties);
       }
+      function cityMarkerEligible(properties, zoom = map.getZoom()) {
+        return placeInteractionAllowed(zoom) && zoom >= CITY_LABEL_SETTINGS.markerMinZoom
+          && cityLabelEligible(properties, zoom);
+      }
       function cityLabelCacheKey() {
         // Separate accounts without persisting the access token in this cache.
         let h = 2166136261;
@@ -1133,9 +1161,9 @@
           map.setPaintProperty(id, 'icon-opacity', 1);
           // Moderate label sizes; original font, colour and halo are preserved.
           map.setLayoutProperty(id, 'text-size', ['interpolate', ['linear'], ['zoom'],
-            4, id === 'Capitals' ? 16 : 13,
-            7, id === 'Capitals' ? 18 : 14,
-            10, id === 'Capitals' ? 21 : 17]);
+            6, id === 'Capitals' ? 16 : 13,
+            9, id === 'Capitals' ? 18 : 14,
+            12, id === 'Capitals' ? 21 : 17]);
         }
         cityLabelLastSignature = signature;
         updateKankaMarkerVisuals();
@@ -1145,7 +1173,7 @@
         cityLabelPolicyInstalled = true;
         applyCityLabelPolicy();
       }
-      /* BIGANE_CITY_LABEL_POLICY_V1_END */
+      /* BIGANE_CITY_LABEL_POLICY_V2_END */
 
       function getKankaToken() { return localStorage.getItem(KANKA_ACCESS_TOKEN_KEY) || KANKA_ACCESS_TOKEN; }
 
@@ -1219,6 +1247,7 @@
       }
 
       function createLocationPopup(feature, link = null, imageUrl = null) {
+        if (!placeInteractionAllowed()) return null;
         const props = feature.properties || {};
         const name = escapeHtml(props.Burg || "");
         const population = escapeHtml(props.Population || "");
@@ -1241,13 +1270,19 @@
           ? `<div class="location-popup-row"><span class="location-popup-label">Population</span><span class="location-popup-value">${population}</span></div>`
           : "";
 
-        new maplibregl.Popup({ offset: [0, -15], maxWidth: "330px" })
+        const popup = new maplibregl.Popup({ offset: [0, -15], maxWidth: "330px" })
           .setLngLat(feature.geometry.coordinates)
           .setHTML(`${imageHtml}<div class="location-popup-body">${titleHtml}${tagsHtml}${populationHtml}</div>`)
           .addTo(map);
+        placePopups.add(popup);
+        popup.on('close', () => placePopups.delete(popup));
+        return popup;
       }
 
       async function openKankaPopup(feature) {
+        if (!placeInteractionAllowed()) return;
+        const epoch = placeInteractionEpoch;
+        const requestStillAllowed = () => placeInteractionAllowed() && epoch === placeInteractionEpoch;
         const name = feature.properties?.Burg;
         const article = findLandmarkKankaArticle(name);
         if (article) {
@@ -1263,6 +1298,7 @@
 
         try {
           const entity = await getKankaEntityForName(name);
+          if (!requestStillAllowed()) return;
           if (!entity) {
             createLocationPopup(feature);
             return;
@@ -1271,13 +1307,14 @@
           let imageUrl = null;
           if (entity.child_id) {
             const location = await getKankaLocation(entity.child_id);
+            if (!requestStillAllowed()) return;
             imageUrl = location?.image_full || location?.image_thumb || null;
           }
 
           createLocationPopup(feature, entity.urls?.view || null, imageUrl);
         } catch (error) {
           console.warn("Kanka popup error:", error);
-          createLocationPopup(feature);
+          if (requestStillAllowed()) createLocationPopup(feature);
         }
       }
 
@@ -1380,9 +1417,10 @@
       }
 
       function markerOpacityForZoom(zoom) {
-        if (zoom <= 3.8) return 0;
-        if (zoom >= 5.3) return 1;
-        const t = (zoom - 3.8) / (5.3 - 3.8);
+        if (!Number.isFinite(zoom) || zoom <= CITY_LABEL_SETTINGS.markerMinZoom) return 0;
+        if (zoom >= CITY_LABEL_SETTINGS.markerFadeEndZoom) return 1;
+        const t = (zoom - CITY_LABEL_SETTINGS.markerMinZoom) /
+          (CITY_LABEL_SETTINGS.markerFadeEndZoom - CITY_LABEL_SETTINGS.markerMinZoom);
         return Math.max(0, Math.min(1, t));
       }
 
@@ -1405,10 +1443,10 @@
           if (!el) continue;
           const visual = el.querySelector('.kanka-city-marker-visual');
           if (!visual) continue;
-          const shown = cityLabelEligible(marker.biganeCityProperties || {}, zoom) ? opacity : 0;
+          const shown = cityMarkerEligible(marker.biganeCityProperties || {}, zoom) ? opacity : 0;
           visual.style.opacity = String(shown);
           visual.style.visibility = shown <= 0.001 ? 'hidden' : 'visible';
-          el.style.pointerEvents = shown < 0.12 ? 'none' : 'auto';
+          el.style.pointerEvents = !placeInteractionAllowed(zoom) || shown < 0.12 ? 'none' : 'auto';
         }
       }
 
@@ -1422,7 +1460,14 @@
       }
 
       function refreshKankaCityMarkers() {
-        if (!kankaLocationsLoaded || refreshingKankaMarkers || !map.loaded()) return;
+        if (refreshingKankaMarkers) return;
+        // Do not create or retain hidden DOM portraits in the overview.
+        if (map.getZoom() < CITY_LABEL_SETTINGS.markerMinZoom) {
+          for (const marker of kankaCityMarkers.values()) marker.remove();
+          kankaCityMarkers.clear();
+          return;
+        }
+        if (!kankaLocationsLoaded || !map.loaded()) return;
         refreshingKankaMarkers = true;
 
         try {
@@ -1435,7 +1480,7 @@
             if (cityHas3DLandmark(cityName)) continue;
 
             const location = kankaLocationsByName.get(normalizeLocationName(cityName));
-            if (!location?.markerImage || !cityLabelEligible(feature.properties)) continue;
+            if (!location?.markerImage || !cityMarkerEligible(feature.properties)) continue;
             if (feature.geometry?.type !== "Point" || !Array.isArray(feature.geometry.coordinates)) continue;
 
             const coordinates = feature.geometry.coordinates.slice(0, 2);
@@ -1467,6 +1512,7 @@
             el.appendChild(visual);
 
             el.addEventListener("click", (event) => {
+              if (!cityMarkerEligible(feature.properties) || markerOpacityForZoom(map.getZoom()) < 0.12) return;
               event.preventDefault();
               event.stopPropagation();
               openKankaPopup(feature);
@@ -1483,7 +1529,7 @@
             const initialOpacity = markerOpacityForZoom(map.getZoom());
             visual.style.opacity = String(initialOpacity);
             visual.style.visibility = initialOpacity <= 0.001 ? "hidden" : "visible";
-            el.style.pointerEvents = initialOpacity < 0.12 ? "none" : "auto";
+            el.style.pointerEvents = !placeInteractionAllowed() || initialOpacity < 0.12 ? "none" : "auto";
 
             marker.biganeCityProperties = {...feature.properties};
             kankaCityMarkers.set(key, marker);
@@ -2286,8 +2332,8 @@
         "nearCap": 1500,
         "spriteCap": 36000,
         "densityMultiplier": 1,
-        "overviewSpriteCap": 12000
-});
+        "overviewSpriteCap": 6000
+      });
       const HF_SETTINGS = { ...HF_DEFAULT_SETTINGS };
       // v49 forest patch: normalize explicit numeric values, never turn an
       // empty text input into zero or silently replace zero budgets by defaults.
@@ -2350,6 +2396,39 @@
       hfNormalizeSettings();
       // Apply the three explicitly requested forest values once. Existing
       // landmark coordinates and all unrelated saved preferences are preserved.
+      const HF_OVERVIEW_CAP_UPDATE_ID = 'overview-cap-20261102-6000-v1';
+      function hfApplyOverviewSpriteCapOnce() {
+        const marker = 'bigane-forest-overview-cap-update';
+        let raw = null, stored = null;
+        try {
+          if (localStorage.getItem(marker) === HF_OVERVIEW_CAP_UPDATE_ID) return false;
+          raw = localStorage.getItem(LANDMARK_EDITOR_STORAGE_KEY);
+          if (raw) stored = JSON.parse(raw);
+        } catch (error) {
+          console.warn('Overzichtsbudget: opgeslagen instellingen niet leesbaar:', error);
+        }
+        HF_SETTINGS.overviewSpriteCap = Math.min(6000, HF_SETTINGS.spriteCap);
+        hfNormalizeSettings();
+        try {
+          if (raw) {
+            // Preserve unreadable/legacy data, and preserve all coordinates.
+            if (!stored || typeof stored !== 'object' || Array.isArray(stored) ||
+                !Array.isArray(stored.landmarks)) return true;
+            const backup = 'bigane-backup-before-' + HF_OVERVIEW_CAP_UPDATE_ID;
+            if (!localStorage.getItem(backup)) localStorage.setItem(backup, raw);
+            const forest = stored.forest && typeof stored.forest === 'object' &&
+              !Array.isArray(stored.forest) ? stored.forest : {};
+            localStorage.setItem(LANDMARK_EDITOR_STORAGE_KEY, JSON.stringify({
+              ...stored, forest: {...forest, overviewSpriteCap: HF_SETTINGS.overviewSpriteCap}
+            }));
+          }
+          localStorage.setItem(marker, HF_OVERVIEW_CAP_UPDATE_ID);
+        } catch (error) {
+          console.warn('Overzichtsbudget kon niet lokaal worden bewaard:', error);
+        }
+        return true;
+      }
+
       const HF_PERFORMANCE_UPDATE_ID = 'forest-opt-20261102-v1';
       function hfApplyPerformanceDefaultsOnce() {
         const marker = 'bigane-forest-performance-update';
@@ -5018,35 +5097,35 @@
       // viewport, then cached. Exact lng/lat takes precedence over legacy
       // city-anchor + metre offsets; existing configs are migrated at runtime.
       const LANDMARKS_3D = [
-        {"name":"Stonefront","model":"./Stonefront_v2_Textured.glb","visible":true,"widthMeters":36000,"rotationDeg":0,"lng":-7.9784111,"lat":40.3800242,"positionMode":"absolute","elevationOffsetMeters":-4100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Ehlehuak","model":"./Ehlehuak_v2_MapReady.glb","visible":true,"widthMeters":43000,"rotationDeg":-90,"lng":-15.9191895,"lat":42.2407187,"positionMode":"absolute","elevationOffsetMeters":-6650,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ehuleak","Ehléhuak","Ehlehuak","Ehuleák","Ehleuak","Ehleak"]},
+        {"name":"Stonefront","model":"./Stonefront_v2_Textured.glb","visible":true,"widthMeters":36000,"rotationDeg":0,"lng":-7.9784110981813114,"lat":40.4024996,"positionMode":"absolute","elevationOffsetMeters":-2950,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Ehlehuak","model":"./Ehlehuak_v2_MapReady.glb","visible":true,"widthMeters":43000,"rotationDeg":-90,"lng":-15.9191895,"lat":42.2407187,"positionMode":"absolute","elevationOffsetMeters":-7100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ehuleak","Ehl\u00e9huak","Ehlehuak","Ehule\u00e1k","Ehleuak","Ehleak"]},
         {"name":"Khuktul","model":"./Khuktul_v1_MapReady.glb","visible":true,"widthMeters":18000,"rotationDeg":90,"lng":-16.296795,"lat":49.1763532,"positionMode":"absolute","elevationOffsetMeters":-2750,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Kuktul"]},
-        {"name":"Ambrezzo","model":"./Ambrezzo_v2_MapReady.glb","visible":true,"widthMeters":36000,"rotationDeg":175,"lng":5.298789443589328,"lat":42.22821402675601,"positionMode":"absolute","elevationOffsetMeters":-400,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Ambrezzo","model":"./Ambrezzo_v2_MapReady.glb","visible":true,"widthMeters":36000,"rotationDeg":185,"lng":5.316989,"lat":42.1967344,"positionMode":"absolute","elevationOffsetMeters":-6750,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Yumizen","model":"./Yumizen_v1_MapReady.glb","visible":true,"widthMeters":35000,"rotationDeg":-43,"lng":-5.2083343,"lat":45.7483132,"positionMode":"absolute","elevationOffsetMeters":-7750,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Seawatch","model":"./Keelfort_v2_Compact_MapReady.glb","visible":true,"widthMeters":22857,"rotationDeg":-35,"lng":-12.836084834181975,"lat":47.22624838677086,"positionMode":"absolute","elevationOffsetMeters":-2750,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Old Hill","model":"./Ruined_Hill_Settlement_v1_MapReady.glb","visible":true,"widthMeters":29000,"rotationDeg":-160,"lng":-7.4742583000000025,"lat":40.71265629255609,"positionMode":"absolute","elevationOffsetMeters":-9200,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Ecbashah","model":"./Lake_Jewel_City_v2_Pyramid.glb","visible":true,"widthMeters":32000,"rotationDeg":-90,"lng":53.543901657934754,"lat":7.406664057630238,"positionMode":"absolute","elevationOffsetMeters":-50,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ecbashah","Ecabashah","Ecbashahh"]},
+        {"name":"Old Hill","model":"./Ruined_Hill_Settlement_v1_MapReady.glb","visible":true,"widthMeters":38100,"rotationDeg":-337,"lng":-7.4193687,"lat":40.7477297,"positionMode":"absolute","elevationOffsetMeters":-10200,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Ecbashah","model":"./Lake_Jewel_City_v2_Pyramid.glb","visible":true,"widthMeters":32000,"rotationDeg":-90,"lng":53.5302985,"lat":7.4066641,"positionMode":"absolute","elevationOffsetMeters":-5850,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ecbashah","Ecabashah","Ecbashahh"]},
         {"name":"Morbus","model":"./Frostfort_v1.glb","visible":true,"widthMeters":10700,"rotationDeg":-60,"lng":6.4141228,"lat":43.6106625,"positionMode":"absolute","elevationOffsetMeters":-3800,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Matronass","model":"./Matronass_v2_BreachedWalls.glb","visible":true,"widthMeters":42000,"rotationDeg":-90,"lng":2.2263328002069045,"lat":44.11845427924138,"positionMode":"absolute","elevationOffsetMeters":300,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Matronass","model":"./Matronass_v2_BreachedWalls.glb","visible":true,"widthMeters":42000,"rotationDeg":-108,"lng":2.2263328,"lat":44.1184543,"positionMode":"absolute","elevationOffsetMeters":-8900,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Padin","model":"./Padin_v1_Optimized_Limestone(1).glb","visible":true,"widthMeters":40000,"rotationDeg":0,"lng":-6.5885432,"lat":36.8610651,"positionMode":"absolute","elevationOffsetMeters":-4100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Tillfort","model":"./Tillfort_v3_StonefrontStyle_MapReady_FixedDomes.glb","visible":true,"widthMeters":40000,"rotationDeg":-95,"lng":-9.773421528692438,"lat":32.719165367557125,"positionMode":"absolute","elevationOffsetMeters":-1000,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Till Fort","Tilfort"]},
+        {"name":"Tillfort","model":"./Tillfort_v3_StonefrontStyle_MapReady_FixedDomes.glb","visible":true,"widthMeters":40000,"rotationDeg":-95,"lng":-9.7734215,"lat":32.7191654,"positionMode":"absolute","elevationOffsetMeters":-4300,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Till Fort","Tilfort"]},
         {"name":"Khypir Tul","model":"./Dwarven_Lighthouse_v2_FixedRoof.glb","visible":true,"widthMeters":22000,"rotationDeg":180,"lng":-14.62005615234375,"lat":48.31973404047173,"positionMode":"absolute","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Khypir Tul","Khypir-Tul","Khypirtul"]},
         {"name":"Priddam","model":"./Priddam_MapLibre_Textured.glb","visible":true,"widthMeters":40000,"rotationDeg":180,"lng":13.626142996375961,"lat":28.42941193846039,"positionMode":"absolute","elevationOffsetMeters":-4100,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Vinboa","model":"./Vinboa_Renaissance_GateRoofs_Fixed.glb","visible":true,"widthMeters":40000,"rotationDeg":-15,"lng":8.983181151128804,"lat":43.93356481107847,"positionMode":"absolute","elevationOffsetMeters":-3450,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Kibumun","model":"./Kibumun_Dwarven_Greenhouse_Farm.glb","visible":true,"widthMeters":32000,"rotationDeg":-125,"lng":-15.9397888,"lat":50.0703622,"positionMode":"absolute","elevationOffsetMeters":-3700,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
         {"name":"Copper","model":"./Copper_MapLibre_Textured.glb","visible":true,"widthMeters":32000,"rotationDeg":0,"lng":-13.5186767578125,"lat":46.77937368205562,"positionMode":"absolute","elevationOffsetMeters":-3300,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Baktul","model":"./Baktul_v3.glb","visible":true,"widthMeters":42000,"rotationDeg":0,"positionMode":"anchor","elevationOffsetMeters":-4200,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Baktul"]},
-        {"name":"Erlenkonig","model":"./Erlenkonig_Kneeling_Elven_King.glb","visible":true,"widthMeters":12000,"rotationDeg":0,"positionMode":"anchor","elevationOffsetMeters":-200,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ruby Observatory","Ruby observatory"]},
-        {"name":"Kagagawagi","model":"./Elven_Japanese_War_Camp.glb","visible":true,"widthMeters":22000,"rotationDeg":0,"lng":-13.16986083984375,"lat":46.17008319939009,"positionMode":"absolute","elevationOffsetMeters":-4971.486,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Homebase Stijn","model":"./White_Willow_Druidic_Grove.glb","visible":true,"widthMeters":14000,"rotationDeg":0,"lng":-9.250144958496094,"lat":47.03994817488845,"positionMode":"absolute","elevationOffsetMeters":-8138.599,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["The Grove of Korijeth"]},
-        {"name":"Jeruma","model":"./Jeruma_v1_MapLibre_Textured.glb","visible":true,"widthMeters":40000,"rotationDeg":-110,"lng":-20.401205966387,"lat":-37.834452412208385,"positionMode":"absolute","elevationOffsetMeters":-6403.736,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Prav","model":"./Prav_v4_Floating_Fix.glb","visible":true,"widthMeters":30000,"rotationDeg":0,"lng":-12.95013427734375,"lat":45.63996763988404,"positionMode":"absolute","elevationOffsetMeters":-5745.94,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Buryfort","model":"./Buryfort_Compact.glb","visible":true,"widthMeters":20000,"rotationDeg":0,"lng":-15.039939880371094,"lat":44.910116028706625,"positionMode":"absolute","elevationOffsetMeters":-8381.248,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
-        {"name":"Drac Ust","model":"./Drac_Ust_v4.glb","visible":true,"widthMeters":20000,"rotationDeg":0,"positionMode":"anchor","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Drac_Ust","Drac-Ust","Drac Ust"]},
-        {"name":"Coedwig","model":"./Coedwig_v1_Druidic_Oak_Capital.glb","visible":true,"widthMeters":20000,"rotationDeg":0,"positionMode":"anchor","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Coedwig","Coedwig Druidic Oak Capital"]},
-        {"name":"Toulyeux","model":"./Toulyeux_v3_Rearranged_Buildings.glb","visible":true,"widthMeters":20000,"rotationDeg":0,"positionMode":"anchor","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Toulyeux"]},
-        {"name":"Khaza","model":"./Khaza_v1_Persian_Nomad_Harbor.glb","visible":true,"widthMeters":20000,"rotationDeg":0,"positionMode":"anchor","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Khaza"]},
-        {"name":"Orn'Gard","model":"./OrnGard_v1_Great_Brick_Hold.glb","visible":true,"widthMeters":20000,"rotationDeg":0,"positionMode":"anchor","elevationOffsetMeters":0,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["OrnGard","Orn Gard","Orn-Gard"]}
+        {"name":"Baktul","model":"./Baktul_v3.glb","visible":true,"widthMeters":23850,"rotationDeg":100,"lng":-17.747050932163404,"lat":49.81425355072068,"positionMode":"absolute","elevationOffsetMeters":-9400,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Baktul"]},
+        {"name":"Erlenkonig","model":"./Erlenkonig_Kneeling_Elven_King.glb","visible":true,"widthMeters":12000,"rotationDeg":-20,"lng":-2.311536891345696,"lat":44.8691237568531,"positionMode":"absolute","elevationOffsetMeters":-19000,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Ruby Observatory","Ruby observatory"]},
+        {"name":"Kagagawagi","model":"./Elven_Japanese_War_Camp.glb","visible":true,"widthMeters":22000,"rotationDeg":-259,"lng":-13.2923239,"lat":46.2065041,"positionMode":"absolute","elevationOffsetMeters":-4500,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Homebase Stijn","model":"./White_Willow_Druidic_Grove.glb","visible":true,"widthMeters":13600,"rotationDeg":-277,"lng":-9.339384,"lat":47.0490298,"positionMode":"absolute","elevationOffsetMeters":-6600,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["The Grove of Korijeth"]},
+        {"name":"Jeruma","model":"./Jeruma_v1_MapLibre_Textured.glb","visible":true,"widthMeters":40000,"rotationDeg":-110,"lng":-20.4182866,"lat":-37.8119684,"positionMode":"absolute","elevationOffsetMeters":-6250,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Prav","model":"./Prav_v4_Floating_Fix.glb","visible":true,"widthMeters":30000,"rotationDeg":165,"lng":-12.995154,"lat":45.6399676,"positionMode":"absolute","elevationOffsetMeters":-4350,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Buryfort","model":"./Buryfort_Compact.glb","visible":true,"widthMeters":20000,"rotationDeg":35,"lng":-15.039939880371094,"lat":44.910116028706625,"positionMode":"absolute","elevationOffsetMeters":-8381.248,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0},
+        {"name":"Drac Ust","model":"./Drac_Ust_v4.glb","visible":true,"widthMeters":20000,"rotationDeg":65,"lng":-0.2744559,"lat":43.0899027,"positionMode":"absolute","elevationOffsetMeters":-13600,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Drac_Ust","Drac-Ust","Drac Ust"]},
+        {"name":"Coedwig","model":"./Coedwig_v1_Druidic_Oak_Capital.glb","visible":true,"widthMeters":20000,"rotationDeg":-135,"lng":14.5160675,"lat":40.0681455,"positionMode":"absolute","elevationOffsetMeters":-3650,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Coedwig","Coedwig Druidic Oak Capital"]},
+        {"name":"Toulyeux","model":"./Toulyeux_v3_Rearranged_Buildings.glb","visible":true,"widthMeters":20000,"rotationDeg":-153,"lng":21.0802742,"lat":11.7548684,"positionMode":"absolute","elevationOffsetMeters":-3850,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Toulyeux"]},
+        {"name":"Khaza","model":"./Khaza_v1_Persian_Nomad_Harbor.glb","visible":true,"widthMeters":20000,"rotationDeg":-111,"lng":4.3341064,"lat":23.6030186,"positionMode":"absolute","elevationOffsetMeters":-2900,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["Khaza"]},
+        {"name":"Orn'Gard","model":"./OrnGard_v1_Great_Brick_Hold.glb","visible":true,"widthMeters":15600,"rotationDeg":-141,"lng":42.5256901,"lat":48.9176418,"positionMode":"absolute","elevationOffsetMeters":-600,"terrainMode":"point","elevationSampleEastMeters":0,"elevationSampleNorthMeters":0,"aliases":["OrnGard","Orn Gard","Orn-Gard"]}
       ].map(config => ({
         visible: true,
         terrainMode: "point",
@@ -5248,7 +5327,7 @@
         }
       }
 
-      const BUNDLED_PLACEMENT_UPDATE_ID = "landmarks-20261030T150425841Z-zoom8-overview-v1";
+      const BUNDLED_PLACEMENT_UPDATE_ID = "landmarks-20261102T135041053Z-export6-v1";
       function applyBundledPlacementUpdateOnce() {
         const marker='bigane-applied-placement-update';
         let previous=null;
@@ -5643,6 +5722,7 @@
             };
 
             this.findNearestAtPoint = (point, maxPixels = 44) => {
+              if (!placeInteractionAllowed(this.map.getZoom())) return null;
               let best = null;
               let bestDistance = maxPixels;
               for (const state of landmarkStatesByName.values()) {
@@ -5731,6 +5811,11 @@
               if (event?.isSourceLoaded) this.updateVisibilityAndLoading(true, this.terrainRefreshPending);
             };
             this.onMouseMove = event => {
+              if (!placeInteractionAllowed(this.map.getZoom())) {
+                this.setHovered(null);
+                this.map.getCanvas().style.cursor = '';
+                return;
+              }
               if (document.body.classList.contains("landmark-edit-mode")) return;
               const state = this.findNearestAtPoint(event.point, 42);
               this.setHovered(state?.config?.name || null);
@@ -5742,6 +5827,7 @@
               }
             };
             this.onClick = event => {
+              if (!placeInteractionAllowed(this.map.getZoom())) return;
               const state = this.findNearestAtPoint(event.point, 46);
               if (!state) return;
               if (document.body.classList.contains("landmark-edit-mode")) {
@@ -6548,6 +6634,7 @@
         loadInitialLandmarkState();
         applyBundledPlacementUpdateOnce();
         hfApplyPerformanceDefaultsOnce();
+        hfApplyOverviewSpriteCapOnce();
 
         try {
           installHybridForestLayer();
@@ -6590,14 +6677,22 @@
         installLandscapePolish();
 
         for (const layerId of ["Town names", "Capitals", "clickable"]) {
-          if (!map.getLayer(layerId)) continue;
+          const layer = map.getLayer(layerId);
+          if (!layer) continue;
+          // Native hit testing for the transparent city targets also starts at 6.
+          if (layerId === "clickable") map.setLayerZoomRange(layerId,
+            Math.max(PLACE_INTERACTION_MIN_ZOOM, layer.minzoom || 0), layer.maxzoom || 24);
           map.on("click", layerId, (event) => {
+            if (!placeInteractionAllowed()) return;
             const feature = event.features?.[0];
             if (feature) openKankaPopup(feature);
           });
-          map.on("mouseenter", layerId, () => { map.getCanvas().style.cursor = "pointer"; });
+          map.on("mouseenter", layerId, () => {
+            map.getCanvas().style.cursor = placeInteractionAllowed() ? "pointer" : "";
+          });
           map.on("mouseleave", layerId, () => { map.getCanvas().style.cursor = ""; });
         }
+        updatePlaceInteractionState();
 
         loadKankaLocationsWithImages();
       });
@@ -6606,6 +6701,7 @@
         queueSnowCalibration();
         refreshKankaCityMarkers();
       });
+      map.on("zoom", updatePlaceInteractionState);
       map.on("zoom", updateKankaMarkerVisuals);
       map.on("zoomend", updateKankaMarkerVisuals);
 
