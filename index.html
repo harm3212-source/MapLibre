@@ -408,8 +408,61 @@
   }
 </style>
 <!-- BIGANE_V49_PASSIVE_LOADER_STYLE_END -->
+<style id="bigane-search-style">
+/* BIGANE_SEARCH_UI_V1_BEGIN */
+#bigane-search, #bigane-search * { box-sizing: border-box; }
+#bigane-search { position: absolute; z-index: 16; top: 10px; left: 10px; width: min(350px, calc(100vw - 280px)); color: #223830; font: 14px/1.4 Arial, sans-serif; }
+#bigane-search [hidden] { display: none !important; }
+.bigane-search-bar { display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 5px 8px 5px 13px; background: #fff; border: 1px solid #cad6cf; border-radius: 9px; box-shadow: 0 2px 9px #0003; }
+.bigane-search-bar:focus-within { outline: 2px solid #507969; outline-offset: 2px; }
+.bigane-search-icon { width: 19px; height: 19px; flex: 0 0 auto; }
+#bigane-search-input { flex: 1; min-width: 0; border: 0; outline: none; padding: 7px 0; background: transparent; font: inherit; color: #223830; }
+#bigane-search-input::-webkit-search-cancel-button { display: none; -webkit-appearance: none; }
+#bigane-search-input::placeholder { color: #667970; opacity: 1; }
+#bigane-search-clear { border: 0; background: #f1f4f1; width: 29px; height: 29px; border-radius: 5px; cursor: pointer; font: 21px Arial, sans-serif; color: #36594b; }
+#bigane-search-panel { margin-top: 6px; padding: 10px 0 5px; background: #fff; border: 1px solid #cad6cf; border-radius: 9px; box-shadow: 0 4px 16px #0003; overflow: hidden; }
+.bigane-search-tools { display: flex; gap: 9px; align-items: center; margin: 0 12px 7px; font-size: 12px; }
+#bigane-search-kind { flex: 1; min-width: 0; padding: 5px 7px; border: 1px solid #c8d2cc; border-radius: 5px; font: inherit; color: #223830; background: #f8faf8; }
+#bigane-search-results { max-height: min(400px, 52vh); padding: 0; margin: 0; list-style: none; overflow-y: auto; overscroll-behavior: contain; }
+#bigane-search-results li { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 2px 8px; padding: 10px 12px; border-top: 1px solid #eef1ee; cursor: pointer; }
+#bigane-search-results li:hover, #bigane-search-results li[aria-selected="true"] { background: #eaf2ed; }
+#bigane-search-results li[aria-disabled="true"] { color: #69756e; cursor: help; }
+.bigane-search-result-name { font-weight: 700; overflow-wrap: anywhere; }
+.bigane-search-badge { padding: 2px 6px; background: #eef2ef; border-radius: 4px; font-size: 10px; color: #476154; }
+.bigane-search-result-detail { grid-column: 1 / -1; color: #61756a; font-size: 12px; overflow-wrap: anywhere; }
+#bigane-search-status { margin: 9px 12px 5px; font-size: 12px; color: #61756a; }
+#bigane-search-reload { display: block; border: 0; background: none; text-decoration: underline; color: #416b58; font: 11px Arial, sans-serif; padding: 4px 12px 7px; cursor: pointer; }
+#bigane-search button:focus-visible, #bigane-search select:focus-visible { outline: 2px solid #507969; outline-offset: 1px; }
+.bigane-search-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* Keep the existing status readable, below rather than underneath search. */
+#status { top: 68px; max-width: min(350px, calc(100vw - 280px)); }
+@media (max-width: 660px) {
+  #bigane-search { width: calc(100% - 20px); }
+  #status { top: auto; bottom: 10px; max-width: calc(100% - 20px); }
+  .layer-switcher { top: 67px; }
+  .maplibregl-ctrl-top-right { top: 57px; }
+}
+/* BIGANE_SEARCH_UI_V1_END */
+</style>
 </head>
 <body>
+<!-- BIGANE_SEARCH_BODY_V1_BEGIN -->
+<section id="bigane-search" role="search" aria-label="Zoeken in Bigane">
+  <div class="bigane-search-bar">
+    <svg class="bigane-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+    <label class="bigane-search-sr-only" for="bigane-search-input">Zoek een plaats of staat</label>
+    <input id="bigane-search-input" type="search" placeholder="Zoek plaats of staat..." autocomplete="off" autocapitalize="none" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="bigane-search-results" disabled />
+    <button id="bigane-search-clear" type="button" aria-label="Zoekveld leegmaken" hidden>&times;</button>
+  </div>
+  <div id="bigane-search-panel" hidden>
+    <div class="bigane-search-tools"><label for="bigane-search-kind">Zoek in</label><select id="bigane-search-kind"><option value="all">Plaatsen en staten</option><option value="city">Alleen plaatsen</option><option value="state">Alleen staten</option></select></div>
+    <ul id="bigane-search-results" role="listbox" aria-label="Zoekresultaten"></ul>
+    <p id="bigane-search-status" role="status" aria-live="polite">De zoeklijst wordt bij eerste gebruik geladen.</p>
+    <button id="bigane-search-reload" type="button" hidden>Zoeklijst vernieuwen</button>
+  </div>
+</section>
+<!-- BIGANE_SEARCH_BODY_V1_END -->
+
 <div id="map"></div>
   <div id="status">Bigane + Kanka initialiseren...</div>
 <!-- BIGANE_V49_PASSIVE_LOADER_BODY_BEGIN -->
@@ -814,6 +867,301 @@
     <div class="landmark-editor-status" id="landmark-editor-status"></div>
   </div>
 
+
+  <script id="bigane-search-script">
+/* BIGANE_PLACE_SEARCH_V1_BEGIN
+   Read-only, lazy world catalogue. Uses the SAME vector sources as the map,
+   not queryRenderedFeatures: hidden/off-screen places remain searchable.
+   No Kanka credentials, map layers or landmark positions are changed. */
+(() => {
+  'use strict';
+  const VERSION = 1, CACHE_TTL = 86400000;
+  const norm = value => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[\u2018\u2019']/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const compact = value => norm(value).replace(/ /g, '');
+  const core = value => norm(value).replace(/^(the|de|het)\s+/, '')
+    .replace(/^(grand duchy|kingdom|empire|imperium|republic|duchy|principality|sultanate|emirate|khaganate|khanate|caliphate|confederation|confederacy|federation|commonwealth|dominion|realm|territory|nation|state|koninkrijk|keizerrijk|republiek|hertogdom)\s+(?:(?:of|van)\s+(?:the\s+)?)?/, '');
+  const unique = values => [...new Set(values.filter(v => typeof v === 'string' && v.trim()).map(v => v.trim()))];
+  const validCoordinate = c => Array.isArray(c) && c.length >= 2 && Number.isFinite(c[0]) && Number.isFinite(c[1]) && Math.abs(c[0]) <= 180 && Math.abs(c[1]) <= 85.05113;
+  const stateNames = p => unique(['Full Name','State','state','State name','state_name','Name','name'].map(k => p?.[k]));
+  const townName = p => String(p?.Burg ?? p?.burg ?? p?.Name ?? p?.name ?? '').trim();
+  const townState = p => String(p?.State ?? p?.state ?? p?.StateName ?? p?.state_name ?? '').trim();
+  const isCapital = p => /^(capital|yes|true|1)$/i.test(String(p?.Capital ?? p?.capital ?? p?.is_capital ?? ''));
+  const sleep = () => new Promise(resolve => setTimeout(resolve, 0));
+  function tileAt(c, z) {
+    const n = 2 ** z, lat = Math.max(-85.051128, Math.min(85.051128, c[1])) * Math.PI / 180;
+    return [Math.max(0, Math.min(n-1, Math.floor((c[0]+180)/360*n))),
+      Math.max(0, Math.min(n-1, Math.floor((1-Math.asinh(Math.tan(lat))/Math.PI)/2*n)))];
+  }
+
+  // Small, dependency-free MVT reader, executed in a worker when available.
+  // Only requested layers are decoded. No image, terrain or route decoding.
+  function decodeTile(buffer, tile, wanted) {
+    class Reader {
+      constructor(bytes) { this.b=bytes; this.p=0; this.view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength); }
+      uint() { let n=0, m=1; for(let i=0;i<10;i++){if(this.p>=this.b.length)throw Error('Onvolledige vectortegel');const b=this.b[this.p++];n+=(b&127)*m;if(!(b&128))return n;m*=128;}throw Error('Ongeldige varint'); }
+      id() { let n=0n,shift=0n;for(let i=0;i<10;i++){if(this.p>=this.b.length)throw Error('Onvolledig ID');const b=this.b[this.p++];n|=BigInt(b&127)<<shift;if(!(b&128))return n.toString();shift+=7n;}throw Error('Ongeldig ID'); }
+      bytes() {const n=this.uint(),a=this.p;this.p+=n;if(this.p>this.b.length)throw Error('Onvolledige tegeldata');return this.b.subarray(a,this.p);}
+      text() {return new TextDecoder().decode(this.bytes());}
+      skip(w){if(w===0)this.uint();else if(w===1)this.p+=8;else if(w===2){const n=this.uint();this.p+=n;}else if(w===5)this.p+=4;else throw Error('Ongeldig wiretype');if(this.p>this.b.length)throw Error('Onvolledige tegel');}
+    }
+    const value = bytes => {const r=new Reader(bytes);let v=null;while(r.p<bytes.length){const tag=r.uint(),f=tag>>3,w=tag&7;if(f===1&&w===2)v=r.text();else if(f===2&&w===5){v=r.view.getFloat32(r.p,true);r.p+=4;}else if(f===3&&w===1){v=r.view.getFloat64(r.p,true);r.p+=8;}else if((f===4||f===5)&&w===0)v=r.uint();else if(f===6&&w===0){const n=r.uint();v=n%2?-(n+1)/2:n/2;}else if(f===7&&w===0)v=!!r.uint();else r.skip(w);}return v;};
+    function geometry(bytes, type, extent) {
+      const r=new Reader(bytes),rings=[];let x=0,y=0,ring=[];
+      const coordinate=()=>{const n=2**tile.z,u=(tile.x+x/extent)/n,v=(tile.y+y/extent)/n;return[u*360-180,Math.atan(Math.sinh(Math.PI*(1-2*v)))*180/Math.PI];};
+      while(r.p<bytes.length){const command=r.uint(),id=command&7,count=Math.floor(command/8);if(!count)throw Error('Lege geometrieopdracht');
+        if(id===1||id===2)for(let i=0;i<count;i++){const dx=r.uint(),dy=r.uint();x+=dx%2?-(dx+1)/2:dx/2;y+=dy%2?-(dy+1)/2:dy/2;const c=coordinate();if(type===1){rings.push(c);continue;}if(id===1&&ring.length){rings.push(ring);ring=[];}ring.push(c);}
+        else if(id===7){if(ring.length){ring.push(ring[0].slice());rings.push(ring);ring=[];}}
+        else throw Error('Onbekende geometrieopdracht');
+      }
+      if(ring.length)rings.push(ring);
+      return type===1 ? (rings[0]||null) : rings;
+    }
+    const records=[],top=new Reader(new Uint8Array(buffer));
+    while(top.p<top.b.length){const tag=top.uint();if((tag>>3)!==3||(tag&7)!==2){top.skip(tag&7);continue;}
+      const bytes=top.bytes(),r=new Reader(bytes),keys=[],values=[],features=[];let name='',extent=4096;
+      while(r.p<bytes.length){const t=r.uint(),f=t>>3,w=t&7;if(f===1&&w===2)name=r.text();else if(f===2&&w===2)features.push(r.bytes());else if(f===3&&w===2)keys.push(r.text());else if(f===4&&w===2)values.push(value(r.bytes()));else if(f===5&&w===0)extent=r.uint();else r.skip(w);}
+      if(!wanted.includes(name))continue;
+      for(const bytes of features){const r=new Reader(bytes),props=Object.create(null);let id='',type=0,tags=null,g=null;
+        while(r.p<bytes.length){const t=r.uint(),f=t>>3,w=t&7;if(f===1&&w===0)id=r.id();else if(f===2&&w===2)tags=r.bytes();else if(f===3&&w===0)type=r.uint();else if(f===4&&w===2)g=r.bytes();else r.skip(w);}
+        if(tags){const tr=new Reader(tags);while(tr.p<tags.length){const k=keys[tr.uint()],v=values[tr.uint()];if(k!==undefined)props[k]=v;}}
+        if(!g||!extent||(type!==1&&type!==3))continue;
+        const shape=geometry(g,type,extent);
+        records.push({layer:name,id,properties:props,type,coordinates:type===1?shape:null,rings:type===3?shape:null,z:tile.z});
+      }
+    }
+    return records;
+  }
+  function makeDecoder() {
+    let worker=null,sequence=0;const pending=new Map();
+    try {
+      const code=`const decodeTile=${decodeTile.toString()};onmessage=e=>{try{postMessage({id:e.data.id,records:decodeTile(e.data.buffer,e.data.tile,e.data.wanted)})}catch(error){postMessage({id:e.data.id,error:String(error.message||error)})}};`;
+      const url=URL.createObjectURL(new Blob([code],{type:'text/javascript'}));worker=new Worker(url);URL.revokeObjectURL(url);
+      worker.onmessage=e=>{const job=pending.get(e.data.id);if(!job)return;pending.delete(e.data.id);e.data.error?job.reject(Error(e.data.error)):job.resolve(e.data.records);};
+      worker.onerror=()=>{for(const job of pending.values())job.reject(Error('Zoekindex-worker kon niet starten'));pending.clear();worker?.terminate();worker=null;};
+    } catch (_) {worker=null;}
+    return {parse:async(buffer,tile,wanted)=>{if(!worker){await sleep();return decodeTile(buffer,tile,wanted);}const backup=buffer.slice(0);return new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});worker.postMessage({id,buffer,tile,wanted},[buffer]);}).catch(error=>{if(!worker)return decodeTile(backup,tile,wanted);throw error;});},
+      dispose(){for(const job of pending.values())job.reject(Error('Zoekfunctie gesloten'));pending.clear();worker?.terminate();worker=null;}};
+  }
+  async function request(url, kind, signal) {
+    const controller=new AbortController(),onAbort=()=>controller.abort();
+    if(signal?.aborted)throw Error('Zoekopdracht geannuleerd');
+    signal?.addEventListener('abort',onAbort,{once:true});const timer=setTimeout(()=>controller.abort(),20000);
+    try{const response=await fetch(url,{signal:controller.signal});if(kind==='buffer'&&response.status===404)return new ArrayBuffer(0);if(!response.ok)throw Error(`Kaartbron niet beschikbaar (HTTP ${response.status})`);
+      if(kind==='json')return await response.json();
+      let buffer=await response.arrayBuffer();const bytes=new Uint8Array(buffer);
+      if(bytes[0]===31&&bytes[1]===139){if(typeof DecompressionStream==='undefined')throw Error('Browser kan gecomprimeerde zoekgegevens niet openen');buffer=await new Response(new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();}
+      return buffer;
+    }finally{clearTimeout(timer);signal?.removeEventListener('abort',onAbort);}
+  }
+  function cacheOperation(key, value) {
+    return new Promise(resolve=>{let settled=false;const done=v=>{if(!settled){settled=true;resolve(v);}};
+      if(typeof indexedDB==='undefined'){done(null);return;}
+      let open;try{open=indexedDB.open('bigane-place-search-v1',1);}catch(_){done(null);return;}
+      open.onupgradeneeded=()=>{if(!open.result.objectStoreNames.contains('catalogues'))open.result.createObjectStore('catalogues');};
+      open.onerror=()=>done(null);open.onblocked=()=>done(null);
+      open.onsuccess=()=>{const db=open.result;try{const tx=db.transaction('catalogues',value===undefined?'readonly':'readwrite');const store=tx.objectStore('catalogues'),r=value===undefined?store.get(key):store.put(value,key);let result=null;r.onsuccess=()=>{result=r.result;};tx.oncomplete=()=>{db.close();done(result);};tx.onerror=tx.onabort=()=>{db.close();done(null);};}catch(_){db.close();done(null);}};
+      setTimeout(()=>done(null),2000);
+    });
+  }
+  function descriptorList(map) {
+    const style=map.getStyle(),groups=new Map();
+    for(const [id,kind] of [['Town names','city'],['Capitals','city'],['States','state'],['State name border','state'],['State name','label']]) {
+      const layer=style.layers.find(l=>l.id===id),def=layer&&style.sources[layer.source];if(!def)continue;
+      if(!groups.has(layer.source))groups.set(layer.source,{id:layer.source,def,roles:new Map()});
+      const g=groups.get(layer.source),sl=layer['source-layer']||'';
+      if(!g.roles.has(sl)||kind!=='label')g.roles.set(sl,kind);
+    }
+    return [...groups.values()];
+  }
+  async function metadata(group, signal) {
+    if(group.meta)return group.meta;
+    if(group.def.type==='geojson'){group.meta=group.def;return group.meta;}
+    const def=group.def;
+    if(def.tiles?.length)group.meta={...def};
+    else if(def.url) {
+      const sourceURL=new URL(def.url,document.baseURI);if(!/^https?:$/.test(sourceURL.protocol))throw Error('Niet-ondersteunde zoekbron');
+      const data=await request(sourceURL.href,'json',signal);group.meta={...data,...def,tiles:data.tiles};group.base=sourceURL.href;
+    } else throw Error('Geen tegeladres voor de zoekindex');
+    if(!group.meta.tiles?.length)throw Error('De kaartbron bevat geen vectortegels');
+    return group.meta;
+  }
+  function tileURL(group,tile) {
+    const n=2**tile.z,y=group.meta.scheme==='tms'?n-1-tile.y:tile.y;
+    let template=group.meta.tiles[0].replace('{z}',tile.z).replace('{x}',tile.x).replace('{y}',y).replace('{-y}',n-1-tile.y).replace('{ratio}','');
+    const url=new URL(template,group.base||document.baseURI);
+    // TileJSON normally supplies its own public token. Never read a Kanka token.
+    if(group.base){const source=new URL(group.base);if(url.origin===source.origin&&!url.searchParams.has('access_token')&&source.searchParams.has('access_token'))url.searchParams.set('access_token',source.searchParams.get('access_token'));}
+    return url.href;
+  }
+  function wholeWorldTiles(meta) {
+    const z=Math.max(2,Math.ceil(Number(meta.minzoom)||0));if(z>5)throw Error('Deze bron vereist een afzonderlijke volledige zoekindex');
+    let b=meta.bounds;if(!Array.isArray(b)||b.length!==4||b.some(v=>!Number.isFinite(v))||b[0]>b[2])b=[-180,-85.051128,180,85.051128];
+    const nw=tileAt([b[0],b[3]],z),se=tileAt([b[2],b[1]],z),tiles=[];
+    for(let x=nw[0];x<=se[0];x++)for(let y=nw[1];y<=se[1];y++)tiles.push({z,x,y});
+    if(tiles.length>256)throw Error('De zoekbron is te groot voor automatisch inlezen');return tiles;
+  }
+  function inRings(c,rings) {let inside=false;for(const r of rings||[])for(let i=0,j=r.length-1;i<r.length;j=i++){const a=r[i],b=r[j];if(((a[1]>c[1])!==(b[1]>c[1]))&&(c[0]<(b[0]-a[0])*(c[1]-a[1])/((b[1]-a[1])||1e-20)+a[0]))inside=!inside;}return inside;}
+  async function buildCatalogue(records) {
+    const cities=[],cityKeys=new Map(),states=[],stateKeys=new Map(),labels=[];
+    for(let i=0;i<records.length;i++){if(i&&i%1500===0)await sleep();const r=records[i],p=r.properties||{};
+      if(r.role==='city'&&validCoordinate(r.coordinates)){
+        const name=townName(p);if(!name)continue;
+        const state=townState(p),key=[compact(name),compact(state),...r.coordinates.map(n=>n.toFixed(5))].join('|');
+        if(cityKeys.has(key))continue;
+        const e={id:'city:'+cities.length,kind:'city',name,aliases:[name],state,properties:p,coordinates:r.coordinates,source:r.source,layer:r.layer,featureId:r.id,sourceZoom:r.z,capital:isCapital(p)};
+        cities.push(e);cityKeys.set(key,e);
+      }else if(r.role==='state'){
+        const names=stateNames(p);if(!names.length)continue;
+        const key=norm(String(p.State??p.state??p['Full Name']??names[0]));let s=stateKeys.get(key);
+        if(!s){s={id:'state:'+states.length,kind:'state',name:names[0],aliases:names,properties:p,coordinates:validCoordinate(r.coordinates)?r.coordinates:null,fragments:[]};states.push(s);stateKeys.set(key,s);}
+        else s.aliases=unique([...s.aliases,...names]);
+        if(r.rings?.length)s.fragments.push(r.rings);
+      }else if(r.role==='label')labels.push(r);
+    }
+    const stateMatches=names=>{const exact=states.filter(s=>s.aliases.some(a=>names.some(n=>norm(a)===norm(n))));if(exact.length)return exact;return states.filter(s=>s.aliases.some(a=>names.some(n=>core(a)&&core(a)===core(n))));};
+    for(const r of labels){const names=stateNames(r.properties);if(!names.length)continue;let matches=stateMatches(names);
+      if(matches.length!==1&&validCoordinate(r.coordinates)){const spatial=states.filter(s=>s.fragments.some(rings=>inRings(r.coordinates,rings)));if(spatial.length===1)matches=spatial;}
+      if(matches.length===1){const s=matches[0];s.aliases=unique([...s.aliases,...names]);if(r.properties['Full Name'])s.name=r.properties['Full Name'];if(validCoordinate(r.coordinates))s.labelCoordinates=r.coordinates;}
+      else if(!matches.length){states.push({id:'state:'+states.length,kind:'state',name:names[0],aliases:names,properties:r.properties,coordinates:r.coordinates,labelCoordinates:r.coordinates,fragments:[]});}
+    }
+    // Some source styles omit state polygons; still expose a state's actual capital.
+    for(const c of cities.filter(c=>c.capital&&c.state)){if(!stateMatches([c.state]).length)states.push({id:'state:'+states.length,kind:'state',name:c.state,aliases:[c.state],properties:{State:c.state},coordinates:null,fragments:[]});}
+    const capitals=cities.filter(c=>c.capital);
+    for(let i=0;i<states.length;i++){if(i&&i%40===0)await sleep();const s=states[i];let candidates=[],method='';
+      const refs=['Capital','capital','Capital name','capital_name','CapitalName','capital_id','Capital ID'].map(k=>s.properties[k]).filter(v=>v!=null&&!/^(capital|true|false|yes|no|0|1)$/i.test(String(v)));
+      if(refs.length){candidates=cities.filter(c=>refs.some(v=>compact(v)===compact(c.name)||['id','Id','ID','i'].some(k=>c.properties[k]!=null&&String(c.properties[k])===String(v))));if(candidates.length===1)method='capital-property';}
+      if(candidates.length!==1){candidates=capitals.filter(c=>c.state&&s.aliases.some(a=>norm(a)===norm(c.state)));if(candidates.length===1)method='capital-state';}
+      if(candidates.length!==1){candidates=capitals.filter(c=>c.state&&s.aliases.some(a=>core(a)&&core(a)===core(c.state)));if(candidates.length===1)method='capital-state-core';}
+      if(candidates.length!==1&&s.fragments.length){candidates=capitals.filter(c=>s.fragments.some(r=>inRings(c.coordinates,r)));if(candidates.length===1)method='capital-in-state';}
+      s.capitalId=candidates.length===1?candidates[0].id:null;s.capitalName=candidates.length===1?candidates[0].name:null;s.capitalMethod=method|| (candidates.length>1?'ambiguous':'missing');
+      // Keep only names and points in the disk cache, not bulky state geometry.
+      delete s.fragments;
+    }
+    return {version:VERSION,createdAt:Date.now(),cities,states};
+  }
+
+  function create(map, hooks={}) {
+    const root=document.getElementById('bigane-search'),input=document.getElementById('bigane-search-input');
+    if(!root||!input)return null;
+    const list=document.getElementById('bigane-search-results'),panel=document.getElementById('bigane-search-panel'),status=document.getElementById('bigane-search-status'),clear=document.getElementById('bigane-search-clear'),retry=document.getElementById('bigane-search-reload'),select=document.getElementById('bigane-search-kind');
+    const groups=descriptorList(map),groupById=new Map(groups.map(g=>[g.id,g]));
+    const sourceIdentity=groups.map(g=>[g.id,g.def.type,String(g.def.url||g.def.data||g.def.tiles?.[0]||'').split('?')[0],[...g.roles]]);
+    const cacheKey=JSON.stringify([VERSION,location.origin,location.pathname,sourceIdentity]);
+    let catalogue=null,entries=[],byId=new Map(),visible=[],active=-1,loadPromise=null,decoder=null,loadAbort=null,selectionAbort=null,selectionSerial=0,navigationCleanup=null,closed=false,loadError='',lastAliasSignature='',inputTimer=0;
+    const show=(message)=>{status.textContent=message;};
+    const collapse=()=>{panel.hidden=true;input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');active=-1;};
+    const expand=()=>{panel.hidden=false;input.setAttribute('aria-expanded','true');};
+    function aliases(force=false){if(!catalogue)return;
+      const signature=hooks.aliasSignature?.()||'';if(!force&&signature===lastAliasSignature)return;lastAliasSignature=signature;
+      for(const e of entries){let extra=[];try{extra=hooks.aliases?.(e)||[];}catch(_){}e.searchNames=unique([e.name,...(e.aliases||[]),...extra]);e.keys=e.searchNames.map(norm);e.compactKeys=e.keys.map(k=>k.replace(/ /g,''));}
+    }
+    function accept(data){catalogue=data;entries=[...data.states,...data.cities];byId=new Map(entries.map(e=>[e.id,e]));aliases(true);}
+    async function ensure(force=false){if(loadPromise)return loadPromise;if(catalogue&&!force)return catalogue;
+      loadPromise=(async()=>{loadError='';loadAbort=new AbortController();show('Zoeklijst voor de hele kaart laden...');
+        if(!force){const cached=await cacheOperation(cacheKey);if(cached?.version===VERSION&&Date.now()-cached.createdAt<CACHE_TTL&&cached.cities?.length&&Array.isArray(cached.states)){accept(cached);return catalogue;}}
+        decoder=decoder||makeDecoder();const records=[];let done=0,total=0;const jobs=[];
+        for(const group of groups){const meta=await metadata(group,loadAbort.signal);
+          if(group.def.type==='geojson'){const data=typeof meta.data==='string'?await request(new URL(meta.data,document.baseURI).href,'json',loadAbort.signal):meta.data;const role=[...group.roles.values()][0];
+            for(const f of data?.features||[]){const g=f.geometry;if(!g)continue;const r={source:group.id,layer:'',role,properties:f.properties,id:f.id,z:24};if(g.type==='Point')records.push({...r,coordinates:g.coordinates});else if(g.type==='Polygon')records.push({...r,rings:g.coordinates});else if(g.type==='MultiPolygon')for(const rings of g.coordinates)records.push({...r,rings});}continue;}
+          for(const tile of wholeWorldTiles(meta))jobs.push({group,tile});
+        }
+        total=jobs.length;let next=0;
+        async function runner(){while(next<jobs.length){const {group,tile}=jobs[next++];const buffer=await request(tileURL(group,tile),'buffer',loadAbort.signal);const parsed=await decoder.parse(buffer,tile,[...group.roles.keys()]);
+          for(const r of parsed)records.push({...r,source:group.id,role:group.roles.get(r.layer)});done++;if(!panel.hidden)show(`Zoeklijst laden: ${done}/${total} kaartdelen`);}}
+        await Promise.all([runner(),runner()]);if(closed)return null;
+        const data=await buildCatalogue(records);if(!data.cities.length)throw Error('Geen plaatsen in de zoekbron gevonden');
+        data.tileCount=total;data.sourceZoom=jobs.length?Math.max(...jobs.map(j=>j.tile.z)):24;accept(data);cacheOperation(cacheKey,data);return data;
+      })().catch(error=>{loadAbort?.abort();loadError=error?.name==='AbortError'?'Kaartbron niet bereikbaar. Probeer opnieuw.':String(error.message||error);show(loadError);return null;})
+        .finally(()=>{loadPromise=null;loadAbort=null;root.removeAttribute('aria-busy');render();});
+      root.setAttribute('aria-busy','true');return loadPromise;
+    }
+    function ranked(query,kind=select.value){aliases();const q=norm(query),cq=compact(query);if(q.length<2)return [];
+      const result=[];for(const e of entries){if(kind!=='all'&&e.kind!==kind)continue;let rank=Infinity;
+        for(let i=0;i<e.keys.length;i++){const k=e.keys[i],c=e.compactKeys[i];let r=Infinity;if(k===q||c===cq)r=i===0?0:1;else if(k.startsWith(q)||c.startsWith(cq))r=2;else if(k.split(' ').some(w=>w.startsWith(q)))r=3;else if(k.includes(q)||c.includes(cq))r=4;else if(q.split(' ').every(w=>k.includes(w)))r=5;rank=Math.min(rank,r);}
+        if(Number.isFinite(rank))result.push({e,rank});}
+      result.sort((a,b)=>a.rank-b.rank||Number(!a.e.capital)-Number(!b.e.capital)||a.e.name.localeCompare(b.e.name,'nl')||a.e.id.localeCompare(b.e.id));return result;
+    }
+    function render(){if(closed)return;clear.hidden=!input.value;list.replaceChildren();visible=[];active=-1;input.removeAttribute('aria-activedescendant');
+      if(!catalogue){if(!loadPromise)show(loadError||'Klik in het zoekveld om de zoeklijst te laden.');retry.hidden=!loadError;return;}
+      const q=input.value.trim();retry.hidden=false;
+      if(norm(q).length<2){show(`${catalogue.cities.length.toLocaleString('nl-NL')} plaatsen en ${catalogue.states.length.toLocaleString('nl-NL')} staten. Typ minimaal 2 tekens.`);return;}
+      const all=ranked(q);visible=all.slice(0,24).map(r=>r.e);
+      for(const [i,e] of visible.entries()){const row=document.createElement('li');row.id='bigane-search-result-'+i;row.setAttribute('role','option');row.setAttribute('aria-selected','false');row.dataset.index=i;
+        const name=document.createElement('span');name.className='bigane-search-result-name';name.textContent=e.name;
+        const type=document.createElement('span');type.className='bigane-search-badge';type.textContent=e.kind==='state'?'Staat':e.capital?'Hoofdstad':'Plaats';
+        const detail=document.createElement('span');detail.className='bigane-search-result-detail';detail.textContent=e.kind==='state'?(e.capitalName?`Naar hoofdstad ${e.capitalName}`:e.capitalMethod==='ambiguous'?'Meerdere hoofdsteden in brondata':'Geen hoofdstad herkenbaar in brondata'):(e.state||'Plaats op de kaart');
+        if(e.kind==='state'&&!e.capitalId)row.setAttribute('aria-disabled','true');row.append(name,type,detail);list.appendChild(row);}
+      show(all.length?`${all.length} resultaat${all.length===1?'':'en'}${all.length>visible.length?' - eerste 24 getoond':''}`:'Geen plaats of staat gevonden.');
+    }
+    function highlight(i){active=Math.max(0,Math.min(visible.length-1,i));for(const [j,row] of [...list.children].entries())row.setAttribute('aria-selected',String(j===active));
+      if(list.children[active]){input.setAttribute('aria-activedescendant',list.children[active].id);list.children[active].scrollIntoView({block:'nearest'});}}
+    async function precise(city,signal){
+      // Fetch just the selected point at a higher zoom. Coarse global-tile
+      // coordinates are NEVER written into the map or the landmark editor.
+      const group=groupById.get(city.source);if(!group||group.def.type!=='vector')return city.coordinates;
+      const meta=await metadata(group,signal),z=Math.min(8,Number.isFinite(meta.maxzoom)?meta.maxzoom:8);if(z<=city.sourceZoom)return city.coordinates;
+      const [x,y]=tileAt(city.coordinates,z),n=2**z;
+      const one=async(tx,ty)=>{const tile={z,x:tx,y:ty};const data=await request(tileURL(group,tile),'buffer',signal);decoder=decoder||makeDecoder();return decoder.parse(data,tile,[city.layer]);};
+      let features=await one(x,y);const match=f=>f.layer===city.layer&&compact(townName(f.properties))===compact(city.name)&&(!city.state||compact(townState(f.properties))===compact(city.state))&&validCoordinate(f.coordinates);
+      let found=features.filter(match);
+      if(!found.length){const coarse=Math.max(0,city.sourceZoom??2),delta=360/(2**coarse*4096)*1.1,near=new Map();
+        for(const dx of [-delta,delta])for(const dy of [-delta,delta]){const [tx,ty]=tileAt([city.coordinates[0]+dx,city.coordinates[1]+dy],z);if(tx>=0&&tx<n&&ty>=0&&ty<n&&(tx!==x||ty!==y))near.set(tx+','+ty,[tx,ty]);}
+        for(const [tx,ty] of near.values()){features=await one(tx,ty);found.push(...features.filter(match));if(found.length)break;}}
+      if(!found.length)return city.coordinates;
+      const sameId=city.featureId?found.filter(f=>f.id===city.featureId):[];if(sameId.length)found=sameId;
+      found.sort((a,b)=>Math.hypot(a.coordinates[0]-city.coordinates[0],a.coordinates[1]-city.coordinates[1])-Math.hypot(b.coordinates[0]-city.coordinates[0],b.coordinates[1]-city.coordinates[1]));
+      const best=found[0];if(Math.hypot(best.coordinates[0]-city.coordinates[0],best.coordinates[1]-city.coordinates[1])>0.15)return city.coordinates;
+      city.coordinates=best.coordinates;city.sourceZoom=z;return city.coordinates;
+    }
+    async function choose(entry){if(!entry)return;
+      const target=entry.kind==='state'?byId.get(entry.capitalId):entry;
+      if(!target||!validCoordinate(target.coordinates)){expand();show('Geen eenduidige hoofdstad gevonden. Er wordt niet naar een willekeurige plaats gesprongen.');return;}
+      const serial=++selectionSerial;navigationCleanup?.();selectionAbort?.abort();selectionAbort=new AbortController();const signal=selectionAbort.signal;
+      hooks.closePopups?.();input.value=entry.name;collapse();input.blur();clear.hidden=false;
+      const labelZoom=Number(hooks.cityZoom?.(target.properties));const zoom=Math.min(map.getMaxZoom?.()??22,Math.max(8.5,Number.isFinite(labelZoom)?labelZoom+0.35:9));
+      const options={center:target.coordinates.slice(),zoom,pitch:0,bearing:map.getBearing?.()??0,duration:1100,essential:false};
+      // Fly immediately; a late precision result may not steal the user's view.
+      let activeFlight=true,refined=null,moveEnded=false,precisionDone=false;
+      const cancel=e=>{if(!e?.originalEvent)return;activeFlight=false;selectionAbort?.abort();cleanup();};
+      const cleanup=()=>{map.off('moveend',onEnd);map.off('dragstart',cancel);map.off('zoomstart',cancel);if(navigationCleanup===cleanup)navigationCleanup=null;};
+      const apply=()=>{if(!activeFlight||closed||serial!==selectionSerial||!refined||!validCoordinate(refined))return;const c=map.getCenter?.();if(c&&Math.hypot(c.lng-options.center[0],c.lat-options.center[1])>0.02)return;
+        if(Math.hypot(refined[0]-options.center[0],refined[1]-options.center[1])>0.00001)map.easeTo({center:refined,duration:220,essential:false});activeFlight=false;cleanup();};
+      const onEnd=()=>{moveEnded=true;map.off('moveend',onEnd);apply();if(precisionDone)cleanup();};
+      navigationCleanup=cleanup;
+      map.on('moveend',onEnd);map.on('dragstart',cancel);map.on('zoomstart',cancel);
+      map.flyTo(options);
+      setTimeout(()=>{if(navigationCleanup===cleanup){activeFlight=false;cleanup();}},25000);
+      try{refined=await precise(target,signal);if(moveEnded)apply();}catch(_){/* Coarse valid location remains usable when refinement is offline. */}
+      finally{precisionDone=true;if(moveEnded||signal.aborted)cleanup();}
+      if(serial===selectionSerial)root.title=entry.kind==='state'?`${entry.name}: hoofdstad ${target.name}`:target.name;
+    }
+    const focus=()=>{expand();render();ensure();};
+    input.addEventListener('focus',focus);
+    input.addEventListener('input',()=>{expand();clearTimeout(inputTimer);inputTimer=setTimeout(render,80);ensure();});
+    select.addEventListener('change',()=>{expand();render();ensure();input.focus();});
+    input.addEventListener('keydown',e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();expand();if(visible.length)highlight(active+(e.key==='ArrowDown'?1:-1));}
+      else if(e.key==='Enter'){e.preventDefault();if(panel.hidden){expand();render();}else choose(visible[active<0?0:active]);}
+      else if(e.key==='Escape'){e.preventDefault();collapse();input.blur();}});
+    list.addEventListener('pointerdown',e=>{if(e.target.closest('[role=option]'))e.preventDefault();});
+    list.addEventListener('click',e=>{const row=e.target.closest('[role=option]');if(row)choose(visible[Number(row.dataset.index)]);});
+    clear.addEventListener('click',()=>{input.value='';render();input.focus();});
+    retry.addEventListener('click',()=>{expand();ensure(true);});
+    const outside=e=>{if(!root.contains(e.target))collapse();};document.addEventListener('pointerdown',outside);
+    root.addEventListener('focusout',()=>setTimeout(()=>{if(!root.contains(document.activeElement))collapse();},0));
+    for(const name of ['click','dblclick','pointerdown','keydown','wheel'])root.addEventListener(name,e=>e.stopPropagation());
+    const dispose=()=>{closed=true;selectionSerial++;navigationCleanup?.();loadAbort?.abort();selectionAbort?.abort();decoder?.dispose();document.removeEventListener('pointerdown',outside);clearTimeout(inputTimer);};map.on('remove',dispose);
+    input.disabled=false;
+    return Object.freeze({refreshAliases(){aliases(true);if(!panel.hidden)render();},load:ensure,
+      stats:()=>({loaded:!!catalogue,cities:catalogue?.cities.length||0,states:catalogue?.states.length||0,statesWithCapital:catalogue?.states.filter(s=>s.capitalId).length||0,loading:!!loadPromise,error:loadError}),
+      // Useful for author-side diagnosis; no tokens or private API objects.
+      find:(query,kind='all')=>ranked(query,kind).slice(0,24).map(r=>({name:r.e.name,kind:r.e.kind,state:r.e.state,capitalName:r.e.capitalName})),dispose});
+  }
+  window.BiganeSearchV1=Object.freeze({create});
+})();
+/* BIGANE_PLACE_SEARCH_V1_END */
+
+</script>
 
   <script type="module">
     import * as maplibregl from "https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs";
@@ -1945,6 +2293,7 @@
           updateCityLabelKankaNames(articleNames, true);
           kankaLocationsLoaded = true;
           refreshOpenStatePopup();
+          window.BiganePlaceSearch?.refreshAliases();
           const imageCount = [...kankaLocationsByName.values()].filter(l => l.markerImage).length;
           status.textContent = `MapLibre + Kanka werkt. ${articleNames.size} locaties krijgen labelvoorrang; ${imageCount} met afbeelding.`;
           refreshKankaCityMarkers();
@@ -1953,6 +2302,7 @@
           updateCityLabelKankaNames(articleNames, false);
           kankaLocationsLoaded = kankaLocationsByName.size > 0;
           refreshOpenStatePopup();
+          window.BiganePlaceSearch?.refreshAliases();
           refreshKankaCityMarkers();
           console.warn(error);
           status.textContent = `Kaart werkt, maar Kanka kon niet volledig laden: ${error.message}`;
@@ -7317,6 +7667,27 @@
 
         installGeographicLabelPolicy();
         setupLayerSwitcher();
+
+        // Search navigates to source places; it never modifies label/click rules.
+        try {
+          window.BiganePlaceSearch = window.BiganeSearchV1.create(map, {
+            closePopups: () => removeInfoPopups(true),
+            cityZoom: properties => cityLabelZoom(properties),
+            aliasSignature: () => String(stateLocationRecords.size) + JSON.stringify(stateLinkOverrides),
+            aliases: entry => {
+              if (entry.kind === 'state') {
+                const feature = {properties: {...entry.properties, 'Full Name': entry.name}};
+                const article = resolveStateArticle(feature).article;
+                return article?.articleName ? [article.articleName] : [];
+              }
+              const key = cityLabelNameKey(entry.name);
+              const config = LANDMARKS_3D.find(c => [c.name, ...(c.aliases || [])]
+                .some(name => cityLabelNameKey(name) === key));
+              if (!config) return [];
+              return [config.name, ...(config.aliases || []), LANDMARK_KANKA_ARTICLES[config.name]?.articleName].filter(Boolean);
+            }
+          });
+        } catch (error) { console.warn('Zoekfunctie kon niet starten:', error); }
 
         // --- Terrain: original Bigane DEM, rendered by MapLibre ---
         if (!map.getSource("bigane-dem")) {
