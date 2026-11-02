@@ -920,6 +920,32 @@
       }).map(layer => layer.id);
     }
 
+    /* BIGANE_TUNNEL_STYLE_FIX_V1_BEGIN */
+    function prepareBiganeTunnelStyle(style) {
+      const tunnel = style.layers?.find(layer => layer.id === 'Underway' && layer.type === 'line');
+      if (!tunnel) return style;
+      // In the supplied route source, route295 between Kuktul and Baktul is
+      // tagged roads although the parallel historical route144 is underground.
+      // Reclassify its DISPLAY only. Do not touch coordinates or the GeoJSON.
+      const legacyKuktulTunnel = ['all',
+        ['==', ['get', 'type'], 'roads'], ['==', ['get', 'id'], 'route295'],
+        ['==', ['get', 'layer'], 'Bigane world Routes 2023-09-14-10-34']];
+      const originalFilter = tunnel.filter || ['==', ['get', 'type'], 'Underway'];
+      tunnel.filter = ['any', originalFilter, legacyKuktulTunnel];
+      for (const layer of style.layers) {
+        if (layer === tunnel || layer.type !== 'line' || layer.source !== tunnel.source ||
+            layer['source-layer'] !== tunnel['source-layer'] || !layer.filter) continue;
+        if (!JSON.stringify(layer.filter).includes('"roads"')) continue;
+        layer.filter = ['all', layer.filter, ['!', legacyKuktulTunnel]];
+      }
+      // Keep the existing Underway paint for both locations, including identical
+      // zoom-dependent colour/width/opacity. Lowercase 'underway' records are
+      // older parallel duplicates: do not enable them as a second drawn route.
+      // Surface-road rims/textures inherit the corrected filter at startup.
+      return style;
+    }
+    /* BIGANE_TUNNEL_STYLE_FIX_V1_END */
+
     function prepareBiganeLanduseStyle(original) {
       const style = JSON.parse(JSON.stringify(original));
       const biomes = style.layers?.find(layer => layer.id === 'Biomes');
@@ -945,7 +971,7 @@
         layer.layout = {...layer.layout, visibility: 'none'};
       }
       // The original composite source also contains water, labels and towns.
-      return style;
+      return prepareBiganeTunnelStyle(style);
     }
 
 
@@ -1169,6 +1195,7 @@
             ['var','p']], ['case', capital, CITY_LABEL_SETTINGS.capitalMinimum, 0]]];
       }
       function applyCityLabelPolicy() {
+        invalidateBiganeCityVisibility();
         cityLabelImportantKeys = collectCityLabelImportantKeys();
         const signature = JSON.stringify([...cityLabelImportantKeys].sort());
         if (signature === cityLabelLastSignature) return;
@@ -1517,36 +1544,157 @@
         const request = activeInfoRequest;
         if (request?.kind === 'state' && infoRequestCurrent(request)) renderStatePopup(request.feature, request);
       }
-      // One event dispatcher for overlapping symbols, invisible city targets,
-      // models and state labels; a single click cannot create several panels.
+      /* BIGANE_VISIBLE_CITY_PICKING_V1_BEGIN */
+      // queryRenderedFeatures excludes symbol collisions, not transparent circles
+      // or every terrain-occlusion case. Only real, visible city labels may grant
+      // browsing interaction. Source-only features remain available to the editor.
+      let biganeVisibleCityCache = null;
+      const biganeSurfaceVisibilityCache = new Map();
+      function invalidateBiganeCityVisibility() {
+        biganeVisibleCityCache = null;
+        biganeSurfaceVisibilityCache.clear();
+      }
+      function biganePointInsideViewport(point) {
+        const canvas = map.getCanvas();
+        const width = canvas.clientWidth || map.getContainer()?.clientWidth || 0;
+        const height = canvas.clientHeight || map.getContainer()?.clientHeight || 0;
+        return !!point && Number.isFinite(point.x) && Number.isFinite(point.y) &&
+          width > 0 && height > 0 && point.x >= 0 && point.y >= 0 && point.x < width && point.y < height;
+      }
+      function biganeMercatorXY(lngLat) {
+        const lng = Number(Array.isArray(lngLat) ? lngLat[0] : lngLat?.lng);
+        const lat = Number(Array.isArray(lngLat) ? lngLat[1] : lngLat?.lat);
+        if (!Number.isFinite(lng) || !Number.isFinite(lat) || Math.abs(lat) >= 85.051129) return null;
+        const sin = Math.sin(lat * Math.PI / 180);
+        return {x: (lng + 180) / 360, y: 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)};
+      }
+      function biganeSurfaceAnchorVisible(coordinates) {
+        if (!Array.isArray(coordinates) || coordinates.length < 2 || !coordinates.slice(0, 2).every(Number.isFinite)) return false;
+        const key = coordinates[0].toFixed(7) + ',' + coordinates[1].toFixed(7);
+        if (biganeSurfaceVisibilityCache.has(key)) return biganeSurfaceVisibilityCache.get(key);
+        let visible = false;
+        try {
+          const projected = map.project(coordinates);
+          if (biganePointInsideViewport(projected)) {
+            // With a vertical camera no foreground relief can cover a ground
+            // anchor. Avoid depth-buffer reads for the common top-down view.
+            if (Math.abs(map.getPitch()) < 0.01) visible = true;
+            else {
+              // unproject reads the FRONT surface of the terrain at this pixel.
+              // A hidden or behind-camera anchor projects to a different ground
+              // location. Use a small screen-scale allowance for DEM picking
+              // precision, never a fixed kilometre radius or viewport padding.
+              const front = biganeMercatorXY(map.unproject(projected));
+              const target = biganeMercatorXY(coordinates);
+              const worldSize = 512 * Math.pow(2, map.getZoom());
+              const allowance = 4 / worldSize / Math.max(0.4, Math.cos(map.getPitch() * Math.PI / 180));
+              visible = !!front && !!target && Math.hypot(front.x - target.x, front.y - target.y) <= allowance;
+            }
+          }
+        } catch (_) { visible = false; } // Unknown visibility must not create a ghost target.
+        if (biganeSurfaceVisibilityCache.size > 512) biganeSurfaceVisibilityCache.clear();
+        biganeSurfaceVisibilityCache.set(key, visible);
+        return visible;
+      }
+      function biganeCityLabelIsVisible(feature) {
+        const id = feature?.layer?.id;
+        if (!['Town names', 'Capitals'].includes(id) || feature.geometry?.type !== 'Point') return false;
+        if (!String(feature.properties?.Burg || '').trim() || !cityLabelEligible(feature.properties)) return false;
+        const layer = map.getLayer(id);
+        if (!layer || map.getZoom() < (layer.minzoom ?? 0) || map.getZoom() >= (layer.maxzoom ?? 24)) return false;
+        const opacity = feature.layer?.paint?.['text-opacity'] ?? map.getPaintProperty(id, 'text-opacity');
+        const size = feature.layer?.layout?.['text-size'] ?? map.getLayoutProperty(id, 'text-size');
+        if ((typeof opacity === 'number' && opacity <= 0.01) || (typeof size === 'number' && size <= 0)) return false;
+        return biganeSurfaceAnchorVisible(feature.geometry.coordinates);
+      }
+      function biganeVisibleCityFeatures(point = null) {
+        if (point && !biganePointInsideViewport(point)) return [];
+        if (!point && biganeVisibleCityCache) return biganeVisibleCityCache;
+        const layers = ['Town names', 'Capitals'].filter(id => map.getLayer(id) && map.getLayoutProperty(id, 'visibility') !== 'none');
+        let result = [];
+        try {
+          const features = !layers.length ? [] : point
+            ? map.queryRenderedFeatures(point, {layers}) : map.queryRenderedFeatures({layers});
+          result = features.filter(biganeCityLabelIsVisible);
+        } catch (_) { /* A style reload can briefly remove a queried layer. */ }
+        if (!point) biganeVisibleCityCache = result;
+        return result;
+      }
+      function biganeVisibleLabelForModel(config) {
+        return biganeVisibleCityFeatures().find(feature => landmarkNameMatches(feature.properties?.Burg, config)) || null;
+      }
+      function biganeCityFeatureIsVisible(feature) {
+        if (!feature || !placeInteractionAllowed()) return false;
+        if (feature.biganeModelName) {
+          const config = LANDMARKS_3D.find(item => item.name === feature.biganeModelName);
+          const state = config && landmarkStatesByName.get(config.name);
+          return !!(biganeViewSettings.models && config?.visible !== false && state?.renderVisible &&
+            biganeSurfaceAnchorVisible(state.coordinates) && biganeVisibleLabelForModel(config));
+        }
+        const wanted = normalizeLocationName(feature.properties?.Burg);
+        const coordinates = feature.geometry?.coordinates;
+        if (!wanted || feature.geometry?.type !== 'Point') return false;
+        return biganeVisibleCityFeatures().some(item =>
+          normalizeLocationName(item.properties?.Burg) === wanted &&
+          Math.abs(item.geometry.coordinates[0] - coordinates[0]) < 0.00001 &&
+          Math.abs(item.geometry.coordinates[1] - coordinates[1]) < 0.00001);
+      }
+      // Registered before the marker render observer, so it cannot reuse a
+      // previous camera frame. No continuous repaint or extra network calls.
+      for (const eventName of ['render', 'move', 'resize', 'styledata', 'terrain'])
+        map.on(eventName, invalidateBiganeCityVisibility);
+      /* BIGANE_VISIBLE_CITY_PICKING_V1_END */
+
+      // One resolver for clicks and hover: invisible circles are NEVER targets.
       function biganeFeaturesAt(point, ids) {
+        if (!biganePointInsideViewport(point)) return [];
         const layers = ids.filter(id => map.getLayer(id) && map.getLayoutProperty(id, 'visibility') !== 'none');
         return layers.length ? map.queryRenderedFeatures(point, {layers}) : [];
       }
+      function biganePlaceAtPoint(point) {
+        if (!placeInteractionAllowed() || !biganePointInsideViewport(point)) return null;
+        const city = biganeVisibleCityFeatures(point)[0];
+        if (city) return {kind: 'city', feature: city};
+        const model = biganeViewSettings.models ? landmarkController?.findNearestAtPoint?.(point, 46) : null;
+        if (model) return {kind: 'model', state: model};
+        const country = biganeFeaturesAt(point, COUNTRY_LABEL_LAYERS)[0];
+        if (country) return {kind: 'country', feature: country};
+        const state = biganeFeaturesAt(point, ['States'])[0];
+        if (state && stateNames(state).length) return {kind: 'country', feature: state};
+        return null;
+      }
       function installPlaceClickDispatcher() {
+        // Retain the source/helper for forest clearances and editor lookup, but
+        // no longer query the transparent 'clickable' layer for user interaction.
         const clickable = map.getLayer('clickable');
         if (clickable) map.setLayerZoomRange('clickable', Math.max(PLACE_INTERACTION_MIN_ZOOM, clickable.minzoom || 0), clickable.maxzoom || 24);
         map.on('click', event => {
           if (!placeInteractionAllowed() || document.body.classList.contains('landmark-edit-mode')) return;
-          const city = biganeFeaturesAt(event.point, ['Town names', 'Capitals'])[0];
-          if (city) { openKankaPopup(city); return; }
-          const model = biganeViewSettings.models ? landmarkController?.findNearestAtPoint?.(event.point, 46) : null;
-          if (model) { openKankaPopup({type:'Feature', properties:{Burg:model.config.name}, geometry:{type:'Point',coordinates:model.coordinates}}); return; }
-          const country = biganeFeaturesAt(event.point, COUNTRY_LABEL_LAYERS)[0];
-          if (country) { openStatePopup(country, event.lngLat); return; }
-          const target = biganeFeaturesAt(event.point, ['clickable'])[0];
-          if (target) { openKankaPopup(target); return; }
-          // Polygon picking only with States visible, never over the whole
-          // landscape by default. Country-name labels are always independent.
-          const state = biganeFeaturesAt(event.point, ['States'])[0];
-          if (state && stateNames(state).length) { openStatePopup(state, event.lngLat); return; }
+          invalidateBiganeCityVisibility(); // Recheck stale DOM/placement on every click.
+          const target = biganePlaceAtPoint(event.point);
+          if (target?.kind === 'city') { openKankaPopup(target.feature); return; }
+          if (target?.kind === 'model') {
+            const model = target.state;
+            openKankaPopup({type: 'Feature', biganeModelName: model.config.name,
+              properties: {Burg: model.config.name}, geometry: {type: 'Point', coordinates: model.coordinates}});
+            return;
+          }
+          if (target?.kind === 'country') { openStatePopup(target.feature, event.lngLat); return; }
           removeInfoPopups(true);
         });
-        for (const id of ['Town names','Capitals','clickable', ...COUNTRY_LABEL_LAYERS, 'States']) {
-          if (!map.getLayer(id)) continue;
-          map.on('mouseenter', id, () => { map.getCanvas().style.cursor = placeInteractionAllowed() ? 'pointer' : ''; });
-          map.on('mouseleave', id, () => { map.getCanvas().style.cursor = ''; });
-        }
+        map.on('mousemove', event => {
+          if (document.body.classList.contains('landmark-edit-mode')) return;
+          const target = biganePlaceAtPoint(event.point);
+          landmarkController?.setHovered?.(target?.kind === 'model' ? target.state.config.name : null);
+          map.getCanvas().style.cursor = target ? 'pointer' : '';
+        });
+        const resetHover = () => {
+          if (document.body.classList.contains('landmark-edit-mode')) return;
+          landmarkController?.setHovered?.(null);
+          map.getCanvas().style.cursor = '';
+        };
+        map.on('move', resetHover);
+        map.on('mouseout', resetHover);
       }
       /* BIGANE_COUNTRY_LINKS_V1_END */
 
@@ -1622,7 +1770,7 @@
       }
 
       function createLocationPopup(feature, link = null, imageUrl = null, request = null) {
-        if (!placeInteractionAllowed()) return null;
+        if (!placeInteractionAllowed() || !biganeCityFeatureIsVisible(feature)) return null;
         request = request || beginInfoRequest('city');
         if (!infoRequestCurrent(request)) return null;
         removeInfoPopups(false);
@@ -1656,9 +1804,9 @@
       }
 
       async function openKankaPopup(feature) {
-        if (!placeInteractionAllowed()) return;
+        if (!placeInteractionAllowed() || !biganeCityFeatureIsVisible(feature)) return;
         const request = beginInfoRequest('city');
-        const requestStillAllowed = () => infoRequestCurrent(request);
+        const requestStillAllowed = () => infoRequestCurrent(request) && biganeCityFeatureIsVisible(feature);
         const show = (link = null, image = null) => {
           if (requestStillAllowed()) createLocationPopup(feature, link, image, request);
         };
@@ -1742,9 +1890,7 @@
       }
 
       function getVisibleCityFeatures() {
-        const layers = ["Town names", "Capitals"].filter(id => map.getLayer(id));
-        if (!layers.length) return [];
-        return map.queryRenderedFeatures({ layers });
+        return biganeVisibleCityFeatures();
       }
 
       function pointInRing(point, ring) {
@@ -1820,7 +1966,8 @@
           if (!el) continue;
           const visual = el.querySelector('.kanka-city-marker-visual');
           if (!visual) continue;
-          const shown = markerOpacityForZoom(zoom, marker.biganeCityProperties);
+          const shown = marker.biganeCityFeature && biganeCityFeatureIsVisible(marker.biganeCityFeature)
+            ? markerOpacityForZoom(zoom, marker.biganeCityProperties) : 0;
           visual.style.opacity = String(shown);
           visual.style.visibility = shown <= 0.001 ? 'hidden' : 'visible';
           el.style.pointerEvents = !placeInteractionAllowed(zoom) || shown < 0.12 ? 'none' : 'auto';
@@ -1870,6 +2017,7 @@
             if (kankaCityMarkers.has(key)) {
               const existingMarker = kankaCityMarkers.get(key);
               existingMarker.biganeCityProperties = {...feature.properties};
+              existingMarker.biganeCityFeature = feature;
               continue; // State borders are fixed; do not re-query them every frame.
 
             }
@@ -1892,9 +2040,11 @@
             el.appendChild(visual);
 
             el.addEventListener("click", (event) => {
-              if (!cityMarkerEligible(feature.properties) || markerOpacityForZoom(map.getZoom(), feature.properties) < 0.12) return;
               event.preventDefault();
               event.stopPropagation();
+              invalidateBiganeCityVisibility();
+              if (!cityMarkerEligible(feature.properties) || !biganeCityFeatureIsVisible(feature) ||
+                  markerOpacityForZoom(map.getZoom(), feature.properties) < 0.12) return;
               openKankaPopup(feature);
             });
 
@@ -1912,6 +2062,7 @@
             el.style.pointerEvents = !placeInteractionAllowed() || initialOpacity < 0.12 ? "none" : "auto";
 
             marker.biganeCityProperties = {...feature.properties};
+            marker.biganeCityFeature = feature;
             marker.biganeYOffset = markerYOffsetForZoom(map.getZoom());
             kankaCityMarkers.set(key, marker);
           }
@@ -6225,18 +6376,23 @@
               return state ? this.getElevationSampleCoordinates(state) : null;
             };
 
-            this.findNearestAtPoint = (point, maxPixels = 44) => {
-              if (!biganeViewSettings.models || !placeInteractionAllowed(this.map.getZoom())) return null;
+            this.findNearestAtPoint = (point, maxPixels = 44, editorSelection = false) => {
+              if (!biganeViewSettings.models || !placeInteractionAllowed(this.map.getZoom()) || !biganePointInsideViewport(point)) return null;
               let best = null;
               let bestDistance = maxPixels;
               for (const state of landmarkStatesByName.values()) {
                 if (!state.renderVisible || state.config.visible === false || !state.coordinates) continue;
                 const projected = this.map.project(state.coordinates);
+                if (!biganePointInsideViewport(projected)) continue;
                 const distance = Math.hypot(projected.x - point.x, projected.y - point.y);
-                if (distance < bestDistance) {
-                  bestDistance = distance;
-                  best = state;
-                }
+                if (distance >= bestDistance) continue;
+                // renderVisible includes the load/render buffer, not real screen
+                // visibility. A model is a browsing target only with a visible
+                // city name and an unobscured, on-screen surface anchor.
+                if (!editorSelection && (!biganeSurfaceAnchorVisible(state.coordinates) ||
+                    !biganeVisibleLabelForModel(state.config))) continue;
+                bestDistance = distance;
+                best = state;
               }
               return best;
             };
@@ -6314,28 +6470,13 @@
               }
               if (event?.isSourceLoaded) this.updateVisibilityAndLoading(true, this.terrainRefreshPending);
             };
-            this.onMouseMove = event => {
-              if (!placeInteractionAllowed(this.map.getZoom())) {
-                this.setHovered(null);
-                this.map.getCanvas().style.cursor = '';
-                return;
-              }
-              if (document.body.classList.contains("landmark-edit-mode")) return;
-              const state = this.findNearestAtPoint(event.point, 42);
-              this.setHovered(state?.config?.name || null);
-              if (state) this.map.getCanvas().style.cursor = "pointer";
-              else {
-                const cityLayers = ["Town names", "Capitals", "clickable", ...COUNTRY_LABEL_LAYERS, "States"].filter(id => this.map.getLayer(id));
-                const overCity = cityLayers.length ? this.map.queryRenderedFeatures(event.point, { layers: cityLayers }).length > 0 : false;
-                if (!overCity) this.map.getCanvas().style.cursor = "";
-              }
-            };
+            this.onMouseMove = null; // Shared dispatcher owns browsing hover/cursor.
             this.onClick = event => {
               // Normal browsing is handled by one shared dispatcher. Keep the
               // existing editor-only model selection, without opening a popup.
               if (!biganeViewSettings.models || !placeInteractionAllowed(this.map.getZoom()) ||
                   !document.body.classList.contains("landmark-edit-mode")) return;
-              const state = this.findNearestAtPoint(event.point, 46);
+              const state = this.findNearestAtPoint(event.point, 46, true);
               if (state) landmarkEditorSelectName?.(state.config.name);
             };
 
@@ -6346,7 +6487,6 @@
             mapInstance.on("idle", this.onIdle);
             mapInstance.on("sourcedata", this.onSourceData);
             mapInstance.on("render", this.onTerrainRender);
-            mapInstance.on("mousemove", this.onMouseMove);
             mapInstance.on("click", this.onClick);
             this.updateVisibilityAndLoading(true);
             landmarkController = this;
