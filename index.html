@@ -920,31 +920,29 @@
       }).map(layer => layer.id);
     }
 
-    /* BIGANE_TUNNEL_STYLE_FIX_V1_BEGIN */
+    /* BIGANE_TUNNEL_STYLE_FIX_V2_BEGIN */
     function prepareBiganeTunnelStyle(style) {
       const tunnel = style.layers?.find(layer => layer.id === 'Underway' && layer.type === 'line');
       if (!tunnel) return style;
-      // In the supplied route source, route295 between Kuktul and Baktul is
-      // tagged roads although the parallel historical route144 is underground.
-      // Reclassify its DISPLAY only. Do not touch coordinates or the GeoJSON.
-      const legacyKuktulTunnel = ['all',
-        ['==', ['get', 'type'], 'roads'], ['==', ['get', 'id'], 'route295'],
+      // Only the Khypir Tul <-> Kuktul TUNNEL is the requested connection.
+      // The source reuses id route295 for a separate surface ROAD towards
+      // Baktul. Never match this id without its type and source collection.
+      const khypirTulKuktulTunnel = ['all',
+        ['==', ['get', 'type'], 'Underway'], ['==', ['get', 'id'], 'route295'],
         ['==', ['get', 'layer'], 'Bigane world Routes 2023-09-14-10-34']];
       const originalFilter = tunnel.filter || ['==', ['get', 'type'], 'Underway'];
-      tunnel.filter = ['any', originalFilter, legacyKuktulTunnel];
-      for (const layer of style.layers) {
-        if (layer === tunnel || layer.type !== 'line' || layer.source !== tunnel.source ||
-            layer['source-layer'] !== tunnel['source-layer'] || !layer.filter) continue;
-        if (!JSON.stringify(layer.filter).includes('"roads"')) continue;
-        layer.filter = ['all', layer.filter, ['!', legacyKuktulTunnel]];
-      }
-      // Keep the existing Underway paint for both locations, including identical
-      // zoom-dependent colour/width/opacity. Lowercase 'underway' records are
-      // older parallel duplicates: do not enable them as a second drawn route.
-      // Surface-road rims/textures inherit the corrected filter at startup.
+      tunnel.filter = ['any', originalFilter, khypirTulKuktulTunnel];
+      // One shared layer: exactly the same paint/layout/zoom rules as the
+      // Drac Ust tunnel (route11, type Underway). No additional tunnel layer,
+      // no second stroke, and no changes to any surface-road or sea-route
+      // filter. In particular, route295/type roads keeps its original style.
+      // The canonical target already has type Underway in the supplied source;
+      // this explicit selection documents the intended segment, not a reroute.
+      // Lowercase legacy underway records remain governed by the original
+      // filter. All coordinates and the GeoJSON source remain unchanged.
       return style;
     }
-    /* BIGANE_TUNNEL_STYLE_FIX_V1_END */
+    /* BIGANE_TUNNEL_STYLE_FIX_V2_END */
 
     function prepareBiganeLanduseStyle(original) {
       const style = JSON.parse(JSON.stringify(original));
