@@ -1293,6 +1293,67 @@
       const BIGANE_LABEL_ZOOMS = Object.freeze({country: 4, region: 6, water: 7});
       const stateLocationRecords = new Map();
       const stateLinkAudit = new Map();
+      // Explicit country links supplied by the map owner. Embedded, so new
+      // visitors do not need local overrides or an API lookup to open the article.
+      // Keep local overrides separate: a later browser edit always takes priority.
+      const BUNDLED_STATE_LINKS = Object.freeze({
+        "ashinai": Object.freeze({"entityId":4692423,"articleName":"The Ashinai Empire"}),
+        "ashinai empire": Object.freeze({"entityId":4692423,"articleName":"The Ashinai Empire"}),
+        "cuyusaylasia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "diarchy of the legion the tribe": Object.freeze({"entityId":4794384,"articleName":"The Northern Alliance"}),
+        "divine grand duchy of great njaraz": Object.freeze({"entityId":4784174,"articleName":"The Njaraz Confederacy"}),
+        "great njaraz": Object.freeze({"entityId":4784174,"articleName":"The Njaraz Confederacy"}),
+        "holy state of turir": Object.freeze({"entityId":4601914,"articleName":"Dwarov Turir"}),
+        "huarakamasia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "huliwia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "ianu": Object.freeze({"entityId":4921323,"articleName":"Ianu Lands"}),
+        "jiwe": Object.freeze({"entityId":4610520,"articleName":"Jiwe Tribe"}),
+        "kiboko": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "kifaru": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "kozkuydi caliphate": Object.freeze({"entityId":4750411,"articleName":"The Kozkoydi Caliphate"}),
+        "kozkuydistan": Object.freeze({"entityId":4750411,"articleName":"The Kozkoydi Caliphate"}),
+        "llaqta": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "llaqtan tribes": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "mahru telung": Object.freeze({"entityId":4601968,"articleName":"Kingdom of the Mahru and Telung"}),
+        "mbweha": Object.freeze({"entityId":4601970,"articleName":"Yurrim Tribes"}),
+        "milluakuquia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "narcotia": Object.freeze({"entityId":4601934,"articleName":"Illongo"}),
+        "nguruwe": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "nyati": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "nyoka": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "paa": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "pakamalqia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "qayrachinia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "ramancaria": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "ramancarian tribes": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "saka": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "satrapy of narcotia": Object.freeze({"entityId":4601934,"articleName":"Illongo"}),
+        "tai": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "the legion the tribe": Object.freeze({"entityId":4794384,"articleName":"The Northern Alliance"}),
+        "tribes of cuyusaylasia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "tribes of huarakamasia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "tribes of huliwia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "tribes of jiwe": Object.freeze({"entityId":4610520,"articleName":"Jiwe Tribe"}),
+        "tribes of kiboko": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "tribes of kifaru": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "tribes of mbweha": Object.freeze({"entityId":4601970,"articleName":"Yurrim Tribes"}),
+        "tribes of milluakuquia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "tribes of nguruwe": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "tribes of nyati": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "tribes of nyoka": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "tribes of paa": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "tribes of pakamalqia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "tribes of qayrachinia": Object.freeze({"entityId":4907040,"articleName":"The Pingwe Tribes"}),
+        "tribes of saka": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "tribes of tai": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "tribes of tumbili": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "tribes of twiga": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "tumbili": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "turir": Object.freeze({"entityId":4601914,"articleName":"Dwarov Turir"}),
+        "twiga": Object.freeze({"entityId":4601935,"articleName":"Na'af tribes"}),
+        "united kingdom of mahru telung": Object.freeze({"entityId":4601968,"articleName":"Kingdom of the Mahru and Telung"}),
+        "united tribes of ianu": Object.freeze({"entityId":4921323,"articleName":"Ianu Lands"})
+      });
       let stateLinkOverrides = Object.create(null);
       function stateLinkStorageKey() { return cityLabelCacheKey().replace('city-label-names-v1', 'state-links-v1'); }
       function stateNameKey(value) {
@@ -1358,6 +1419,17 @@
             return result(live ? stateArticleRecord(live) : {...manual}, 'manual');
           }
         }
+        // Search all local aliases first (above), then all bundled aliases.
+        // A short-name local correction must outrank a full-name bundled link.
+        for (const name of names) {
+          const key = stateNameKey(name);
+          const bundled = Object.prototype.hasOwnProperty.call(BUNDLED_STATE_LINKS, key)
+            ? BUNDLED_STATE_LINKS[key] : null;
+          if (bundled) {
+            const live = stateLocationRecords.get(bundled.entityId);
+            return result(live ? stateArticleRecord(live) : {...bundled}, 'bundled');
+          }
+        }
         const records = [...stateLocationRecords.values()].filter(l => !stateLocationIsLocal(l));
         const choose = (items, method) => {
           const distinct = [...new Map(items.map(l => [stateEntityId(l), l])).values()];
@@ -1412,7 +1484,7 @@
         readStateLinkOverrides();
         window.BiganeStateLinks = {
           report: () => [...stateLinkAudit.values()],
-          export: () => JSON.stringify(stateLinkOverrides, null, 2)
+          export: () => JSON.stringify({...BUNDLED_STATE_LINKS, ...stateLinkOverrides}, null, 2)
         };
       }
       function downloadStateLinkOverrides() {
@@ -1446,8 +1518,8 @@
           if (feedback) {
             feedback.hidden = false;
             feedback.textContent = count
-              ? 'Export gestart. Upload bigane-kanka-landenkoppelingen.json in de chat. Alleen handmatige landenkoppelingen zijn opgenomen.'
-              : 'Nog geen handmatige landenkoppelingen ingesteld. Het gedownloade bestand is leeg ({}). Automatische koppelingen worden niet meegenomen.';
+              ? 'Export gestart. Upload bigane-kanka-landenkoppelingen.json in de chat. Vaste en lokaal aangepaste landenkoppelingen zijn opgenomen; automatische herkenningen niet.'
+              : 'Geen vaste of lokaal aangepaste landenkoppelingen beschikbaar. Het gedownloade bestand is leeg ({}). Automatische koppelingen worden niet meegenomen.';
           }
         } catch (error) {
           if (feedback) {
@@ -1469,7 +1541,7 @@
         const summary = document.createElement('summary'); summary.textContent = 'Kanka-koppeling aanpassen';
         details.appendChild(summary);
         const note = document.createElement('p'); note.style.cssText = 'font-size:12px;margin:7px 0;';
-        note.textContent = 'Een keuze wordt alleen in deze browser opgeslagen. Automatische koppelingen gebruiken de opgehaalde Kanka-locaties.';
+        note.textContent = 'De aangeleverde vaste koppelingen gelden voor alle bezoekers. Een nieuwe keuze geldt alleen in deze browser en krijgt voorrang. Standaard herstellen verwijdert die lokale keuze; voor overige landen blijft automatische herkenning beschikbaar.';
         details.appendChild(note);
         const input = document.createElement('input'); input.type = 'search'; input.placeholder = 'Zoek een Kanka-locatie...';
         input.setAttribute('aria-label', 'Kanka-locatie zoeken'); input.style.cssText = 'width:100%;box-sizing:border-box;margin:4px 0;padding:5px;';
@@ -1503,7 +1575,7 @@
           catch (_) { feedback.textContent = 'Gekoppeld voor deze sessie; lokaal opslaan is niet beschikbaar.'; }
           renderStatePopup(feature, request);
         });
-        const reset = document.createElement('button'); reset.type = 'button'; reset.textContent = 'Automatisch';
+        const reset = document.createElement('button'); reset.type = 'button'; reset.textContent = 'Standaard herstellen';
         reset.style.cssText = 'padding:5px 8px;cursor:pointer;';
         reset.addEventListener('click', () => {
           for (const name of stateNames(feature)) delete stateLinkOverrides[stateNameKey(name)];
