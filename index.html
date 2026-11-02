@@ -2010,11 +2010,11 @@
       let snowTreeCutoffExaggerated = 1.0e9 + 1.0;
       const HF_DEFAULT_SETTINGS = Object.freeze({
         "minZoom": 6,
-        "threeDStartZoom": 8,
+        "threeDStartZoom": 8.5,
         "outerRadius": 3,
         "fadeStart": 1.15,
         "treeSize": 0.68,
-        "nearCap": 3000,
+        "nearCap": 1500,
         "spriteCap": 36000,
         "densityMultiplier": 1,
         "overviewSpriteCap": 12000
@@ -2079,6 +2079,41 @@
       }
 
       hfNormalizeSettings();
+      // Apply the three explicitly requested forest values once. Existing
+      // landmark coordinates and all unrelated saved preferences are preserved.
+      const HF_PERFORMANCE_UPDATE_ID = 'forest-opt-20261102-v1';
+      function hfApplyPerformanceDefaultsOnce() {
+        const marker = 'bigane-forest-performance-update';
+        const requested = {outerRadius: 3, threeDStartZoom: 8.5, nearCap: 1500};
+        let raw = null, stored = null;
+        try {
+          if (localStorage.getItem(marker) === HF_PERFORMANCE_UPDATE_ID) return false;
+          raw = localStorage.getItem(LANDMARK_EDITOR_STORAGE_KEY);
+          if (raw) stored = JSON.parse(raw);
+        } catch (error) {
+          console.warn('Opgeslagen bosinstellingen konden niet worden gelezen:', error);
+        }
+        Object.assign(HF_SETTINGS, requested);
+        hfNormalizeSettings();
+        try {
+          if (raw) {
+            // Never overwrite an unreadable or legacy-shaped storage object.
+            if (!stored || typeof stored !== 'object' || Array.isArray(stored) ||
+                !Array.isArray(stored.landmarks)) return true;
+            const backup = 'bigane-backup-before-' + HF_PERFORMANCE_UPDATE_ID;
+            if (!localStorage.getItem(backup)) localStorage.setItem(backup, raw);
+            const forest = stored.forest && typeof stored.forest === 'object' &&
+              !Array.isArray(stored.forest) ? stored.forest : {};
+            localStorage.setItem(LANDMARK_EDITOR_STORAGE_KEY,
+              JSON.stringify({...stored, forest: {...forest, ...requested}}));
+          }
+          localStorage.setItem(marker, HF_PERFORMANCE_UPDATE_ID);
+        } catch (error) {
+          console.warn('Nieuwe bosinstellingen konden niet lokaal worden bewaard:', error);
+        }
+        return true;
+      }
+
       let hybridForestController = null;
 
       const HF_TYPES = [
@@ -2503,7 +2538,7 @@
           hfAddEllipsoid(out, [0.22, -0.04, 0.80], [0.34, 0.29, 0.26], 6, 3, 1, 0.11);
           hfAddEllipsoid(out, [0.02, 0.02, 0.98], [0.28, 0.27, 0.20], 6, 3, 1, 0.10);
         }
-        return new Float32Array(out);
+        return hfCompactNonDegenerateTriangles(out);
       }
 
       function hfSpriteGeometry() {
@@ -2699,6 +2734,14 @@
       }
 
       function hfPalmMixForEntry(entry, allLakeRings, allEntries) {
+        if (entry.biome === "Tropical rainforest") {
+          const palm = 0.13;
+          return [["tropical", 0.69], ["palm", palm], ["deciduous", 0.18]];
+        }
+        if (entry.biome === "Tropical seasonal forest") {
+          const palm = 0.17;
+          return [["tropical", 0.45], ["palm", palm], ["savanna", 0.26], ["deciduous", 0.12]];
+        }
         const center = hfCenterOfBounds(entry.bounds);
         const warmFactor = hfWarmBiomeContextFactor(entry, allEntries);
         if (warmFactor <= 0) return null;
@@ -2711,14 +2754,6 @@
         const wetlandWaterFactor = hfClamp01(1 - (lakeDistanceMeters / HF_PALM_WETLAND_LAKE_PROXIMITY_METERS));
         const savannaWaterFactor = hfClamp01(1 - (lakeDistanceMeters / HF_PALM_SAVANNA_LAKE_PROXIMITY_METERS));
 
-        if (entry.biome === "Tropical rainforest") {
-          const palm = 0.13;
-          return [["tropical", 0.69], ["palm", palm], ["deciduous", 0.18]];
-        }
-        if (entry.biome === "Tropical seasonal forest") {
-          const palm = 0.17;
-          return [["tropical", 0.45], ["palm", palm], ["savanna", 0.26], ["deciduous", 0.12]];
-        }
         if (entry.biome === "Wetland") {
           const palm = 0.08 + 0.16 * wetlandWaterFactor;
           const wetland = 0.68 - palm * 0.62;
@@ -2836,6 +2871,7 @@
       }
 
       function hfWaterDensityFactor(entry, x, y, mpu) {
+        if (!['Savanna', 'Wetland', 'Tropical seasonal forest', 'Tropical rainforest', 'Grassland'].includes(entry.biome)) return 1;
         const rings = entry.nearbyWaterRings || [];
         if (!rings.length) return 1;
         const d = hfDistanceToWaterRingsMeters(x, y, mpu, rings);
@@ -2875,7 +2911,6 @@
           vec4 a = rootTexel(n), b = rootTexel(n+1), c = rootTexel(n+2);
           return Tree(a.xy,a.z,a.w,b.x,b.y,b.z,b.w,c.x,c.y,c.z,c.w);
         }
-        Tree readTree(int slot) { return readTreeAt(gl_InstanceID * 4 + slot); }
         float rootElevation(Tree t) {
           vec2 uv = (t.xy-u_heightBounds.xy)/(u_heightBounds.zw-u_heightBounds.xy);
           return texture(u_heightMap,vec2(clamp(uv.x,0.0,1.0),1.0-clamp(uv.y,0.0,1.0))).r;
@@ -2901,75 +2936,99 @@
                                  length((s.xy/max(s.w,1e-8)-pp)*u_viewSize*0.5));
           return max(vertical,horizontal);
         }
-        int selectedLOD(Tree t,float h) {
-          if (!u_allow3D || u_zoom<u_startZoom || t.near<0.5) return 2;
-          float px = screenHeight(t,h);
-          float highLimit = mix(28.0,40.0,stableRandom(t.seed,3.0));
-          float midLimit = mix(7.0,11.0,stableRandom(t.seed,6.0));
-          if (t.high>0.5 && px>=highLimit) return 0;
-          if (px>=midLimit) return 1;
-          return 2;
-        }
       `;
 
-      function hfMakeGroupedGeometry(geometry, isSprite=false) {
-        const stride = isSprite ? 5 : 7;
-        const result = new Float32Array(geometry.length/stride*(stride+1)*HF_GROUP_SIZE);
-        let p=0;
-        for(let slot=0;slot<HF_GROUP_SIZE;slot++) {
-          for(let i=0;i<geometry.length;i+=stride) {
-            for(let k=0;k<stride;k++) result[p++]=geometry[i+k];
-            result[p++]=slot;
-          }
+      function hfCompactNonDegenerateTriangles(values) {
+        const out=[];
+        for(let i=0;i<values.length;i+=21) {
+          const ax=values[i],ay=values[i+1],az=values[i+2];
+          const ux=values[i+7]-ax,uy=values[i+8]-ay,uz=values[i+9]-az;
+          const vx=values[i+14]-ax,vy=values[i+15]-ay,vz=values[i+16]-az;
+          const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
+          // Ellipsoid poles emit a zero-area triangle beside each real cap
+          // triangle. Keep every actual face and its original flat normal.
+          if(nx*nx+ny*ny+nz*nz>1e-20) for(let k=0;k<21;k++) out.push(values[i+k]);
         }
-        return result;
+        return new Float32Array(out);
+      }
+
+      function hfRootKey(c) { return `${c.ix}:${c.iy}:${c.stride}`; }
+
+      function hfCpuScreenHeight(c,elevation,m,viewWidth,viewHeight) {
+        if(!Number.isFinite(elevation))return 0;
+        const root=c.gpuRoot||c;
+        const project=(x,y,z)=>[
+          m[0]*x+m[4]*y+m[8]*z+m[12],
+          m[1]*x+m[5]*y+m[9]*z+m[13],
+          m[3]*x+m[7]*y+m[11]*z+m[15]
+        ];
+        const z=elevation*root.mpu,p=project(root.x,root.y,z);
+        if(!(p[2]>0))return 0;
+        const q=project(root.x,root.y,(elevation+root.height)*root.mpu);
+        const r=project(root.x+root.width*root.mpu,root.y,z);
+        const s=project(root.x,root.y+root.width*root.mpu,z);
+        const px=p[0]/p[2],py=p[1]/p[2];
+        const distance=(v,w)=>Math.hypot((v[0]/w-px)*viewWidth*.5,(v[1]/w-py)*viewHeight*.5);
+        const vertical=q[2]>0?distance(q,q[2]):0;
+        const horizontal=Math.max(distance(r,Math.max(r[2],1e-8)),distance(s,Math.max(s[2],1e-8)));
+        return Math.max(vertical,horizontal);
+      }
+
+      function hfCpuTreeLOD(c,elevation,m,viewWidth,viewHeight,modelsAllowed) {
+        if(!modelsAllowed||!c.nearEligible||!Number.isFinite(elevation))return 2;
+        const root=c.gpuRoot||c;
+        const random=salt=>{const n=root.seed*173.37+salt*.61803398875;return n-Math.floor(n);};
+        const px=hfCpuScreenHeight(c,elevation,m,viewWidth,viewHeight);
+        if(c.highEligible&&px>=28+12*random(3))return 0;
+        return px>=7+4*random(6)?1:2;
+      }
+
+      function hfGpuRoot(c) {
+        return {x:Math.fround(c.x),y:Math.fround(c.y),mpu:Math.fround(c.mpu),
+          width:Math.fround(c.width),height:Math.fround(c.height),seed:Math.fround(c.seed)};
       }
 
       function hfPackRootGroups(candidates, compactSprites=false) {
         const buckets=new Map();
         for(const t of candidates) {
           const key=`${Math.floor(t.ix/(t.stride*2))}:${Math.floor(t.iy/(t.stride*2))}`;
-          if(!buckets.has(key)) buckets.set(key,[]);
+          if(!buckets.has(key))buckets.set(key,[]);
           buckets.get(key).push(t);
         }
         const groups=[];
         for(const roots of buckets.values()) {
-          roots.sort((a,b)=>a.iy-b.iy || a.ix-b.ix);
-          for(let i=0;i<roots.length;i+=4) groups.push(roots.slice(i,i+4));
+          roots.sort((a,b)=>a.iy-b.iy||a.ix-b.ix);
+          for(let i=0;i<roots.length;i+=4)groups.push(roots.slice(i,i+4));
         }
         if(compactSprites) {
-          // World-stable rank: a smaller overview budget is spread over the
-          // whole prepared area, not a smaller circle around the camera.
-          const rank=g=>hfHash(Math.floor(g[0].ix/(g[0].stride*2)),
-                              Math.floor(g[0].iy/(g[0].stride*2)),431);
-          groups.sort((a,b)=>rank(a)-rank(b) || a[0].iy-b[0].iy || a[0].ix-b[0].ix);
+          const rank=g=>hfHash(Math.floor(g[0].ix/(g[0].stride*2)),Math.floor(g[0].iy/(g[0].stride*2)),431);
+          groups.sort((a,b)=>rank(a)-rank(b)||a[0].iy-b[0].iy||a[0].ix-b[0].ix);
         }
         const rows=Math.max(1,Math.ceil(groups.length*4*3/HF_DATA_WIDTH));
         const data=new Float32Array(HF_DATA_WIDTH*rows*4);
-        const rootIndices=new Float32Array(candidates.length);
-        const groupEnds=new Uint32Array(groups.length);
-        let index=0, root=0;
+        const rootIndices=new Float32Array(candidates.length),groupEnds=new Uint32Array(groups.length);
+        const candidateByIndex=new Array(groups.length*4);
+        let index=0,root=0;
         groups.forEach((group,groupIndex)=>{
-          const cx=group.reduce((v,t)=>v+t.x,0)/group.length;
-          const cy=group.reduce((v,t)=>v+t.y,0)/group.length;
-          const maxDistanceWorld=group.reduce((v,t)=>Math.max(v,Math.hypot(t.x-cx,t.y-cy)),0);
+          const cx=group.reduce((n,t)=>n+t.x,0)/group.length,cy=group.reduce((n,t)=>n+t.y,0)/group.length;
+          const radius=group.reduce((n,t)=>Math.max(n,Math.hypot(t.x-cx,t.y-cy)),0);
           for(let slot=0;slot<4;slot++) {
             const c=group[slot];
             if(c) {
+              const rootIndex=groupIndex*4+slot;
               data.set([c.x,c.y,c.mpu,c.width,c.height,c.rotation,c.seed,1,
-                        c.highEligible?1:0,c.nearEligible?1:0,maxDistanceWorld,group.length],index);
-              rootIndices[root++]=groupIndex*4+slot;
+                c.highEligible?1:0,c.nearEligible?1:0,radius,group.length],index);
+              rootIndices[root++]=rootIndex;candidateByIndex[rootIndex]=c;c.farRootIndex=rootIndex;
             }
             index+=12;
           }
           groupEnds[groupIndex]=root;
         });
-        return {data,rows,count:groups.length,trees:candidates.length,rootIndices,groupEnds};
+        return {data,rows,count:groups.length,trees:candidates.length,rootIndices,groupEnds,candidateByIndex,groups};
       }
 
       function hfCreateRootTexture(gl) {
-        const tex=gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D,tex);
+        const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);
         gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
@@ -2978,70 +3037,67 @@
       }
 
       function hfUploadRootGroups(gl,draw,candidates) {
-        const packed=hfPackRootGroups(candidates,Boolean(draw.indexedSprites));
-        gl.bindTexture(gl.TEXTURE_2D,draw.roots);
-        const oldPre=gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
-        const oldFlip=gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL);
-        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
-        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,HF_DATA_WIDTH,packed.rows,0,gl.RGBA,gl.FLOAT,packed.data);
-        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,oldPre);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,oldFlip);
-        if(draw.indexedSprites) {
-          const oldArray=gl.getParameter(gl.ARRAY_BUFFER_BINDING);
-          gl.bindBuffer(gl.ARRAY_BUFFER,draw.instances);
-          gl.bufferData(gl.ARRAY_BUFFER,packed.rootIndices,gl.DYNAMIC_DRAW);
-          gl.bindBuffer(gl.ARRAY_BUFFER,oldArray);
+        let packed;
+        if(draw.indexedSprites)packed=hfPackRootGroups(candidates,true);
+        else {
+          const rows=Math.max(1,Math.ceil(candidates.length*3/HF_DATA_WIDTH));
+          const data=new Float32Array(HF_DATA_WIDTH*rows*4);
+          candidates.forEach((c,i)=>data.set([c.x,c.y,c.mpu,c.width,c.height,c.rotation,c.seed,1,
+            c.highEligible?1:0,c.nearEligible?1:0,0,0],i*12));
+          packed={data,rows,trees:candidates.length,candidateByIndex:candidates};
         }
-        draw.count=draw.indexedSprites?packed.trees:packed.count;
-        draw.groupCount=packed.count;
-        draw.groupEnds=packed.groupEnds;
-        draw.trees=packed.trees;
+        gl.bindTexture(gl.TEXTURE_2D,draw.roots);
+        const oldPre=gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL),oldFlip=gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,HF_DATA_WIDTH,packed.rows,0,gl.RGBA,gl.FLOAT,packed.data);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,oldPre);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,oldFlip);
+        draw.count=0;draw.instanceData=null;draw.trees=packed.trees;draw.candidateByIndex=packed.candidateByIndex;
+        draw.groupCount=packed.count||0;draw.groupEnds=packed.groupEnds||new Uint32Array();
+        draw.rootIndices=packed.rootIndices||null;draw.groups=packed.groups||null;draw.selectionSignature='';
+      }
+
+      function hfUpdateInstanceData(gl,draw,values) {
+        const data=values instanceof Float32Array?values:new Float32Array(values);
+        const previous=draw.instanceData;
+        let equal=!!previous&&previous.length===data.length;
+        if(equal)for(let i=0;i<data.length;i++)if(previous[i]!==data[i]){equal=false;break;}
+        draw.count=data.length/(draw.indexedSprites?2:1);
+        if(equal)return false;
+        const old=gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+        gl.bindBuffer(gl.ARRAY_BUFFER,draw.instances);gl.bufferData(gl.ARRAY_BUFFER,data,gl.DYNAMIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER,old);draw.instanceData=data;
+        return true;
       }
 
       function hfCreateCompactSpriteDraw(gl) {
-        const oldVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING);
-        const oldArray=gl.getParameter(gl.ARRAY_BUFFER_BINDING);
-        const vao=gl.createVertexArray(),buffer=gl.createBuffer();
-        const elements=gl.createBuffer(),instances=gl.createBuffer();
-        gl.bindVertexArray(vao);
-        // Four shared vertices per actual sprite; no padded/empty tree quads.
-        gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
-        gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([
-          -0.5,0,0,0,0, 0.5,0,0,1,0, 0.5,0,1,1,1, -0.5,0,1,0,1
-        ]),gl.STATIC_DRAW);
-        gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,20,0);
-        gl.vertexAttribDivisor(0,0);
-        gl.enableVertexAttribArray(1);gl.vertexAttribPointer(1,2,gl.FLOAT,false,20,12);
-        gl.vertexAttribDivisor(1,0);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,elements);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array([0,1,2,0,2,3]),gl.STATIC_DRAW);
-        gl.bindBuffer(gl.ARRAY_BUFFER,instances);
-        gl.bufferData(gl.ARRAY_BUFFER,4,gl.DYNAMIC_DRAW);
-        gl.enableVertexAttribArray(3);gl.vertexAttribPointer(3,1,gl.FLOAT,false,4,0);
-        gl.vertexAttribDivisor(3,1);
+        const oldVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING),oldArray=gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+        const vao=gl.createVertexArray(),buffer=gl.createBuffer(),elements=gl.createBuffer(),instances=gl.createBuffer();
+        gl.bindVertexArray(vao);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+        gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-0.5,0,0,0,0,.5,0,0,1,0,.5,0,1,1,1,-.5,0,1,0,1]),gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,3,gl.FLOAT,false,20,0);gl.vertexAttribDivisor(0,0);
+        gl.enableVertexAttribArray(1);gl.vertexAttribPointer(1,2,gl.FLOAT,false,20,12);gl.vertexAttribDivisor(1,0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,elements);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array([0,1,2,0,2,3]),gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER,instances);gl.bufferData(gl.ARRAY_BUFFER,8,gl.DYNAMIC_DRAW);
+        gl.enableVertexAttribArray(3);gl.vertexAttribPointer(3,2,gl.FLOAT,false,8,0);gl.vertexAttribDivisor(3,1);
         gl.bindVertexArray(oldVao);gl.bindBuffer(gl.ARRAY_BUFFER,oldArray);
-        return {vao,buffer,elements,instances,roots:hfCreateRootTexture(gl),
-          indexedSprites:true,count:0,trees:0,groupCount:0,groupEnds:new Uint32Array(),vertices:4};
+        return {vao,buffer,elements,instances,roots:hfCreateRootTexture(gl),indexedSprites:true,
+          count:0,trees:0,groupCount:0,groupEnds:new Uint32Array(),vertices:4,instanceData:null,
+          candidateByIndex:[],groups:[],rootIndices:new Float32Array(),selectionSignature:'',selectedMask:new Uint8Array()};
       }
 
       function hfCreateDraw(gl,geometry,isSprite=false) {
-        if(isSprite) return hfCreateCompactSpriteDraw(gl);
-        const packed=hfMakeGroupedGeometry(geometry,isSprite);
-        const vao=gl.createVertexArray(), buffer=gl.createBuffer();
-        const oldVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING);
-        gl.bindVertexArray(vao);
-        gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
-        gl.bufferData(gl.ARRAY_BUFFER,packed,gl.STATIC_DRAW);
-        const stride=(isSprite?6:8)*4;
-        const attrs=isSprite?[[0,3,0],[1,2,3*4],[3,1,5*4]]:[[0,3,0],[1,3,3*4],[2,1,6*4],[3,1,7*4]];
-        for(const [loc,size,offset] of attrs) {
-          gl.enableVertexAttribArray(loc);
-          gl.vertexAttribPointer(loc,size,gl.FLOAT,false,stride,offset);
-          gl.vertexAttribDivisor(loc,0);
+        if(isSprite)return hfCreateCompactSpriteDraw(gl);
+        const oldVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING),oldArray=gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+        const vao=gl.createVertexArray(),buffer=gl.createBuffer(),instances=gl.createBuffer();
+        gl.bindVertexArray(vao);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,geometry,gl.STATIC_DRAW);
+        for(const [loc,size,offset] of [[0,3,0],[1,3,12],[2,1,24]]) {
+          gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,size,gl.FLOAT,false,28,offset);gl.vertexAttribDivisor(loc,0);
         }
-        gl.bindVertexArray(oldVao);
-        return {vao,buffer,roots:hfCreateRootTexture(gl),count:0,trees:0,vertices:packed.length/(stride/4)};
+        gl.bindBuffer(gl.ARRAY_BUFFER,instances);gl.bufferData(gl.ARRAY_BUFFER,4,gl.DYNAMIC_DRAW);
+        gl.enableVertexAttribArray(3);gl.vertexAttribPointer(3,1,gl.FLOAT,false,4,0);gl.vertexAttribDivisor(3,1);
+        gl.bindVertexArray(oldVao);gl.bindBuffer(gl.ARRAY_BUFFER,oldArray);
+        return {vao,buffer,instances,roots:hfCreateRootTexture(gl),count:0,trees:0,vertices:geometry.length/7,
+          instanceData:null,candidateByIndex:[],selectionSignature:''};
       }
 
       function hfProgramLocations(gl,program,sprite=false) {
@@ -3081,12 +3137,13 @@
             if(!gl.getExtension('EXT_color_buffer_float')) throw new Error('Geen float terrain-heightmap ondersteuning.');
             this.floatLinear=Boolean(gl.getExtension('OES_texture_float_linear'));
             this.containmentCache=new Map();
+            this.initializeCpuPreparation();
             this.enabled=document.getElementById('toggle-forests')?.checked!==false;
             this.nearProgram=hfCompileProgram(gl,HF3D_COMMON+`
               layout(location=0) in vec3 a_local;
               layout(location=1) in vec3 a_normal;
               layout(location=2) in float a_part;
-              layout(location=3) in float a_slot;
+              layout(location=3) in float a_rootIndex;
               out vec3 v_normal;
               flat out float v_seed;
               flat out float v_part;
@@ -3094,9 +3151,9 @@
                 if (!u_allow3D || u_zoom<u_startZoom) {
                   gl_Position=vec4(2.0,2.0,2.0,1.0); return;
                 }
-                Tree t=readTree(int(a_slot+0.5));
+                Tree t=readTreeAt(int(a_rootIndex+0.5));
                 float h=rootElevation(t);
-                if(!keepTree(t,h) || selectedLOD(t,h)!=u_mode) {
+                if(!keepTree(t,h)) {
                   gl_Position=vec4(2.0,2.0,2.0,1.0); return;
                 }
                 float cs=cos(t.rotation), sn=sin(t.rotation);
@@ -3127,17 +3184,17 @@
               uniform float u_pitch;
               layout(location=0) in vec3 a_local;
               layout(location=1) in vec2 a_uv;
-              layout(location=3) in float a_rootIndex;
+              layout(location=3) in vec2 a_instance;
               out vec2 v_uv;
               flat out float v_seed;
               flat out float v_grove;
               void main() {
-                int rootIndex=int(a_rootIndex+0.5);
+                int rootIndex=int(a_instance.x+0.5);
                 int slot=rootIndex % 4;
                 int groupBase=rootIndex-slot;
                 Tree t=readTreeAt(rootIndex);
                 float elevation=rootElevation(t);
-                if(!keepTree(t,elevation) || selectedLOD(t,elevation)!=2) {
+                if(!keepTree(t,elevation)) {
                   gl_Position=vec4(2.0,2.0,2.0,1.0); return;
                 }
                 float b=radians(u_bearing), pitch=radians(u_pitch);
@@ -3146,7 +3203,7 @@
                 float treePixels=screenHeight(t,elevation);
                 // Incomplete groups cannot combine. Large sprites cannot either.
                 // Skip the four-root terrain/size loop entirely in both cases.
-                bool combine=t.reserved2>3.5 && treePixels<4.2;
+                bool combine=a_instance.y>0.5 && t.reserved2>3.5 && treePixels<4.2;
                 vec2 center=vec2(0.0);
                 float minElevation=1e20,maxElevation=-1e20,meanHeight=0.0;
                 float meanWidth=0.0;
@@ -3234,17 +3291,20 @@
               this.heightDirtyReason=reason;
             };
             this.onMoveEnd=()=>{
+              this.queueCpuCameraSettlement(true);
               // One settled-camera refresh catches reused terrain LOD tiles.
               // Never regenerate the height texture on every move event.
               this.invalidateHeight('camera settled');
               this.scheduleRebuild(false,160);
             };
             this.onZoomEnd=()=>{
+              this.queueCpuCameraSettlement(true);
               this.invalidateHeight('terrain LOD settled');
               this.scheduleRebuild(false,190);
             };
             this.lastLiveRefreshAt=0;
             this.onMove=()=>{
+              this.queueCpuCameraSettlement();
               if(!this.enabled || this.map.getZoom()<HF_SETTINGS.minZoom) return;
               if(this.canReuseForestFrame()) return;
               const now=performance.now();
@@ -3259,14 +3319,20 @@
             };
             this.onIdle=()=>{
               if(this.enabled && this.map.getZoom()>=HF_SETTINGS.minZoom &&
+                 !this.cpuPreparation?.awaitingSource &&
                  (this.needsRebuild||!this.lastBuildKey)) this.scheduleRebuild(false,180);
             };
             this.onSourceData=event=>{
-              const biomeLayer=this.map.getLayer('Biomes');
               if(event?.sourceId==='bigane-dem' && event?.sourceDataType!=='metadata')
                 this.invalidateHeight('DEM content');
-              if(event?.sourceId===biomeLayer?.source && event.isSourceLoaded) {
-                this.sourceRevision++;
+              if(event?.isSourceLoaded && this.preparationDependsOnSource(event.sourceId)) {
+                const cache = this.cpuPreparation;
+                // Coalesce only until the next synchronous preparation reads
+                // the newest data. Geometry caches use exact content identity.
+                if (!cache.pendingSourceChange) this.sourceRevision++;
+                cache.pendingSourceChange = true; cache.snapshot = null;
+                cache.awaitingSource = false;
+                this.preparationStats.sourceInvalidations++;
                 this.needsRebuild=true;
                 if(!this.map.isMoving?.()) this.scheduleRebuild(false,220);
               }
@@ -3278,140 +3344,454 @@
             mapInstance.on('idle',this.onIdle);
             mapInstance.on('sourcedata',this.onSourceData);
             this.scheduleRebuild(true,30);
+            this.queueCpuCameraSettlement(true);
             hybridForestController=this;
             window.biganeForestDebug=()=>this.getStats();
+            window.biganeForestSelectionAudit=()=>this.selectionAudit();
+          },
+
+          initializeCpuPreparation() {
+            if (this.cpuPreparation) return;
+            this.cpuPreparation = {
+              fragments: new Map(), fragmentBytes: 0, fragmentSerial: 0, ringSerial: 0,
+              contexts: new Map(), contextBytes: 0, contextSerial: 0,
+              environments: new Map(), environmentBytes: 0, environmentSerial: 0,
+              cells: new Map(), settlements: new Map(), settlementSerial: 0,
+              fragmentLimit: 1024, fragmentByteLimit: 24 * 1024 * 1024,
+              contextLimit: 1024, contextByteLimit: 512 * 1024,
+              cellLimit: 60000, cellEvictionBatch: 10000,
+              snapshot: null, lastSourceReady: false, pendingSourceChange: false,
+              contextSetKey: '', styleKey: '', awaitingSource: false,
+              settleGeneration: 0, settlePending: 0, settleCompleted: 0,
+              settleCameraKey: '', settleRenderHandler: null
+            };
+            this.preparationStats = {
+              sourceQueries: 0, sourceFeatures: 0, filteredSourceQueries: 0,
+              skippedAgriculture: 0, lastSourceFeatures: 0, agricultureFilterApplied: false,
+              fragmentHits: 0, fragmentMisses: 0, contextHits: 0, contextMisses: 0,
+              cellHits: 0, cellMisses: 0, snapshotHits: 0, settlementQueries: 0,
+              settlementCacheHits: 0, sourceInvalidations: 0, loadedEmptyBuilds: 0,
+              cachedFragments: 0, cachedContexts: 0, cachedCells: 0,
+              estimatedGeometryCacheBytes: 0, awaitingSource: false,
+              settledSourceChecks: 0, pendingCameraSettlement: 0, completedCameraSettlement: 0
+            };
+          },
+
+          preparationSourceLayers() {
+            return (this.map.getStyle()?.layers || []).filter(layer =>
+              layer.id === 'Biomes' || ['Town names', 'Capitals', 'clickable'].includes(layer.id) ||
+              (layer.type === 'fill' && /water|river|lake|ocean|sea|lac/i.test(`${layer.id || ''} ${layer['source-layer'] || ''}`))
+            );
+          },
+
+          preparationDependsOnSource(sourceId) {
+            return Boolean(sourceId && this.preparationSourceLayers().some(layer => layer.source === sourceId));
+          },
+
+          preparationStyleKey() {
+            const zoom = this.map.getZoom();
+            return JSON.stringify(this.preparationSourceLayers().map(layer => [
+              layer.id, layer.type, layer.source, layer['source-layer'] || '',
+              layer.layout?.visibility || 'visible', layer.filter || null,
+              zoom >= (layer.minzoom ?? 0) && zoom < (layer.maxzoom ?? 24)
+            ]));
+          },
+
+          preparationSnapshotKey(showLanduse) {
+            const b = this.map.getBounds();
+            return [this.sourceRevision, showLanduse ? 1 : 0, this.preparationStyleKey(),
+              this.map.getZoom(), this.map.getPitch?.() || 0, this.map.getBearing?.() || 0,
+              b.getWest(), b.getEast(), b.getSouth(), b.getNorth()].join('|');
+          },
+
+          preparationCameraKey() {
+            const center = this.map.getCenter();
+            return [center.lng, center.lat, this.map.getZoom(),
+              this.map.getPitch?.() || 0, this.map.getBearing?.() || 0].join('|');
+          },
+
+          cancelCpuCameraSettlement() {
+            const cache = this.cpuPreparation;
+            if (!cache) return;
+            if (cache.settleRenderHandler) this.map.off('render', cache.settleRenderHandler);
+            cache.settleRenderHandler = null; cache.settlePending = 0;
+            this.preparationStats.pendingCameraSettlement = 0;
+          },
+
+          queueCpuCameraSettlement(requestPaint = false) {
+            this.initializeCpuPreparation();
+            const cache = this.cpuPreparation;
+            if (this.disposed || !this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) {
+              this.cancelCpuCameraSettlement(); cache.settleCameraKey = '';
+              return;
+            }
+            const key = this.preparationCameraKey();
+            if (key !== cache.settleCameraKey) {
+              this.cancelCpuCameraSettlement();
+              cache.settleCameraKey = key;
+              const generation = ++cache.settleGeneration;
+              cache.settlePending = generation;
+              cache.settleRenderHandler = () => this.finishCpuCameraSettlement(generation);
+              this.map.on('render', cache.settleRenderHandler);
+              this.preparationStats.pendingCameraSettlement = generation;
+            }
+            // moveend and zoomend share one camera token. Waiting for an actual
+            // render matters: cached source tiles can still belong to the old
+            // camera when the ordinary debounce fires before MapLibre draws.
+            if (requestPaint && cache.settlePending) this.map.triggerRepaint();
+          },
+
+          finishCpuCameraSettlement(generation) {
+            const cache = this.cpuPreparation;
+            if (!cache || cache.settlePending !== generation) return;
+            if (this.disposed || !this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) {
+              this.cancelCpuCameraSettlement(); cache.settleCameraKey = '';
+              return;
+            }
+            if (this.map.isMoving?.()) return;
+            if (cache.settleCameraKey !== this.preparationCameraKey()) {
+              this.queueCpuCameraSettlement(true); return;
+            }
+            const sources = new Set(this.preparationSourceLayers().map(layer => layer.source).filter(Boolean));
+            if (this.map.getSource('bigane-dem')) sources.add('bigane-dem');
+            try {
+              for (const source of sources) if (!this.map.getSource(source) || !this.map.isSourceLoaded(source)) return;
+            } catch (_) { return; }
+            // Consume and detach before rebuilding: root uploads and the finite
+            // height queue trigger more frames, but must not trigger more checks.
+            this.cancelCpuCameraSettlement(); cache.settleCompleted = generation;
+            cache.snapshot = null; cache.awaitingSource = false; cache.pendingSourceChange = true;
+            this.sourceRevision++; this.needsRebuild = true; this.lastBuildKey = '';
+            clearTimeout(this.rebuildTimer);
+            this.preparationStats.settledSourceChecks++;
+            this.updatePreparationStats();
+            try { this.rebuild(this.gl); }
+            catch (error) { console.warn('Forest settled-source refresh failed:', error); }
+          },
+
+          updatePreparationStats() {
+            const cache = this.cpuPreparation, stats = this.preparationStats;
+            stats.cachedFragments = cache.fragments.size;
+            stats.cachedContexts = cache.contexts.size;
+            stats.cachedCells = cache.cells.size;
+            stats.estimatedGeometryCacheBytes = cache.fragmentBytes;
+            stats.awaitingSource = cache.awaitingSource;
+            stats.pendingCameraSettlement = cache.settlePending;
+            stats.completedCameraSettlement = cache.settleCompleted;
+          },
+
+          disposeCpuPreparation() {
+            const cache = this.cpuPreparation;
+            if (!cache) return;
+            this.cancelCpuCameraSettlement();
+            for (const key of ['fragments', 'contexts', 'environments', 'cells', 'settlements']) cache[key].clear();
+            cache.fragmentBytes = 0; cache.contextBytes = 0; cache.environmentBytes = 0;
+            cache.snapshot = null; cache.contextSetKey = '';
+            this.containmentCache?.clear();
+            this.updatePreparationStats();
+          },
+
+          prepareCpuFragment(feature, biome, purpose = 'biome') {
+            const geometry = feature?.geometry;
+            if (!geometry || !['Polygon', 'MultiPolygon'].includes(geometry.type)) return null;
+            const cache = this.cpuPreparation;
+            // Serialize once per visit. Exact string keys avoid fingerprint
+            // collisions; a short stable id is reused by every later cache.
+            const coordinatesText = JSON.stringify(geometry.coordinates);
+            const contentKey = `${purpose}|${biome}|${geometry.type}|${coordinatesText}`;
+            let prepared = cache.fragments.get(contentKey);
+            if (prepared) {
+              cache.fragments.delete(contentKey); cache.fragments.set(contentKey, prepared);
+              this.preparationStats.fragmentHits++;
+              return prepared;
+            }
+            this.preparationStats.fragmentMisses++;
+            const ownedFeature = {type: 'Feature', properties: {Biome: biome},
+              geometry: {type: geometry.type, coordinates: JSON.parse(coordinatesText)}};
+            const bounds = hfFeatureBounds(ownedFeature);
+            if (!bounds) return null;
+            const first = geometry.type === 'Polygon' ? ownedFeature.geometry.coordinates?.[0]?.[0] :
+              ownedFeature.geometry.coordinates?.[0]?.[0]?.[0];
+            const legacyKey = [biome, bounds.west.toFixed(5), bounds.east.toFixed(5),
+              bounds.south.toFixed(5), bounds.north.toFixed(5),
+              Number(first?.[0] || 0).toFixed(5), Number(first?.[1] || 0).toFixed(5)].join('|');
+            // Conservative estimate includes immutable coordinates, exact keys,
+            // and the optional converted outer/hole rings retained by this entry.
+            const bytes = coordinatesText.length * 6 + 512;
+            prepared = {feature: ownedFeature, biome, bounds, cacheKey: legacyKey,
+              cpuFragmentId: ++cache.fragmentSerial, cpuCacheBytes: bytes};
+            if (bytes <= cache.fragmentByteLimit) {
+              while (cache.fragments.size >= cache.fragmentLimit || cache.fragmentBytes + bytes > cache.fragmentByteLimit) {
+                const oldest = cache.fragments.keys().next().value;
+                if (oldest === undefined) break;
+                cache.fragmentBytes -= cache.fragments.get(oldest).cpuCacheBytes;
+                cache.fragments.delete(oldest);
+              }
+              cache.fragments.set(contentKey, prepared); cache.fragmentBytes += bytes;
+            }
+            return prepared;
+          },
+
+          preparedCpuRings(fragment, holes = false) {
+            const key = holes ? 'cpuHoleRings' : 'cpuOuterRings';
+            if (!fragment[key]) {
+              const coordinates = holes ? hfFeatureHoleRings(fragment.feature) : hfFeatureOuterRings(fragment.feature);
+              fragment[key] = coordinates.map(coords => {
+                const ring = hfMakeWaterRing(coords);
+                if (ring) {
+                  ring.cpuRingId = ++this.cpuPreparation.ringSerial;
+                  ring.cpuOwnerId = fragment.cpuFragmentId;
+                  ring.cpuOwnerBytes = fragment.cpuCacheBytes;
+                }
+                return ring;
+              }).filter(Boolean);
+            }
+            return fragment[key];
+          },
+
+          preparationEnvironmentId(lakes, hydro) {
+            const cache = this.cpuPreparation;
+            const key = `${lakes.map(ring => ring.cpuRingId).join(',')}|${hydro.map(ring => ring.cpuRingId).join(',')}`;
+            let environment = cache.environments.get(key);
+            if (environment) return environment.id;
+            environment = {id: ++cache.environmentSerial, bytes: key.length * 2 + 32};
+            while (cache.environments.size >= 8 || cache.environmentBytes + environment.bytes > 256 * 1024) {
+              const oldest = cache.environments.keys().next().value;
+              if (oldest === undefined) break;
+              cache.environmentBytes -= cache.environments.get(oldest).bytes;
+              cache.environments.delete(oldest);
+            }
+            if (environment.bytes <= 256 * 1024) {
+              cache.environments.set(key, environment); cache.environmentBytes += environment.bytes;
+            }
+            return environment.id;
+          },
+
+          prepareCpuContext(entry, allEntries, lakes, hydro, environmentId, oasis = false) {
+            const cache = this.cpuPreparation;
+            const biome = oasis ? HF_OASIS_BIOME : entry.biome;
+            const usesWater = ['Savanna', 'Wetland', 'Tropical seasonal forest', 'Tropical rainforest', 'Grassland'].includes(biome);
+            const warm = biome === 'Wetland' ? hfWarmBiomeContextFactor(entry, allEntries) : 0;
+            const key = [entry.cpuFragmentId, biome, usesWater || oasis ? environmentId : 0, warm].join('|');
+            let context = cache.contexts.get(key);
+            if (context) this.preparationStats.contextHits++;
+            else {
+              this.preparationStats.contextMisses++;
+              const nearby = [], oasisNearby = [];
+              if (usesWater) for (let i = 0; i < hydro.length; i++) {
+                if (hfBoundsNear(entry.bounds, hydro[i].bounds, HF_WATER_INFLUENCE_METERS / HF_WORLD_METERS)) nearby.push(i);
+              }
+              if (oasis) for (let i = 0; i < lakes.length; i++) {
+                if (hfBoundsNear(entry.bounds, lakes[i].bounds, HF_OASIS_LAKE_SEARCH_METERS / HF_WORLD_METERS)) oasisNearby.push(i);
+              }
+              context = {id: ++cache.contextSerial,
+                mix: oasis ? null : hfPalmMixForEntry(entry, lakes, allEntries),
+                nearby, oasisNearby, bytes: key.length * 2 + (nearby.length + oasisNearby.length) * 8 + 256};
+              while (cache.contexts.size >= cache.contextLimit || cache.contextBytes + context.bytes > cache.contextByteLimit) {
+                const oldest = cache.contexts.keys().next().value;
+                if (oldest === undefined) break;
+                cache.contextBytes -= cache.contexts.get(oldest).bytes;
+                cache.contexts.delete(oldest);
+              }
+              if (context.bytes <= cache.contextByteLimit) {
+                cache.contexts.set(key, context); cache.contextBytes += context.bytes;
+              }
+            }
+            if (oasis && !context.oasisNearby.length) return null;
+            return {...entry, biome, cpuContextId: context.id, mixOverride: context.mix,
+              nearbyWaterRings: context.nearby.map(index => hydro[index]),
+              ...(oasis ? {waterRings: context.oasisNearby.map(index => lakes[index])} : {})};
+          },
+
+          collectCpuSettlements() {
+            const queries = new Map(), mapInstance = this.map;
+            // Three display layers use the same point source. Query that source
+            // once while retaining the existing radius and deduplication rules.
+            const points = hfCollectSettlementPoints({
+              getLayer: id => mapInstance.getLayer(id),
+              queryRenderedFeatures: options => mapInstance.queryRenderedFeatures(options),
+              querySourceFeatures: (sourceId, options) => {
+                const key = `${sourceId}|${JSON.stringify(options || null)}`;
+                if (!queries.has(key)) {
+                  this.preparationStats.settlementQueries++;
+                  queries.set(key, mapInstance.querySourceFeatures(sourceId, options) || []);
+                }
+                return queries.get(key);
+              }
+            });
+            const key = JSON.stringify(points.map(p => [p.x, p.y, p.radiusMeters, p.seed, p.name]));
+            const cache = this.cpuPreparation;
+            let prepared = cache.settlements.get(key);
+            if (prepared) { this.preparationStats.settlementCacheHits++; return prepared; }
+            prepared = {id: ++cache.settlementSerial, points, index: hfBuildSettlementIndex(points)};
+            // At most two point snapshots; large global snapshots are used only
+            // for this rebuild and are not retained as a cache entry.
+            if (points.length <= 8000) {
+              if (cache.settlements.size >= 2) cache.settlements.delete(cache.settlements.keys().next().value);
+              cache.settlements.set(key, prepared);
+            }
+            return prepared;
+          },
+
+          preparedCpuCell(entry, ix, iy, x, y, settlements) {
+            const cache = this.cpuPreparation;
+            const key = [entry.cpuContextId, settlements.id, HF_SETTINGS.densityMultiplier, HF_SETTINGS.treeSize, ix, iy].join('|');
+            const previous = cache.cells.get(key);
+            if (previous !== undefined) { this.preparationStats.cellHits++; return previous; }
+            this.preparationStats.cellMisses++;
+            let result = null;
+            const lng = hfLng(x), lat = hfLat(y);
+            const membershipKey = `${entry.cpuFragmentId}:${ix}:${iy}`;
+            let inside = this.containmentCache.get(membershipKey);
+            if (inside === undefined) {
+              inside = featureContainsCoordinate(entry.feature, [lng, lat]);
+              this.containmentCache.set(membershipKey, inside);
+              if (this.containmentCache.size > 60000) {
+                let remove = 10000;
+                for (const oldest of this.containmentCache.keys()) {
+                  this.containmentCache.delete(oldest); if (--remove <= 0) break;
+                }
+              }
+            }
+            if (inside) {
+              const merc = new maplibregl.MercatorCoordinate(x, y, 0);
+              const localMpu = merc.meterInMercatorCoordinateUnits();
+              const settlementFactor = hfSettlementDensityFactor(x, y, localMpu, settlements.index);
+              if (settlementFactor > 0) {
+                const densityField = hfForestDensityField(entry, x, y);
+                const waterFactor = hfWaterDensityFactor(entry, x, y, localMpu);
+                const density = Math.min(1, HF_BIOMES[entry.biome].density * HF_SETTINGS.densityMultiplier * densityField * waterFactor * settlementFactor);
+                if (hfHash(ix, iy, 3) <= density && (entry.biome !== HF_OASIS_BIOME ||
+                    hfDistanceToWaterRingsMeters(x, y, localMpu, entry.waterRings) <= HF_OASIS_LAKE_RING_METERS)) {
+                  const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4), entry.mixOverride);
+                  const type = HF_TYPES[typeIndex];
+                  const scale = 0.78 + hfHash(ix, iy, 5) * 0.54;
+                  const height = type.baseHeight * scale * HF_SETTINGS.treeSize;
+                  const width = height * type.widthRatio * (0.86 + hfHash(ix, iy, 6) * 0.28);
+                  const rotation = hfHash(ix, iy, 7) * Math.PI * 2;
+                  const seed = hfHash(ix, iy, 8);
+                  result = {x, y, mpu: localMpu, typeIndex, width, height, rotation, seed, ix, iy};
+                }
+              }
+            }
+            if (cache.cells.size >= cache.cellLimit) {
+              let remove = cache.cellEvictionBatch;
+              for (const oldest of cache.cells.keys()) { cache.cells.delete(oldest); if (--remove <= 0) break; }
+            }
+            cache.cells.set(key, result);
+            return result;
           },
 
           collectBiomeFeatures() {
-            const biomeLayer = this.map.getLayer("Biomes");
-            if (!biomeLayer?.source) return [];
-            const sourceLayer = biomeLayer["source-layer"] || biomeLayer.sourceLayer;
+            this.initializeCpuPreparation();
+            const cache = this.cpuPreparation, stats = this.preparationStats;
+            const biomeLayer = this.map.getLayer('Biomes');
+            if (!biomeLayer?.source) { cache.lastSourceReady = false; return []; }
+            try { cache.lastSourceReady = !!this.map.getSource(biomeLayer.source) && this.map.isSourceLoaded(biomeLayer.source); }
+            catch (_) { cache.lastSourceReady = false; }
+            const showLanduse = biganeLanduseEnabled();
+            const snapshotKey = this.preparationSnapshotKey(showLanduse);
+            stats.agricultureFilterApplied = showLanduse;
+            if (cache.snapshot?.key === snapshotKey) {
+              stats.snapshotHits++;
+              cache.contextSetKey = cache.snapshot.contextSetKey;
+              return cache.snapshot.features;
+            }
+            const sourceLayer = biomeLayer['source-layer'] || biomeLayer.sourceLayer;
+            const agricultureFilter = showLanduse ? ['all',
+              ['!=', ['get', 'Biome'], 'Akker'], ['!=', ['get', 'Biome'], 'Weiland']
+            ] : null;
+            const queryOptions = {
+              ...(sourceLayer ? {sourceLayer} : {}),
+              ...(agricultureFilter ? {filter: agricultureFilter} : {})
+            };
             let raw = [];
             try {
-              raw = this.map.querySourceFeatures(
-                biomeLayer.source,
-                sourceLayer ? { sourceLayer } : undefined
-              ) || [];
-            } catch (error) {
-              console.warn("Forest biome source-query failed:", error);
-            }
+              stats.sourceQueries++; if (agricultureFilter) stats.filteredSourceQueries++;
+              raw = this.map.querySourceFeatures(biomeLayer.source, queryOptions) || [];
+            } catch (error) { console.warn('Forest biome source-query failed:', error); }
             if (!raw.length) {
               try {
-                raw = this.map.queryRenderedFeatures({ layers: ["Biomes"] }) || [];
+                stats.sourceQueries++; if (agricultureFilter) stats.filteredSourceQueries++;
+                raw = this.map.queryRenderedFeatures({layers: ['Biomes'],
+                  ...(agricultureFilter ? {filter: agricultureFilter} : {})}) || [];
               } catch (_) {}
             }
-
-            const allEntries = [];
-            const seenFeatures = new Set();
-            const showLanduse = biganeLanduseEnabled();
+            stats.sourceFeatures += raw.length; stats.lastSourceFeatures = raw.length;
+            const allEntries = [], seenFeatures = new Set();
             for (const feature of raw) {
+              const originalBiome = feature?.properties?.Biome;
+              // Also guard fallbacks/adapters that do not apply query filters.
+              if (showLanduse && (originalBiome === 'Akker' || originalBiome === 'Weiland')) {
+                stats.skippedAgriculture++; continue;
+              }
               const biome = biganeEffectiveBiome(feature?.properties, showLanduse);
-              const geometry = feature?.geometry;
-              if (!geometry || (geometry.type !== "Polygon" && geometry.type !== "MultiPolygon")) continue;
-              const bounds = hfFeatureBounds(feature);
-              if (!bounds) continue;
-              const first = geometry.type === "Polygon"
-                ? geometry.coordinates?.[0]?.[0]
-                : geometry.coordinates?.[0]?.[0]?.[0];
-              const featureKey = [
-                biome,
-                bounds.west.toFixed(5), bounds.east.toFixed(5),
-                bounds.south.toFixed(5), bounds.north.toFixed(5),
-                Number(first?.[0] || 0).toFixed(5), Number(first?.[1] || 0).toFixed(5)
-              ].join("|");
-              if (seenFeatures.has(featureKey)) continue;
-              seenFeatures.add(featureKey);
-              allEntries.push({ feature, biome, bounds, cacheKey: featureKey });
+              const prepared = this.prepareCpuFragment(feature, biome);
+              if (!prepared || seenFeatures.has(prepared.cacheKey)) continue;
+              seenFeatures.add(prepared.cacheKey); allEntries.push(prepared);
             }
 
-            // Lake-driven oasis detection. First prefer explicit style layers whose
-            // id/source-layer names say "lake". These are queried as rendered
-            // features so the layer's own lake filter is respected.
+            // Water queries stay tied to the actual camera. Reuse prepared exact
+            // fragments, not an old viewport's palm/oasis context.
+            const styleLayers = this.map.getStyle()?.layers || [];
             const explicitLakeRings = [];
             try {
-              const styleLayers = this.map.getStyle()?.layers || [];
               const lakeLayerIds = styleLayers
-                .filter(layer => layer?.type === "fill" && /lake|lakes|lac/i.test(`${layer.id || ""} ${layer["source-layer"] || ""}`))
+                .filter(layer => layer?.type === 'fill' && /lake|lakes|lac/i.test(`${layer.id || ''} ${layer['source-layer'] || ''}`))
                 .map(layer => layer.id);
               if (lakeLayerIds.length) {
-                const lakeFeatures = this.map.queryRenderedFeatures({ layers: lakeLayerIds }) || [];
+                const lakeFeatures = this.map.queryRenderedFeatures({layers: lakeLayerIds}) || [];
                 const lakeSeen = new Set();
                 for (const lake of lakeFeatures) {
-                  if (!lake?.geometry || (lake.geometry.type !== "Polygon" && lake.geometry.type !== "MultiPolygon")) continue;
-                  const b = hfFeatureBounds(lake);
-                  if (!b) continue;
-                  const key = [b.west.toFixed(4), b.east.toFixed(4), b.south.toFixed(4), b.north.toFixed(4)].join(":");
+                  const prepared = this.prepareCpuFragment(lake, '', 'water');
+                  if (!prepared) continue;
+                  const b = prepared.bounds;
+                  const key = [b.west.toFixed(4), b.east.toFixed(4), b.south.toFixed(4), b.north.toFixed(4)].join(':');
                   if (lakeSeen.has(key)) continue;
-                  lakeSeen.add(key);
-                  for (const coords of hfFeatureOuterRings(lake)) {
-                    const ring = hfMakeWaterRing(coords);
-                    if (ring) explicitLakeRings.push(ring);
-                  }
+                  lakeSeen.add(key); explicitLakeRings.push(...this.preparedCpuRings(prepared));
                 }
               }
-            } catch (error) {
-              console.warn("Lake layer lookup failed; falling back to desert polygon holes:", error);
-            }
+            } catch (error) { console.warn('Lake layer lookup failed; falling back to desert polygon holes:', error); }
 
-            // Fallback/augmentation: interior rings in a Hot desert biome are
-            // water holes in the land polygon in many Bigane exports. This lets
-            // desert lakes work even when the style layer has an unexpected id.
-            const desertEntries = allEntries.filter(entry => entry.biome === "Hot desert");
+            const desertEntries = allEntries.filter(entry => entry.biome === 'Hot desert');
             const desertHoleRings = [];
-            for (const desert of desertEntries) {
-              for (const coords of hfFeatureHoleRings(desert.feature)) {
-                const ring = hfMakeWaterRing(coords);
-                if (ring) desertHoleRings.push(ring);
-              }
-            }
+            for (const desert of desertEntries) desertHoleRings.push(...this.preparedCpuRings(desert, true));
             const allLakeRings = [...explicitLakeRings, ...desertHoleRings];
             const hydroRings = [...allLakeRings];
             try {
-              const styleLayers = this.map.getStyle()?.layers || [];
               const hydroLayerIds = styleLayers
-                .filter(layer => layer?.type === "fill" && /water|river|lake|ocean|sea/i.test(`${layer.id || ""} ${layer["source-layer"] || ""}`))
+                .filter(layer => layer?.type === 'fill' && /water|river|lake|ocean|sea/i.test(`${layer.id || ''} ${layer['source-layer'] || ''}`))
                 .map(layer => layer.id);
               if (hydroLayerIds.length) {
-                const hydroFeatures = this.map.queryRenderedFeatures({ layers: hydroLayerIds }) || [];
+                const hydroFeatures = this.map.queryRenderedFeatures({layers: hydroLayerIds}) || [];
                 const hydroSeen = new Set();
                 for (const feature of hydroFeatures) {
-                  if (!feature?.geometry || (feature.geometry.type !== "Polygon" && feature.geometry.type !== "MultiPolygon")) continue;
-                  const b = hfFeatureBounds(feature);
-                  if (!b) continue;
-                  const key = [b.west.toFixed(4), b.east.toFixed(4), b.south.toFixed(4), b.north.toFixed(4)].join(":");
+                  const prepared = this.prepareCpuFragment(feature, '', 'water');
+                  if (!prepared) continue;
+                  const b = prepared.bounds;
+                  const key = [b.west.toFixed(4), b.east.toFixed(4), b.south.toFixed(4), b.north.toFixed(4)].join(':');
                   if (hydroSeen.has(key)) continue;
-                  hydroSeen.add(key);
-                  for (const coords of hfFeatureOuterRings(feature)) {
-                    const ring = hfMakeWaterRing(coords);
-                    if (ring) hydroRings.push(ring);
-                  }
+                  hydroSeen.add(key); hydroRings.push(...this.preparedCpuRings(prepared));
                 }
               }
-            } catch (error) {
-              console.warn("Hydrology lookup for vegetation skipped:", error);
-            }
-            const searchPadWorld = HF_OASIS_LAKE_SEARCH_METERS / HF_WORLD_METERS;
+            } catch (error) { console.warn('Hydrology lookup for vegetation skipped:', error); }
 
-            const waterPadWorld = HF_WATER_INFLUENCE_METERS / HF_WORLD_METERS;
-            const normalForestEntries = allEntries
-              .filter(entry => Boolean(HF_BIOMES[entry.biome]))
-              .map(entry => ({
-                ...entry,
-                mixOverride: hfPalmMixForEntry(entry, allLakeRings, allEntries),
-                nearbyWaterRings: hydroRings.filter(ring => hfBoundsNear(entry.bounds, ring.bounds, waterPadWorld))
-              }));
-            const oasisEntries = [];
-            for (const desert of desertEntries) {
-              const nearbyRings = allLakeRings.filter(ring => hfBoundsNear(desert.bounds, ring.bounds, searchPadWorld));
-              if (!nearbyRings.length) continue;
-              oasisEntries.push({
-                ...desert,
-                biome: HF_OASIS_BIOME,
-                waterRings: nearbyRings
-              });
-            }
-
-            return [...normalForestEntries, ...oasisEntries];
+            const environmentId = this.preparationEnvironmentId(allLakeRings, hydroRings);
+            const normalForestEntries = allEntries.filter(entry => Boolean(HF_BIOMES[entry.biome]))
+              .map(entry => this.prepareCpuContext(entry, allEntries, allLakeRings, hydroRings, environmentId));
+            const oasisEntries = desertEntries.map(entry =>
+              this.prepareCpuContext(entry, allEntries, allLakeRings, hydroRings, environmentId, true)).filter(Boolean);
+            const features = [...normalForestEntries, ...oasisEntries];
+            cache.contextSetKey = features.map(entry => entry.cpuContextId).join(',');
+            cache.pendingSourceChange = false;
+            const retained = new Map(features.map(entry => [entry.cpuFragmentId, entry.cpuCacheBytes]));
+            for (const ring of hydroRings) retained.set(ring.cpuOwnerId, ring.cpuOwnerBytes);
+            const retainedBytes = [...retained.values()].reduce((total, bytes) => total + (bytes || 0), 0);
+            cache.snapshot = features.length <= 1024 && retainedBytes <= cache.fragmentByteLimit ?
+              {key: snapshotKey, features, contextSetKey: cache.contextSetKey} : null;
+            stats.lastPreparedFeatures = features.length;
+            this.updatePreparationStats();
+            return features;
           },
 
           activeFrame() {
@@ -3453,210 +3833,307 @@
 
           rebuild(gl) {
             const buildStarted=performance.now();
+            this.initializeCpuPreparation();
+            const cpu = this.cpuPreparation;
+            const styleKey = this.preparationStyleKey();
+            if (cpu.styleKey !== styleKey) {
+              cpu.styleKey = styleKey; cpu.snapshot = null; this.needsRebuild = true;
+            }
             if(this.canReuseForestFrame() && this.builtSourceRevision===this.sourceRevision) {
               this.map.triggerRepaint();
               return;
             }
             this.needsRebuild = false;
-            if (!this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) {
-              // Rendering is hard-gated; retain the cache for a later zoom-in.
-              return;
-            }
+            if (!this.enabled || this.map.getZoom() < HF_SETTINGS.minZoom) return;
 
             const features = this.collectBiomeFeatures();
-            if (!features.length) {
-              this.needsRebuild = true;
+            if (!features.length && !cpu.lastSourceReady) {
+              // Wait for a real source event or camera action. An idle observer
+              // must not repeatedly retry an empty, still-loading source.
+              cpu.awaitingSource = true; this.updatePreparationStats();
               return;
             }
-
+            cpu.awaitingSource = false;
             const zoom = this.map.getZoom();
             const stride = hfStrideForZoom(zoom);
             const nearRadiusMeters = hfNearRadiusMetersForZoom(zoom);
             const frame = this.activeFrame();
             const centerMpu = frame.c.meterInMercatorCoordinateUnits();
-            const settlementPoints = hfCollectSettlementPoints(this.map);
-            const settlementIndex = hfBuildSettlementIndex(settlementPoints);
+            const settlements = this.collectCpuSettlements();
+            const settlementPoints = settlements.points, settlementIndex = settlements.index;
             const buildKey = [
               Math.floor(frame.x0 / HF_BASE_CELL_WORLD),
               Math.ceil(frame.x1 / HF_BASE_CELL_WORLD),
               Math.floor(frame.y0 / HF_BASE_CELL_WORLD),
               Math.ceil(frame.y1 / HF_BASE_CELL_WORLD),
-              stride,
-              this.forestGeometrySettingsKey(),
-              this.sourceRevision,
-              features.length,
-              settlementPoints.length
-            ].join(":");
+              stride, this.forestGeometrySettingsKey(), this.sourceRevision,
+              features.length, settlementPoints.length, settlements.id,
+              cpu.contextSetKey, styleKey, biganeLanduseEnabled() ? 1 : 0
+            ].join(':');
             if (buildKey === this.lastBuildKey) return;
-
-            const seen = new Set();
-            const candidates = [];
-
+            if (!features.length) this.preparationStats.loadedEmptyBuilds++;
+            const seen = new Set(), candidates = [];
             featureLoop:
             for (const entry of features) {
               const b = entry.bounds;
-              const x0 = Math.max(frame.x0, b.x0);
-              const x1 = Math.min(frame.x1, b.x1);
-              const y0 = Math.max(frame.y0, b.y0);
-              const y1 = Math.min(frame.y1, b.y1);
+              const x0 = Math.max(frame.x0, b.x0), x1 = Math.min(frame.x1, b.x1);
+              const y0 = Math.max(frame.y0, b.y0), y1 = Math.min(frame.y1, b.y1);
               if (x0 >= x1 || y0 >= y1) continue;
-
               const ix0 = Math.floor(x0 / HF_BASE_CELL_WORLD) - 1;
               const ix1 = Math.ceil(x1 / HF_BASE_CELL_WORLD) + 1;
               const iy0 = Math.floor(y0 / HF_BASE_CELL_WORLD) - 1;
               const iy1 = Math.ceil(y1 / HF_BASE_CELL_WORLD) + 1;
-              const biomeConfig = HF_BIOMES[entry.biome];
-
               for (let ix = ix0; ix <= ix1; ix++) {
                 if (hfMod(ix, stride) !== 0) continue;
                 for (let iy = iy0; iy <= iy1; iy++) {
                   if (hfMod(iy, stride) !== 0) continue;
                   const key = `${ix}:${iy}`;
                   if (seen.has(key)) continue;
-
                   const jx = (hfHash(ix, iy, 1) - 0.5) * 0.68;
                   const jy = (hfHash(ix, iy, 2) - 0.5) * 0.68;
                   const x = (ix + 0.5 + jx) * HF_BASE_CELL_WORLD;
                   const y = (iy + 0.5 + jy) * HF_BASE_CELL_WORLD;
                   if (x < frame.x0 || x > frame.x1 || y < frame.y0 || y > frame.y1) continue;
-
-                  const nx = (x - frame.c.x) / frame.halfW;
-                  const ny = (y - frame.c.y) / frame.halfH;
+                  const nx = (x - frame.c.x) / frame.halfW, ny = (y - frame.c.y) / frame.halfH;
                   const norm = Math.hypot(nx, ny);
                   if (norm > HF_SETTINGS.outerRadius) continue;
                   if (norm > 1.30 && hfHash(ix, iy, 71) > 0.56) continue;
                   if (norm > 1.90 && hfHash(ix, iy, 72) > 0.34) continue;
-                  const lng = hfLng(x), lat = hfLat(y);
-                  // Cache the expensive polygon membership across camera moves.
-                  // The key includes the source fragment, not merely the biome name.
-                  const memoKey=`${entry.cacheKey || entry.biome}:${ix}:${iy}`;
-                  let inside=this.containmentCache.get(memoKey);
-                  if(inside===undefined){
-                    inside=featureContainsCoordinate(entry.feature,[lng,lat]);
-                    this.containmentCache.set(memoKey,inside);
-                    if(this.containmentCache.size>60000){
-                      let remove=10000;
-                      for(const oldKey of this.containmentCache.keys()){
-                        this.containmentCache.delete(oldKey);if(--remove<=0)break;
-                      }
-                    }
-                  }
-                  if(!inside)continue;
-
-                  const merc = new maplibregl.MercatorCoordinate(x, y, 0);
-                  const localMpu = merc.meterInMercatorCoordinateUnits();
-                  const settlementFactor = hfSettlementDensityFactor(x, y, localMpu, settlementIndex);
-                  if (settlementFactor <= 0) continue;
-                  const densityField = hfForestDensityField(entry, x, y);
-                  const waterFactor = hfWaterDensityFactor(entry, x, y, localMpu);
-                  const candidateDensity = Math.min(1, biomeConfig.density * HF_SETTINGS.densityMultiplier * densityField * waterFactor * settlementFactor);
-                  if (hfHash(ix, iy, 3) > candidateDensity) continue;
-                  // Oasis palms are generated only on Hot desert land within a
-                  // narrow world-space ring around an actual lake shoreline.
-                  if (entry.biome === HF_OASIS_BIOME) {
-                    const waterDistanceMeters = hfDistanceToWaterRingsMeters(x, y, localMpu, entry.waterRings);
-                    if (waterDistanceMeters > HF_OASIS_LAKE_RING_METERS) continue;
-                  }
+                  const cell = this.preparedCpuCell(entry, ix, iy, x, y, settlements);
+                  if (!cell) continue;
+                  // Keep this before outer thinning, exactly as the original:
+                  // overlapping fragments may not retry an already accepted root.
                   seen.add(key);
-
-                  const typeIndex = hfSelectType(entry.biome, hfHash(ix, iy, 4), entry.mixOverride);
-                  const type = HF_TYPES[typeIndex];
-                  const scale = 0.78 + hfHash(ix, iy, 5) * 0.54;
-                  const height = type.baseHeight * scale * HF_SETTINGS.treeSize;
-                  const width = height * type.widthRatio * (0.86 + hfHash(ix, iy, 6) * 0.28);
-                  const rotation = hfHash(ix, iy, 7) * Math.PI * 2;
-                  const seed = hfHash(ix, iy, 8);
-
-                  // Thin the outer buffer by whole roots, never by making
-                  // every surviving crown partly transparent.
-                  const keepOuter=norm<=HF_SETTINGS.fadeStart ? 1 : Math.max(0,
-                    (HF_SETTINGS.outerRadius-norm)/(HF_SETTINGS.outerRadius-HF_SETTINGS.fadeStart));
-                  if(hfHash(ix,iy,91)>keepOuter) continue;
-                  candidates.push({x,y,mpu:localMpu,typeIndex,width,height,rotation,seed,norm,ix,iy,stride});
+                  const keepOuter = norm <= HF_SETTINGS.fadeStart ? 1 : Math.max(0,
+                    (HF_SETTINGS.outerRadius - norm) / (HF_SETTINGS.outerRadius - HF_SETTINGS.fadeStart));
+                  if (hfHash(ix, iy, 91) > keepOuter) continue;
+                  // Copy cached stable properties; the GPU pass may attach its
+                  // own mutable eligibility/index fields to this frame's object.
+                  candidates.push({...cell, norm, stride});
                   if (candidates.length >= HF_MAX_CANDIDATES) break featureLoop;
                 }
               }
             }
+            this.updatePreparationStats();
 
             candidates.sort((a,b)=>a.norm-b.norm);
-            const highData=HF_TYPES.map(()=>[]),midData=HF_TYPES.map(()=>[]),farData=HF_TYPES.map(()=>[]);
-            // Cache potential model roots also while in sprite-only mode.
-            // Visibility is decided live on every render, not at rebuild time.
-            // These buffers do NOT issue model draw calls below the 3D gate.
-            const max3D=HF_SETTINGS.nearCap;
-            const maxHigh=Math.min(max3D,Math.ceil(max3D*0.44));
+            this.cancelHeightPreparation();
+            this.poolVersion=(this.poolVersion||0)+1;
+            this.lodHeightCache=this.lodHeightCache||new Map();
+            const nearData=HF_TYPES.map(()=>[]),farData=HF_TYPES.map(()=>[]);
+            const max3D=HF_SETTINGS.nearCap,maxHigh=Math.min(max3D,Math.ceil(max3D*.44));
             let nearTotalSelected=0,highTotal=0,spriteTotalSelected=0;
+            this.lodNearCandidates=[];
             const candidateLimit=Math.max(max3D,HF_SETTINGS.spriteCap);
             for(const c of candidates.slice(0,candidateLimit)) {
+              c.key=hfRootKey(c);c.gpuRoot=hfGpuRoot(c);
               c.nearEligible=nearTotalSelected<max3D;
-              c.highEligible=c.nearEligible && highTotal<maxHigh;
-              if(c.nearEligible){midData[c.typeIndex].push(c);nearTotalSelected++;}
-              if(c.highEligible){highData[c.typeIndex].push(c);highTotal++;}
+              c.highEligible=c.nearEligible&&highTotal<maxHigh;
+              c.farRootIndex=-1;c.modelRootIndex=-1;
+              if(c.nearEligible) {
+                c.modelRootIndex=nearData[c.typeIndex].length;
+                nearData[c.typeIndex].push(c);this.lodNearCandidates.push(c);nearTotalSelected++;
+              }
+              if(c.highEligible)highTotal++;
               if(spriteTotalSelected<HF_SETTINGS.spriteCap){farData[c.typeIndex].push(c);spriteTotalSelected++;}
             }
-            for(let i=0;i<this.typeStates.length;i++){
-              const state=this.typeStates[i];
-              hfUploadRootGroups(gl,state.high,highData[i]);
-              hfUploadRootGroups(gl,state.mid,midData[i]);
+            const retained=new Set(this.lodNearCandidates.map(c=>c.key));
+            for(const key of this.lodHeightCache.keys())if(!retained.has(key))this.lodHeightCache.delete(key);
+            for(let i=0;i<this.typeStates.length;i++) {
+              const state=this.typeStates[i];state.nearCandidates=nearData[i];
+              hfUploadRootGroups(gl,state.high,nearData[i]);
+              hfUploadRootGroups(gl,state.mid,nearData[i]);
               hfUploadRootGroups(gl,state.far,farData[i]);
             }
-            const extra = HF_BASE_CELL_WORLD * 2.6;
-            this.heightBounds[0] = frame.x0 - extra;
-            this.heightBounds[1] = frame.y0 - extra;
-            this.heightBounds[2] = frame.x1 + extra;
-            this.heightBounds[3] = frame.y1 + extra;
+            this.lastSelectionKey='';
+            const extra=HF_BASE_CELL_WORLD*2.6;
+            const nextHeightBounds=new Float32Array([frame.x0-extra,frame.y0-extra,frame.x1+extra,frame.y1+extra]);
+            const heightBoundsChanged=nextHeightBounds.some((value,i)=>value!==this.heightBounds[i]);
+            this.heightBounds.set(nextHeightBounds);
+            // An old texture has the old coordinate frame. Never reuse it with
+            // new bounds, including during the moving-camera refresh throttle.
+            if(heightBoundsChanged)this.heightReady=false;
             this.invalidateHeight('forest bounds changed');
-            this.lastBuildKey = buildKey;
-            this.cachedForestFrame = frame;
-            this.cachedForestStride = stride;
-            this.settingsKey = this.forestGeometrySettingsKey();
-            this.builtSourceRevision = this.sourceRevision;
-            this.rebuilds++;
-
-            this.lastNearTotal=nearTotalSelected;
-            this.lastHighTotal=highTotal;
-            this.lastSpriteTotal=spriteTotalSelected;
-            this.lastMidGroupTotal=this.typeStates.reduce((n,t)=>n+t.mid.count,0);
-            this.lastFarGroupTotal=this.typeStates.reduce((n,t)=>n+t.far.groupCount,0);
-            this.lastBiomeFeatureCount=features.length;
-            this.lastRebuildMs=Math.round(performance.now()-buildStarted);
-            console.info(`Forest v42: ${nearTotalSelected} 3D roots (${highTotal} detailed), ${this.lastMidGroupTotal} middle batches, ${spriteTotalSelected} sprite roots. Rebuild ${this.lastRebuildMs}ms.`);
+            this.lastBuildKey=buildKey;this.cachedForestFrame=frame;this.cachedForestStride=stride;
+            this.settingsKey=this.forestGeometrySettingsKey();this.builtSourceRevision=this.sourceRevision;this.rebuilds++;
+            this.lastNearTotal=nearTotalSelected;this.lastHighTotal=highTotal;this.lastSpriteTotal=spriteTotalSelected;
+            this.lastMidGroupTotal=0;this.lastFarGroupTotal=this.typeStates.reduce((n,s)=>n+s.far.groupCount,0);
+            this.lastBiomeFeatureCount=features.length;this.lastRebuildMs=Math.round(performance.now()-buildStarted);
+            console.info(`Forest static pools: ${nearTotalSelected} possible 3D roots, ${spriteTotalSelected} sprite roots. Rebuild ${this.lastRebuildMs}ms.`);
             this.map.triggerRepaint();
           },
 
+
+          cancelHeightPreparation() {
+            if(this.heightQueue&&this.heightQueue.cursor<this.heightQueue.items.length)
+              this.heightQueueCancelled=(this.heightQueueCancelled||0)+1;
+            clearTimeout(this.heightPreparationTimer);
+            this.heightPreparationTimer=null;this.heightQueue=null;this.heightPreparationKey='';
+            this.heightPreparationGeneration=(this.heightPreparationGeneration||0)+1;
+          },
+
+          ensureHeightPreparation(policy) {
+            if(!policy.models||!this.heightReady||this.disposed) {this.cancelHeightPreparation();return;}
+            const revision=this.heightRevision||0,pool=this.poolVersion||0,key=`${pool}:${revision}`;
+            if(this.heightPreparationKey===key)return;
+            this.cancelHeightPreparation();
+            this.heightPreparationKey=key;
+            this.lodHeightCache=this.lodHeightCache||new Map();
+            const items=(this.lodNearCandidates||[]).filter(c=>this.lodHeightCache.get(c.key)?.attemptRevision!==revision);
+            if(!items.length)return;
+            const generation=this.heightPreparationGeneration;
+            const queue={items,cursor:0,generation,revision,pool};this.heightQueue=queue;
+            this.heightQueueStarted=(this.heightQueueStarted||0)+1;
+            const run=()=>{
+              this.heightPreparationTimer=null;
+              if(this.disposed||this.heightQueue!==queue||generation!==this.heightPreparationGeneration)return;
+              if(pool!==(this.poolVersion||0)||revision!==(this.heightRevision||0)||
+                 !hfDrawPolicy(this.map.getZoom(),this.enabled,this.spritesOnly).models) {
+                this.cancelHeightPreparation();return;
+              }
+              const started=performance.now();let queries=0,changed=false;
+              // Work is finite and cancellable. A single public query cannot be
+              // interrupted, so the time budget is checked after each result.
+              while(queue.cursor<items.length&&queries<96&&(queries===0||performance.now()-started<3)) {
+                const c=items[queue.cursor++],previous=this.lodHeightCache.get(c.key);
+                let height=null;
+                try {
+                  // Public MapLibre terrain elevations are already exaggerated;
+                  // GPU rootElevation remains the source of the final anchor.
+                  height=this.map.queryTerrainElevation([hfLng(c.gpuRoot.x),hfLat(c.gpuRoot.y)]);
+                } catch(_) {}
+                queries++;
+                const valid=Number.isFinite(height);
+                const entry={height:valid?height:previous?.height,
+                  sampleRevision:valid?revision:previous?.sampleRevision,attemptRevision:revision};
+                this.lodHeightCache.set(c.key,entry);
+                if(valid&&(!Number.isFinite(previous?.height)||previous.height!==height))changed=true;
+              }
+              const elapsed=performance.now()-started;
+              this.heightQueryCount=(this.heightQueryCount||0)+queries;
+              this.heightQueryMaxChunk=Math.max(this.heightQueryMaxChunk||0,queries);
+              this.heightQueryMaxChunkMs=Math.max(this.heightQueryMaxChunkMs||0,elapsed);
+              this.heightQueryCpuMs=(this.heightQueryCpuMs||0)+elapsed;
+              if(changed) {
+                this.heightSerial=(this.heightSerial||0)+1;this.lastSelectionKey='';this.map.triggerRepaint();
+              }
+              if(queue.cursor<items.length)this.heightPreparationTimer=setTimeout(run,12);
+              else {this.heightQueue=null;this.heightQueueCompleted=(this.heightQueueCompleted||0)+1;}
+            };
+            this.heightPreparationTimer=setTimeout(run,0);
+          },
+
+          updateDrawSelection(gl,matrix,viewWidth,viewHeight,policy) {
+            const m=matrix instanceof Float32Array?matrix:new Float32Array(matrix);
+            const spriteBudget=policy.forest?hfOverviewSpriteBudget(this.map.getZoom()):0;
+            const key=[this.poolVersion||0,this.heightRevision||0,this.heightSerial||0,
+              policy.models?1:0,policy.forest?1:0,viewWidth,viewHeight,spriteBudget,...m].join(':');
+            if(key===this.lastSelectionKey) {this.classificationCacheHits=(this.classificationCacheHits||0)+1;return;}
+            const started=performance.now();this.classificationRuns=(this.classificationRuns||0)+1;
+            const shares=hfDistributeSpriteBudget(this.typeStates.map(s=>s.far.trees||0),spriteBudget);
+            const seenModelKeys=new Set();let overlap=0,highTotal=0,midTotal=0,spriteTotal=0;
+            for(let typeIndex=0;typeIndex<this.typeStates.length;typeIndex++) {
+              const state=this.typeStates[typeIndex],high=[],mid=[],modelFarIndices=new Set(),modelCandidates=[];
+              if(policy.models)for(const c of state.nearCandidates||[]) {
+                const height=this.lodHeightCache?.get(c.key)?.height;
+                const lod=hfCpuTreeLOD(c,height,m,viewWidth,viewHeight,true);
+                if(lod===2)continue;
+                (lod===0?high:mid).push(c.modelRootIndex);modelCandidates.push(c);
+                if(seenModelKeys.has(c.key))overlap++;else seenModelKeys.add(c.key);
+                if(c.farRootIndex>=0)modelFarIndices.add(c.farRootIndex);
+              }
+              if(hfUpdateInstanceData(gl,state.high,high))this.instanceBufferUploads=(this.instanceBufferUploads||0)+1;
+              if(hfUpdateInstanceData(gl,state.mid,mid))this.instanceBufferUploads=(this.instanceBufferUploads||0)+1;
+              const far=state.far;
+              // Choose a complete-group budget before removing any model roots.
+              // The remaining sprites may combine only if their entire original
+              // group survived both decisions; no hidden model gains a phantom.
+              const prefix=hfCompleteGroupPrefix(far.groupEnds,shares[typeIndex]);
+              const signature=`${this.poolVersion||0}:${prefix}:${Array.from(modelFarIndices).join(',')}`;
+              if(far.selectionSignature!==signature) {
+                const sprites=[],mask=new Uint8Array(far.candidateByIndex.length);
+                let roots=0;
+                for(const group of far.groups||[]) {
+                  if(roots+group.length>prefix)break;
+                  roots+=group.length;
+                  const allowGroup=group.length===4&&group.every(c=>!modelFarIndices.has(c.farRootIndex));
+                  for(const c of group)if(!modelFarIndices.has(c.farRootIndex)) {
+                    sprites.push(c.farRootIndex,allowGroup?1:0);mask[c.farRootIndex]=1;
+                  }
+                }
+                if(hfUpdateInstanceData(gl,far,sprites))this.instanceBufferUploads=(this.instanceBufferUploads||0)+1;
+                far.selectionSignature=signature;far.selectedMask=mask;
+              }
+              for(const c of modelCandidates)if(c.farRootIndex>=0&&far.selectedMask?.[c.farRootIndex])overlap++;
+              highTotal+=state.high.count;midTotal+=state.mid.count;spriteTotal+=far.count;
+            }
+            this.selectionStats={high:highTotal,mid:midTotal,sprites:spriteTotal,instanceOverlapCount:overlap,spriteBudget};
+            this.lastSelectionKey=key;this.lastClassificationMs=performance.now()-started;
+          },
+
+          selectionAudit() {
+            const policy=hfDrawPolicy(this.map.getZoom(),this.enabled,this.spritesOnly);
+            const result={high:[],mid:[],sprites:[],counts:{high:0,mid:0,sprites:0},overlapCount:0};
+            if(!policy.forest)return result;
+            for(const pass of this.lastSubmittedPasses||[]) {
+              if(pass.kind!=='sprites'&&!policy.models)continue;
+              const target=result[pass.kind];
+              for(let i=0;i<pass.count;i++) {
+                const c=pass.candidateByIndex[pass.data[i*pass.stride]];
+                if(c)target.push(c.key);
+              }
+            }
+            const seen=new Set();
+            for(const kind of ['high','mid','sprites']) {
+              result.counts[kind]=result[kind].length;
+              for(const key of result[kind]){if(seen.has(key))result.overlapCount++;else seen.add(key);}
+            }
+            return result;
+          },
+
           getStats() {
-            const zoom=this.map.getZoom();
-            const policy=hfDrawPolicy(zoom,this.enabled,this.spritesOnly);
-            const drawn=this.lastFrameStats||{};
+            const zoom=this.map.getZoom(),policy=hfDrawPolicy(zoom,this.enabled,this.spritesOnly),drawn=this.lastFrameStats||{};
+            let ready=0,fresh=0;
+            for(const c of this.lodNearCandidates||[]) {
+              const entry=this.lodHeightCache?.get(c.key);
+              if(Number.isFinite(entry?.height)){ready++;if(entry.sampleRevision===(this.heightRevision||0))fresh++;}
+            }
+            const submittedHighRoots=policy.models?(drawn.submittedHighRoots||0):0;
+            const submittedMidRoots=policy.models?(drawn.submittedMidRoots||0):0;
+            const submittedSpriteRoots=policy.forest?(drawn.submittedSpriteRoots||0):0;
             return {
-              patch:'v49-compact-sprites-locations-20261030', zoom,
-              minZoom:HF_SETTINGS.minZoom, threeDStartZoom:HF_SETTINGS.threeDStartZoom,
-              mode:policy.mode, spritesOnlyTest:this.spritesOnly,
-              modelPassAllowed:policy.models,
-              // These are actual CPU-submitted passes, not a claim that every
-              // submitted root survived viewport/snow/size tests in the shader.
+              patch:'forest-opt-20261102-v1',zoom,minZoom:HF_SETTINGS.minZoom,threeDStartZoom:HF_SETTINGS.threeDStartZoom,
+              outerRadius:HF_SETTINGS.outerRadius,viewportBuffer:HF_SETTINGS.outerRadius,
+              nearCap:HF_SETTINGS.nearCap,max3DRoots:HF_SETTINGS.nearCap,densityMultiplier:HF_SETTINGS.densityMultiplier,
+              mode:policy.mode,spritesOnlyTest:this.spritesOnly,modelPassAllowed:policy.models,
+              // Submitted roots can still be hidden by the existing snow gate
+              // or lie outside the viewport. These are draw counts, not FPS.
               modelDrawCalls:policy.models?(drawn.modelDrawCalls||0):0,
-              spriteDrawCalls:policy.forest?(drawn.spriteDrawCalls||0):0,
-              lastRenderedZoom:drawn.zoom??null,
-              reserved3DRoots:this.lastNearTotal||0,
-              reservedSpriteRoots:this.lastSpriteTotal||0,
-              submittedSpriteRoots:policy.forest?(drawn.submittedSpriteRoots||0):0,
-              overviewSpriteCap:HF_SETTINGS.overviewSpriteCap,
-              effectiveSpriteBudget:hfOverviewSpriteBudget(zoom),
-              spriteGeometry:'indexed-quad-per-valid-root',
-              spriteLimitMethod:'world-ranked-complete-groups', 
-              near:policy.models?(this.lastNearTotal||0):0,
-              sprites:policy.forest?(this.lastSpriteTotal||0):0,
-              detailedTrees:policy.models?(this.lastHighTotal||0):0,
-              clusterBatches:this.lastMidGroupTotal||0,spriteBatches:this.lastFarGroupTotal||0,
-              biomes:this.lastBiomeFeatureCount||0,rebuildMs:this.lastRebuildMs||0,
-              rebuilds:this.rebuilds,heightRefreshes:this.heightRefreshes,
-              heightCacheHits:this.heightCacheHits,heightReason:this.heightDirtyReason||'initial',
-              lastHeightCpuMs:this.lastHeightCpuMs||0
+              spriteDrawCalls:policy.forest?(drawn.spriteDrawCalls||0):0,lastRenderedZoom:drawn.zoom??null,
+              reserved3DRoots:this.lastNearTotal||0,reservedSpriteRoots:this.lastSpriteTotal||0,
+              submittedHighRoots,submittedMidRoots,submitted3DRoots:submittedHighRoots+submittedMidRoots,submittedSpriteRoots,
+              instanceOverlapCount:policy.forest?(drawn.instanceOverlapCount||0):0,
+              overviewSpriteCap:HF_SETTINGS.overviewSpriteCap,effectiveSpriteBudget:hfOverviewSpriteBudget(zoom),
+              modelGeometry:'one-root-instance-no-padding',spriteGeometry:'indexed-quad-per-valid-root',
+              spriteLimitMethod:'world-ranked-complete-groups-before-model-exclusion',
+              near:submittedHighRoots+submittedMidRoots,sprites:submittedSpriteRoots,detailedTrees:submittedHighRoots,
+              clusterBatches:submittedMidRoots,spriteBatches:this.lastFarGroupTotal||0,
+              biomes:this.lastBiomeFeatureCount||0,rebuildMs:this.lastRebuildMs||0,rebuilds:this.rebuilds,
+              heightRefreshes:this.heightRefreshes,heightCacheHits:this.heightCacheHits,heightReason:this.heightDirtyReason||'initial',
+              lastHeightCpuMs:this.lastHeightCpuMs||0,heightRevision:this.heightRevision||0,
+              heightQueuePending:this.heightQueue?this.heightQueue.items.length-this.heightQueue.cursor:0,
+              heightCacheReady:ready,heightCacheFresh:fresh,heightCacheSize:this.lodHeightCache?.size||0,
+              heightQueryCount:this.heightQueryCount||0,heightQueryMaxChunk:this.heightQueryMaxChunk||0,
+              heightQueryMaxChunkMs:this.heightQueryMaxChunkMs||0,heightQueryCpuMs:this.heightQueryCpuMs||0,
+              heightQueueStarted:this.heightQueueStarted||0,heightQueueCompleted:this.heightQueueCompleted||0,
+              heightQueueCancelled:this.heightQueueCancelled||0,
+              classificationRuns:this.classificationRuns||0,classificationCacheHits:this.classificationCacheHits||0,
+              lastClassificationMs:this.lastClassificationMs||0,instanceBufferUploads:this.instanceBufferUploads||0,
+              preparationStats:this.preparationStats||{}
             };
           },
           prerender(gl,options) {
-            if(!hfDrawPolicy(this.map.getZoom(),this.enabled,this.spritesOnly).forest) return;
+            if(!hfDrawPolicy(this.map.getZoom(),this.enabled,this.spritesOnly).forest)return;
             if(!this.heightMapDirty){this.heightCacheHits++;return;}
             if(!options.renderTerrainHeightMap)return;
             const now=performance.now();
@@ -3664,77 +4141,59 @@
             const started=performance.now();
             options.renderTerrainHeightMap({texture:this.heightMap,width:HF_HEIGHTMAP_SIZE,
               height:HF_HEIGHTMAP_SIZE,bounds:this.heightBounds});
-            this.lastHeightCpuMs=performance.now()-started;
-            this.heightRefreshes++;
+            this.lastHeightCpuMs=performance.now()-started;this.heightRefreshes++;
+            this.heightRevision=(this.heightRevision||0)+1;this.lastSelectionKey='';
             this.heightMapDirty=false;this.heightReady=true;this.lastHeightRefresh=now;
           },
           render(gl,options) {
-            const zoom=this.map.getZoom();
-            const policy=hfDrawPolicy(zoom,this.enabled,this.spritesOnly);
-            this.lastFrameStats={zoom,modelDrawCalls:0,spriteDrawCalls:0};
-            if(!policy.forest||!this.heightReady)return;
+            const zoom=this.map.getZoom(),policy=hfDrawPolicy(zoom,this.enabled,this.spritesOnly);
+            this.lastFrameStats={zoom,modelDrawCalls:0,spriteDrawCalls:0,submittedHighRoots:0,submittedMidRoots:0,submittedSpriteRoots:0};
+            this.lastSubmittedPasses=[];
+            if(!policy.forest||!this.heightReady){this.cancelHeightPreparation();return;}
             const matrix=options?.defaultProjectionData?.mainMatrix;if(!matrix)return;
-            const previousVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING);
-            const previousActive=gl.getParameter(gl.ACTIVE_TEXTURE);
-            gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);gl.depthMask(true);
-            gl.disable(gl.BLEND);gl.disable(gl.CULL_FACE);
-            const canvas=this.map.getCanvas();
+            const canvas=this.map.getCanvas(),viewWidth=canvas.clientWidth||canvas.width,viewHeight=canvas.clientHeight||canvas.height;
+            this.ensureHeightPreparation(policy);this.updateDrawSelection(gl,matrix,viewWidth,viewHeight,policy);
+            this.lastFrameStats.instanceOverlapCount=this.selectionStats?.instanceOverlapCount||0;
+            this.lastFrameStats.spriteBudget=this.selectionStats?.spriteBudget||0;
+            const previousVao=gl.getParameter(gl.VERTEX_ARRAY_BINDING),previousActive=gl.getParameter(gl.ACTIVE_TEXTURE);
+            gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);gl.depthMask(true);gl.disable(gl.BLEND);gl.disable(gl.CULL_FACE);
             const prepare=(program,loc)=>{
-              gl.useProgram(program);
-              gl.uniformMatrix4fv(loc.u_matrix,false,matrix);
-              gl.uniform4fv(loc.u_heightBounds,this.heightBounds);
-              gl.uniform2f(loc.u_viewSize,canvas.clientWidth||canvas.width,canvas.clientHeight||canvas.height);
-              gl.uniform1f(loc.u_zoom,this.map.getZoom());
-              gl.uniform1f(loc.u_startZoom,HF_SETTINGS.threeDStartZoom);
-              gl.uniform1i(loc.u_allow3D,policy.models?1:0);
-              gl.uniform1f(loc.u_treeLineFadeStart,snowTreeFadeStartExaggerated);
-              gl.uniform1f(loc.u_treeLineCutoff,snowTreeCutoffExaggerated);
-              gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.heightMap);
-              gl.uniform1i(loc.u_heightMap,0);gl.uniform1i(loc.u_roots,1);
+              gl.useProgram(program);gl.uniformMatrix4fv(loc.u_matrix,false,matrix);gl.uniform4fv(loc.u_heightBounds,this.heightBounds);
+              gl.uniform2f(loc.u_viewSize,viewWidth,viewHeight);gl.uniform1f(loc.u_zoom,zoom);
+              gl.uniform1f(loc.u_startZoom,HF_SETTINGS.threeDStartZoom);gl.uniform1i(loc.u_allow3D,policy.models?1:0);
+              gl.uniform1f(loc.u_treeLineFadeStart,snowTreeFadeStartExaggerated);gl.uniform1f(loc.u_treeLineCutoff,snowTreeCutoffExaggerated);
+              gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,this.heightMap);gl.uniform1i(loc.u_heightMap,0);gl.uniform1i(loc.u_roots,1);
             };
-            const draw=(item,model,limit=item.count)=>{
-              const count=Math.min(item.count,limit);
-              if(!count || (model&&!policy.models))return;
-              gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,item.roots);
-              gl.bindVertexArray(item.vao);
-              if(item.indexedSprites) {
-                gl.drawElementsInstanced(gl.TRIANGLES,6,gl.UNSIGNED_SHORT,0,count);
-                this.lastFrameStats.submittedSpriteRoots=(this.lastFrameStats.submittedSpriteRoots||0)+count;
-              } else gl.drawArraysInstanced(gl.TRIANGLES,0,item.vertices,count);
-              this.lastFrameStats[model?'modelDrawCalls':'spriteDrawCalls']++;
+            const draw=(item,kind)=>{
+              const count=item.count,model=kind!=='sprites';if(!count||(model&&!policy.models))return;
+              gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,item.roots);gl.bindVertexArray(item.vao);
+              if(item.indexedSprites)gl.drawElementsInstanced(gl.TRIANGLES,6,gl.UNSIGNED_SHORT,0,count);
+              else gl.drawArraysInstanced(gl.TRIANGLES,0,item.vertices,count);
+              this.lastSubmittedPasses.push({kind,count,data:item.instanceData,candidateByIndex:item.candidateByIndex,stride:item.indexedSprites?2:1});
+              const counter=kind==='high'?'submittedHighRoots':kind==='mid'?'submittedMidRoots':'submittedSpriteRoots';
+              this.lastFrameStats[counter]+=count;this.lastFrameStats[model?'modelDrawCalls':'spriteDrawCalls']++;
             };
             try {
               if(policy.models) {
                 prepare(this.nearProgram,this.nearLocations);
                 for(const s of this.typeStates) {
-                  gl.uniform3fv(this.nearLocations.u_foliageColor,s.type.foliage);
-                  gl.uniform3fv(this.nearLocations.u_trunkColor,s.type.trunk);
-                  gl.uniform1i(this.nearLocations.u_mode,0);draw(s.high,true);
-                  gl.uniform1i(this.nearLocations.u_mode,1);draw(s.mid,true);
+                  gl.uniform3fv(this.nearLocations.u_foliageColor,s.type.foliage);gl.uniform3fv(this.nearLocations.u_trunkColor,s.type.trunk);
+                  draw(s.high,'high');draw(s.mid,'mid');
                 }
               }
-              prepare(this.spriteProgram,this.spriteLocations);
-              gl.uniform1f(this.spriteLocations.u_bearing,this.map.getBearing());
-              gl.uniform1f(this.spriteLocations.u_pitch,this.map.getPitch());
-              gl.uniform1i(this.spriteLocations.u_sprite,2);gl.uniform1i(this.spriteLocations.u_grove,3);
-              const spriteBudget=hfOverviewSpriteBudget(zoom);
-              const shares=hfDistributeSpriteBudget(this.typeStates.map(s=>s.far.trees||0),spriteBudget);
-              this.lastFrameStats.spriteBudget=spriteBudget;
-              for(let i=0;i<this.typeStates.length;i++) {
-                const s=this.typeStates[i];
-                const count=hfCompleteGroupPrefix(s.far.groupEnds,shares[i]);
-                if(!count)continue;
+              prepare(this.spriteProgram,this.spriteLocations);gl.uniform1f(this.spriteLocations.u_bearing,this.map.getBearing());
+              gl.uniform1f(this.spriteLocations.u_pitch,this.map.getPitch());gl.uniform1i(this.spriteLocations.u_sprite,2);gl.uniform1i(this.spriteLocations.u_grove,3);
+              for(const s of this.typeStates)if(s.far.count) {
                 gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,s.spriteTexture);
-                gl.activeTexture(gl.TEXTURE3);gl.bindTexture(gl.TEXTURE_2D,s.groveTexture);
-                draw(s.far,false,count);
+                gl.activeTexture(gl.TEXTURE3);gl.bindTexture(gl.TEXTURE_2D,s.groveTexture);draw(s.far,'sprites');
               }
-            } finally {
-              gl.bindVertexArray(previousVao);gl.activeTexture(previousActive);
-              gl.depthMask(true);gl.useProgram(null);
-            }
+            } finally {gl.bindVertexArray(previousVao);gl.activeTexture(previousActive);gl.depthMask(true);gl.useProgram(null);}
           },
           onRemove(mapInstance,gl) {
+            this.disposed=true;this.cancelHeightPreparation();this.disposeCpuPreparation?.();
+            this.lodHeightCache?.clear();this.lodNearCandidates=[];this.lastSubmittedPasses=[];
             clearTimeout(this.rebuildTimer);
+            this.cancelCpuCameraSettlement();
             for(const [event,handler] of [['move',this.onMove],['zoom',this.onZoom],['moveend',this.onMoveEnd],
               ['zoomend',this.onZoomEnd],['idle',this.onIdle],['sourcedata',this.onSourceData]]) {
               if(handler) mapInstance.off(event,handler);
@@ -5225,6 +5684,7 @@
         // Load saved landmark and forest tuning before the render layers start.
         loadInitialLandmarkState();
         applyBundledPlacementUpdateOnce();
+        hfApplyPerformanceDefaultsOnce();
 
         try {
           installHybridForestLayer();
