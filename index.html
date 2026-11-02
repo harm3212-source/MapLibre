@@ -605,6 +605,14 @@
       <input type="checkbox" id="toggle-forests" checked />
       <span>Bomen (3D + sprites)</span>
     </label>
+    <label>
+      <input type="checkbox" id="toggle-models" checked />
+      <span>3D-modellen</span>
+    </label>
+    <label>
+      <input type="checkbox" id="toggle-kanka-markers" checked />
+      <span>Kanka-bolletjes</span>
+    </label>
     <!-- BIGANE_RURAL_UI_BEGIN -->
     <label title="Vooraf vastgelegde akkers en weiden; uitschakelen toont de oorspronkelijke biomes">
       <input type="checkbox" id="toggle-farmland" checked />
@@ -999,8 +1007,7 @@
           // Cancel pending popup results even when the user zooms back in
           // before a Kanka response arrives. Do not change any model placement.
           if (placeInteractionsWereEnabled !== false) placeInteractionEpoch++;
-          for (const popup of [...placePopups]) popup.remove();
-          placePopups.clear();
+          removeInfoPopups(true);
           map.getCanvas().style.cursor = '';
           landmarkController?.setHovered?.(null);
         }
@@ -1088,7 +1095,7 @@
           && zoom >= cityLabelZoom(properties);
       }
       function cityMarkerEligible(properties, zoom = map.getZoom()) {
-        return placeInteractionAllowed(zoom) && cityLabelEligible(properties, zoom);
+        return biganeViewSettings.kankaMarkers && placeInteractionAllowed(zoom) && cityLabelEligible(properties, zoom);
       }
       function cityLabelCacheKey() {
         // Separate accounts without persisting the access token in this cache.
@@ -1179,6 +1186,296 @@
       }
       /* BIGANE_CITY_LABEL_POLICY_V2_END */
 
+      /* BIGANE_VIEW_AND_POPUP_V1_BEGIN */
+      const BIGANE_VIEW_KEY = 'bigane-view-switches-v1';
+      const biganeViewSettings = {models: true, kankaMarkers: true};
+      try {
+        const saved = JSON.parse(localStorage.getItem(BIGANE_VIEW_KEY) || '{}');
+        for (const key of Object.keys(biganeViewSettings)) if (typeof saved?.[key] === 'boolean') biganeViewSettings[key] = saved[key];
+      } catch (_) {}
+      function saveBiganeViewSettings() {
+        try { localStorage.setItem(BIGANE_VIEW_KEY, JSON.stringify(biganeViewSettings)); } catch (_) {}
+      }
+      function setBiganeModelsVisible(visible) {
+        biganeViewSettings.models = Boolean(visible); saveBiganeViewSettings();
+        landmarkController?.setHovered?.(null);
+        landmarkController?.updateVisibilityAndLoading?.(true);
+        map.getCanvas().style.cursor = '';
+        refreshKankaCityMarkers(); scheduleKankaMarkerSync(); map.triggerRepaint();
+      }
+      function setBiganeKankaMarkersVisible(visible) {
+        biganeViewSettings.kankaMarkers = Boolean(visible); saveBiganeViewSettings();
+        refreshKankaCityMarkers(); scheduleKankaMarkerSync(); map.triggerRepaint();
+      }
+      let infoRequestSerial = 0;
+      let activeInfoRequest = null;
+      let removingInfoPopups = false;
+      function removeInfoPopups(invalidate = true) {
+        if (invalidate) { infoRequestSerial++; activeInfoRequest = null; }
+        removingInfoPopups = true;
+        try { for (const popup of [...placePopups]) popup.remove(); placePopups.clear(); }
+        finally { removingInfoPopups = false; }
+      }
+      function beginInfoRequest(kind = 'city') {
+        removeInfoPopups(true);
+        activeInfoRequest = {id: infoRequestSerial, kind};
+        return activeInfoRequest;
+      }
+      function infoRequestCurrent(request) {
+        return !!request && activeInfoRequest === request && request.id === infoRequestSerial && placeInteractionAllowed();
+      }
+      function registerInfoPopup(popup, request) {
+        placePopups.add(popup);
+        popup.on('close', () => {
+          placePopups.delete(popup);
+          if (!removingInfoPopups && activeInfoRequest === request) { infoRequestSerial++; activeInfoRequest = null; }
+        });
+        return popup;
+      }
+      /* BIGANE_VIEW_AND_POPUP_V1_END */
+
+      /* BIGANE_COUNTRY_LINKS_V1_BEGIN */
+      // Reuse the locations already fetched by the city integration. Matching
+      // is done on click, never by scanning all countries on each map frame.
+      const COUNTRY_LABEL_LAYERS = ['State name', 'State name border'];
+      const BIGANE_LABEL_ZOOMS = Object.freeze({country: 4, region: 6, water: 7});
+      const stateLocationRecords = new Map();
+      const stateLinkAudit = new Map();
+      let stateLinkOverrides = Object.create(null);
+      function stateLinkStorageKey() { return cityLabelCacheKey().replace('city-label-names-v1', 'state-links-v1'); }
+      function stateNameKey(value) {
+        return String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase().replace(/[\u2018\u2019']/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+      }
+      function stateWithoutArticle(value) { return stateNameKey(value).replace(/^(the|de|het)\s+/, ''); }
+      function stateCoreName(value) {
+        let name = stateWithoutArticle(value);
+        const forms = '(?:kingdom|empire|imperium|republic|duchy|grand duchy|principality|sultanate|emirate|khaganate|khanate|caliphate|confederation|confederacy|federation|commonwealth|dominion|realm|territory|nation|state|koninkrijk|keizerrijk|republiek|hertogdom)';
+        name = name.replace(new RegExp('^' + forms + '\\s+(?:of\\s+(?:the\\s+)?|van\\s+)?'), '');
+        name = name.replace(new RegExp('\\s+' + forms + '$'), '');
+        return name.trim(); // Never prefix-match: Khaza is not Khazamarch.
+      }
+      function stateNames(feature) {
+        const p = feature?.properties || {};
+        return [...new Set(['Full Name', 'State', 'state', 'State name', 'state_name', 'Name', 'name']
+          .map(k => p[k]).filter(v => typeof v === 'string' && v.trim()).map(v => v.trim()))];
+      }
+      function stateEntityId(location) { const id = Number(location?.entity_id ?? location?.entity?.id); return Number.isSafeInteger(id) && id > 0 ? id : null; }
+      function stateLocationIsCountry(location) {
+        return /\b(country|nation|state|kingdom|empire|imperium|republic|duchy|sultanate|principality|confederacy|confederation|federation|realm|polity|khaganate|khanate|koninkrijk|keizerrijk|land)\b/i.test(String(location?.type || ''));
+      }
+      function stateLocationIsLocal(location) {
+        return !stateLocationIsCountry(location) && /\b(city|town|village|hamlet|settlement|castle|fortress|temple|inn|tavern|district|building|stad|dorp)\b/i.test(String(location?.type || ''));
+      }
+      function stateLocationNames(location) {
+        const aliases = Array.isArray(location?.aliases) ? location.aliases : [];
+        return [location?.name, ...aliases].filter(n => typeof n === 'string' && n.trim());
+      }
+      function indexStateKankaLocation(location) {
+        const id = stateEntityId(location);
+        if (id && location?.name) stateLocationRecords.set(id, location);
+      }
+      function stateArticleRecord(location) {
+        return {entityId: stateEntityId(location), articleName: location.name,
+          image: location.popupImage || location.image_full || location.image_thumb || null,
+          type: String(location.type || '')};
+      }
+      function readStateLinkOverrides() {
+        try {
+          const value = JSON.parse(localStorage.getItem(stateLinkStorageKey()) || '{}');
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+          for (const [key, article] of Object.entries(value)) {
+            if (Number.isSafeInteger(article?.entityId) && article.entityId > 0 && typeof article.articleName === 'string')
+              stateLinkOverrides[key] = {entityId: article.entityId, articleName: article.articleName};
+          }
+        } catch (_) { /* A private-storage failure must not break the map. */ }
+      }
+      function resolveStateArticle(feature) {
+        const names = stateNames(feature);
+        const result = (article, method, candidates = []) => {
+          const r = {article, method, candidates};
+          if (names[0]) stateLinkAudit.set(names[0], {mapNames: names, method,
+            articleName: article?.articleName || null, entityId: article?.entityId || null,
+            candidates: candidates.map(l => ({name: l.name, entityId: stateEntityId(l)}))});
+          return r;
+        };
+        for (const name of names) {
+          const manual = stateLinkOverrides[stateNameKey(name)];
+          if (manual) {
+            const live = stateLocationRecords.get(manual.entityId);
+            return result(live ? stateArticleRecord(live) : {...manual}, 'manual');
+          }
+        }
+        const records = [...stateLocationRecords.values()].filter(l => !stateLocationIsLocal(l));
+        const choose = (items, method) => {
+          const distinct = [...new Map(items.map(l => [stateEntityId(l), l])).values()];
+          // When a country and a generic location share a name, a country type
+          // wins; two countries sharing a name remain explicitly ambiguous.
+          const typed = distinct.filter(stateLocationIsCountry);
+          const pool = typed.length ? typed : distinct;
+          if (pool.length === 1) return result(stateArticleRecord(pool[0]), method);
+          if (pool.length > 1) return result(null, 'ambiguous', pool);
+          return null;
+        };
+        // Prefer the full displayed country name. Only consult shorter
+        // attribute names when that fails, not before a stronger full-name match.
+        for (const name of names) {
+          for (const [keyFn, method] of [[stateNameKey, 'exact'], [stateWithoutArticle, 'article']]) {
+            const key = keyFn(name);
+            const found = key ? records.filter(l => stateLocationNames(l).some(n => keyFn(n) === key)) : [];
+            const chosen = choose(found, method); if (chosen) return chosen;
+          }
+          // Political wrappers only; do not stem words or silently assign typos.
+          const coreKey = stateCoreName(name);
+          const core = coreKey.length >= 3 ? records.filter(l =>
+            (stateLocationIsCountry(l) || stateCoreName(l.name) !== stateWithoutArticle(l.name)) &&
+            stateLocationNames(l).some(n => stateCoreName(n) === coreKey)) : [];
+          const chosen = choose(core, 'political-name'); if (chosen) return chosen;
+        }
+        return result(null, stateLocationRecords.size ? 'unmatched' : 'not-loaded');
+      }
+      function stateLabelNameExpression() {
+        return ['downcase', ['to-string', ['coalesce', ['get','Names Island'], ['get','Full Name'], ['get','State'], ['get','Name'], ['get','name'], '']]];
+      }
+      function installGeographicLabelPolicy() {
+        const regionNames = ['the iluthiel isles', 'iluthiel isles', 'the khazamarch', 'khazamarch'];
+        const isNamedRegion = ['match', stateLabelNameExpression(), regionNames, true, false];
+        const groups = [
+          {ids: COUNTRY_LABEL_LAYERS, zoom: BIGANE_LABEL_ZOOMS.country},
+          {ids: ['Island names'], zoom: BIGANE_LABEL_ZOOMS.region},
+          {ids: ['River names', 'Lakes names'], zoom: BIGANE_LABEL_ZOOMS.water}
+        ];
+        for (const group of groups) for (const id of group.ids) {
+          const layer = map.getLayer(id); if (!layer || layer.type !== 'symbol') continue;
+          map.setLayerZoomRange(id, group.zoom, layer.maxzoom ?? 24);
+          // Remove older opacity gates (e.g. Cells < 40); all country names
+          // are eligible from 4, while ordinary native collision rules remain.
+          map.setPaintProperty(id, 'text-opacity', 1);
+          if (COUNTRY_LABEL_LAYERS.includes(id)) {
+            const regionalGate = ['any', ['!', isNamedRegion], ['>=', ['zoom'], BIGANE_LABEL_ZOOMS.region]];
+            const original = map.getFilter(id);
+            map.setFilter(id, original ? ['all', original, regionalGate] : regionalGate);
+          }
+        }
+        readStateLinkOverrides();
+        window.BiganeStateLinks = {
+          report: () => [...stateLinkAudit.values()],
+          export: () => JSON.stringify(stateLinkOverrides, null, 2)
+        };
+      }
+      function addStateLinkEditor(popup, feature, request, resolution) {
+        const root = popup.getElement()?.querySelector('[data-state-link-editor]');
+        if (!root) return;
+        const details = document.createElement('details');
+        const summary = document.createElement('summary'); summary.textContent = 'Kanka-koppeling aanpassen';
+        details.appendChild(summary);
+        const note = document.createElement('p'); note.style.cssText = 'font-size:12px;margin:7px 0;';
+        note.textContent = 'Een keuze wordt alleen in deze browser opgeslagen. Automatische koppelingen gebruiken de opgehaalde Kanka-locaties.';
+        details.appendChild(note);
+        const input = document.createElement('input'); input.type = 'search'; input.placeholder = 'Zoek een Kanka-locatie...';
+        input.setAttribute('aria-label', 'Kanka-locatie zoeken'); input.style.cssText = 'width:100%;box-sizing:border-box;margin:4px 0;padding:5px;';
+        const select = document.createElement('select'); select.size = 5; select.setAttribute('aria-label', 'Kanka-locatie kiezen');
+        select.style.cssText = 'width:100%;box-sizing:border-box;font:inherit;font-size:12px;';
+        const records = [...stateLocationRecords.values()].sort((a,b) =>
+          Number(stateLocationIsCountry(b)) - Number(stateLocationIsCountry(a)) || a.name.localeCompare(b.name));
+        const refresh = () => {
+          select.replaceChildren(); const query = stateNameKey(input.value);
+          const candidateIds = new Set(resolution.candidates.map(stateEntityId));
+          const visible = records.filter(l => !query || stateNameKey(l.name).includes(query))
+            .sort((a,b) => Number(candidateIds.has(stateEntityId(b))) - Number(candidateIds.has(stateEntityId(a)))).slice(0, 120);
+          for (const location of visible) {
+            const option = document.createElement('option'); option.value = String(stateEntityId(location));
+            option.textContent = location.name + (location.type ? ' (' + location.type + ')' : '') + ' #' + stateEntityId(location);
+            select.appendChild(option);
+          }
+          select.selectedIndex = -1;
+        };
+        input.addEventListener('input', refresh); refresh();
+        details.append(input, select);
+        const feedback = document.createElement('p'); feedback.style.cssText = 'font-size:12px;margin:5px 0;';
+        const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Koppelen';
+        save.style.cssText = 'margin:7px 6px 0 0;padding:5px 8px;cursor:pointer;';
+        save.addEventListener('click', () => {
+          const location = stateLocationRecords.get(Number(select.value));
+          if (!location) { feedback.textContent = 'Kies eerst een locatie uit de lijst.'; return; }
+          const record = {entityId: stateEntityId(location), articleName: location.name};
+          for (const name of stateNames(feature)) stateLinkOverrides[stateNameKey(name)] = record;
+          try { localStorage.setItem(stateLinkStorageKey(), JSON.stringify(stateLinkOverrides)); }
+          catch (_) { feedback.textContent = 'Gekoppeld voor deze sessie; lokaal opslaan is niet beschikbaar.'; }
+          renderStatePopup(feature, request);
+        });
+        const reset = document.createElement('button'); reset.type = 'button'; reset.textContent = 'Automatisch';
+        reset.style.cssText = 'padding:5px 8px;cursor:pointer;';
+        reset.addEventListener('click', () => {
+          for (const name of stateNames(feature)) delete stateLinkOverrides[stateNameKey(name)];
+          try { localStorage.setItem(stateLinkStorageKey(), JSON.stringify(stateLinkOverrides)); } catch (_) {}
+          renderStatePopup(feature, request);
+        });
+        details.append(save, reset, feedback); root.appendChild(details);
+      }
+      function renderStatePopup(feature, request) {
+        if (!infoRequestCurrent(request)) return;
+        const names = stateNames(feature), name = names[0] || 'Land';
+        const resolution = resolveStateArticle(feature), article = resolution.article;
+        const link = article?.entityId ? `https://app.kanka.io/w/${KANKA_CAMPAIGN_ID}/entities/${article.entityId}` : null;
+        const title = link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}</a>` : escapeHtml(name);
+        const image = article?.image ? `<img class="location-popup-image" src="${escapeHtml(article.image)}" alt="${escapeHtml(name)}">` : '';
+        const description = article ? `Kanka: ${escapeHtml(article.articleName)}` :
+          resolution.method === 'not-loaded' ? 'De Kanka-locaties zijn nog niet beschikbaar. De kaart blijft werken.' :
+          resolution.method === 'ambiguous' ? 'Meerdere passende Kanka-locaties. Kies hieronder de juiste koppeling.' :
+          'Geen eenduidige Kanka-koppeling gevonden. Je kunt hieronder zelf een locatie kiezen.';
+        removeInfoPopups(false);
+        const popup = new maplibregl.Popup({offset: [0,-12], maxWidth: '350px'})
+          .setLngLat(request.coordinates)
+          .setHTML(`${image}<div class="location-popup-body"><h3 class="location-popup-title">${title}</h3><div class="location-popup-tags"><span class="location-popup-tag">Land / staat</span></div><p style="font-size:12px;line-height:1.4">${description}</p><div data-state-link-editor></div></div>`)
+          .addTo(map);
+        registerInfoPopup(popup, request);
+        addStateLinkEditor(popup, feature, request, resolution);
+      }
+      function openStatePopup(feature, lngLat) {
+        if (!placeInteractionAllowed()) return;
+        const request = beginInfoRequest('state'); request.feature = feature;
+        const c = feature.geometry?.type === 'Point' ? feature.geometry.coordinates : null;
+        request.coordinates = c ? c.slice(0,2) : [lngLat.lng, lngLat.lat];
+        renderStatePopup(feature, request);
+      }
+      function refreshOpenStatePopup() {
+        const request = activeInfoRequest;
+        if (request?.kind === 'state' && infoRequestCurrent(request)) renderStatePopup(request.feature, request);
+      }
+      // One event dispatcher for overlapping symbols, invisible city targets,
+      // models and state labels; a single click cannot create several panels.
+      function biganeFeaturesAt(point, ids) {
+        const layers = ids.filter(id => map.getLayer(id) && map.getLayoutProperty(id, 'visibility') !== 'none');
+        return layers.length ? map.queryRenderedFeatures(point, {layers}) : [];
+      }
+      function installPlaceClickDispatcher() {
+        const clickable = map.getLayer('clickable');
+        if (clickable) map.setLayerZoomRange('clickable', Math.max(PLACE_INTERACTION_MIN_ZOOM, clickable.minzoom || 0), clickable.maxzoom || 24);
+        map.on('click', event => {
+          if (!placeInteractionAllowed() || document.body.classList.contains('landmark-edit-mode')) return;
+          const city = biganeFeaturesAt(event.point, ['Town names', 'Capitals'])[0];
+          if (city) { openKankaPopup(city); return; }
+          const model = biganeViewSettings.models ? landmarkController?.findNearestAtPoint?.(event.point, 46) : null;
+          if (model) { openKankaPopup({type:'Feature', properties:{Burg:model.config.name}, geometry:{type:'Point',coordinates:model.coordinates}}); return; }
+          const country = biganeFeaturesAt(event.point, COUNTRY_LABEL_LAYERS)[0];
+          if (country) { openStatePopup(country, event.lngLat); return; }
+          const target = biganeFeaturesAt(event.point, ['clickable'])[0];
+          if (target) { openKankaPopup(target); return; }
+          // Polygon picking only with States visible, never over the whole
+          // landscape by default. Country-name labels are always independent.
+          const state = biganeFeaturesAt(event.point, ['States'])[0];
+          if (state && stateNames(state).length) { openStatePopup(state, event.lngLat); return; }
+          removeInfoPopups(true);
+        });
+        for (const id of ['Town names','Capitals','clickable', ...COUNTRY_LABEL_LAYERS, 'States']) {
+          if (!map.getLayer(id)) continue;
+          map.on('mouseenter', id, () => { map.getCanvas().style.cursor = placeInteractionAllowed() ? 'pointer' : ''; });
+          map.on('mouseleave', id, () => { map.getCanvas().style.cursor = ''; });
+        }
+      }
+      /* BIGANE_COUNTRY_LINKS_V1_END */
+
       function getKankaToken() { return localStorage.getItem(KANKA_ACCESS_TOKEN_KEY) || KANKA_ACCESS_TOKEN; }
 
       function authHeaders() {
@@ -1250,8 +1547,11 @@
         return data.data || null;
       }
 
-      function createLocationPopup(feature, link = null, imageUrl = null) {
+      function createLocationPopup(feature, link = null, imageUrl = null, request = null) {
         if (!placeInteractionAllowed()) return null;
+        request = request || beginInfoRequest('city');
+        if (!infoRequestCurrent(request)) return null;
+        removeInfoPopups(false);
         const props = feature.properties || {};
         const name = escapeHtml(props.Burg || "");
         const population = escapeHtml(props.Population || "");
@@ -1278,47 +1578,44 @@
           .setLngLat(feature.geometry.coordinates)
           .setHTML(`${imageHtml}<div class="location-popup-body">${titleHtml}${tagsHtml}${populationHtml}</div>`)
           .addTo(map);
-        placePopups.add(popup);
-        popup.on('close', () => placePopups.delete(popup));
-        return popup;
+        return registerInfoPopup(popup, request);
       }
 
       async function openKankaPopup(feature) {
         if (!placeInteractionAllowed()) return;
-        const epoch = placeInteractionEpoch;
-        const requestStillAllowed = () => placeInteractionAllowed() && epoch === placeInteractionEpoch;
+        const request = beginInfoRequest('city');
+        const requestStillAllowed = () => infoRequestCurrent(request);
+        const show = (link = null, image = null) => {
+          if (requestStillAllowed()) createLocationPopup(feature, link, image, request);
+        };
         const name = feature.properties?.Burg;
         const article = findLandmarkKankaArticle(name);
         if (article) {
-          createLocationPopup(feature,
-            `https://app.kanka.io/w/${KANKA_CAMPAIGN_ID}/entities/${article.entityId}`,
-            cachedLandmarkKankaImage(article));
+          show(`https://app.kanka.io/w/${KANKA_CAMPAIGN_ID}/entities/${article.entityId}`, cachedLandmarkKankaImage(article));
           return;
         }
-        if (!name || !getKankaToken()) {
-          createLocationPopup(feature);
+        const cached = kankaLocationsByName.get(normalizeLocationName(name));
+        const cachedId = stateEntityId(cached);
+        if (cachedId) {
+          show(`https://app.kanka.io/w/${KANKA_CAMPAIGN_ID}/entities/${cachedId}`, cached.popupImage || cached.image_full || cached.image_thumb || null);
           return;
         }
-
+        if (!name || !getKankaToken()) { show(); return; }
+        // Immediate feedback; closing this panel also cancels its late request.
+        show();
         try {
           const entity = await getKankaEntityForName(name);
-          if (!requestStillAllowed()) return;
-          if (!entity) {
-            createLocationPopup(feature);
-            return;
-          }
-
+          if (!requestStillAllowed() || !entity) return;
           let imageUrl = null;
           if (entity.child_id) {
             const location = await getKankaLocation(entity.child_id);
             if (!requestStillAllowed()) return;
             imageUrl = location?.image_full || location?.image_thumb || null;
           }
-
-          createLocationPopup(feature, entity.urls?.view || null, imageUrl);
+          show(entity.urls?.view || null, imageUrl);
         } catch (error) {
           console.warn("Kanka popup error:", error);
-          if (requestStillAllowed()) createLocationPopup(feature);
+          // The initial panel remains; never reopen a closed or replaced one.
         }
       }
 
@@ -1343,6 +1640,7 @@
             for (const location of (result.data || [])) {
               if (!location.name) continue;
               articleNames.add(location.name); // Also pages WITHOUT an image.
+              indexStateKankaLocation(location);
               const imageUrl = location.image_thumb || location.image_full || null;
               kankaLocationsByName.set(normalizeLocationName(location.name), {
                 ...location, markerImage: imageUrl,
@@ -1354,6 +1652,7 @@
           // Refresh native style rules once, not on every API page or map move.
           updateCityLabelKankaNames(articleNames, true);
           kankaLocationsLoaded = true;
+          refreshOpenStatePopup();
           const imageCount = [...kankaLocationsByName.values()].filter(l => l.markerImage).length;
           status.textContent = `MapLibre + Kanka werkt. ${articleNames.size} locaties krijgen labelvoorrang; ${imageCount} met afbeelding.`;
           refreshKankaCityMarkers();
@@ -1361,6 +1660,7 @@
           // Preserve cached identities and any pages already received.
           updateCityLabelKankaNames(articleNames, false);
           kankaLocationsLoaded = kankaLocationsByName.size > 0;
+          refreshOpenStatePopup();
           refreshKankaCityMarkers();
           console.warn(error);
           status.textContent = `Kaart werkt, maar Kanka kon niet volledig laden: ${error.message}`;
@@ -1454,9 +1754,11 @@
       }
 
       function cityHas3DLandmark(cityName) {
+        if (!biganeViewSettings.models) return false;
         const wanted = normalizeLocationName(cityName);
         if (!wanted || typeof LANDMARKS_3D === "undefined") return false;
         return LANDMARKS_3D.some(config => {
+          if (config.visible === false) return false;
           const names = [config.name, ...(config.aliases || [])];
           return names.some(name => normalizeLocationName(name) === wanted);
         });
@@ -1465,7 +1767,7 @@
       function refreshKankaCityMarkers() {
         if (refreshingKankaMarkers) return;
         // Do not create or retain hidden DOM portraits in the overview.
-        if (!placeInteractionAllowed() || map.getZoom() < CITY_LABEL_SETTINGS.thresholds[0].zoom) {
+        if (!biganeViewSettings.kankaMarkers || !placeInteractionAllowed() || map.getZoom() < CITY_LABEL_SETTINGS.thresholds[0].zoom) {
           for (const marker of kankaCityMarkers.values()) marker.remove();
           kankaCityMarkers.clear();
           return;
@@ -1593,6 +1895,16 @@
         const statesToggle = document.getElementById("toggle-states");
         const townsToggle = document.getElementById("toggle-towns");
         const forestsToggle = document.getElementById("toggle-forests");
+        const modelsToggle = document.getElementById('toggle-models');
+        const markersToggle = document.getElementById('toggle-kanka-markers');
+        if (modelsToggle) {
+          modelsToggle.checked = biganeViewSettings.models;
+          modelsToggle.addEventListener('change', () => setBiganeModelsVisible(modelsToggle.checked));
+        }
+        if (markersToggle) {
+          markersToggle.checked = biganeViewSettings.kankaMarkers;
+          markersToggle.addEventListener('change', () => setBiganeKankaMarkersVisible(markersToggle.checked));
+        }
 
         // The Old Hill highlight belongs to States, not the default terrain.
         const stateLayerIds = biganeStateOverlayLayerIds(map.getStyle().layers);
@@ -2294,7 +2606,7 @@
         const shoulderW = ['interpolate', ['linear'], ['zoom'], 4, 0, 5, 1.6, 6, 2.8, 7, 4.6, 8, 7.6, 9, 11.2, 10, 14.7, 11, 18.5, 12, 23, 14, 30, 17, 37];
         const trailW = ['interpolate', ['linear'], ['zoom'], 5, 0.40, 6, 0.8, 8, 1.45, 11, 2.5, 15, 4.6];
         const trailRimW = ['interpolate', ['linear'], ['zoom'], 5, 0.90, 6, 1.4, 8, 2.05, 11, 3.2, 15, 5.4];
-        const trailOpacity = ['interpolate', ['linear'], ['zoom'], 5, 0, 5.7, 0.88];
+        const trailOpacity = ['interpolate', ['linear'], ['zoom'], 8, 0, 8.7, 0.88];
         function registerPattern(id, factory) {
           if (map.hasImage(id)) return true;
           try {
@@ -2307,7 +2619,7 @@
           }
           return false;
         }
-        function add(t, suffix, paint, before, minzoom = 5) {
+        function add(t, suffix, paint, before, minzoom = 8) {
           const l = t.layer, id = `bigane-roman-${t.key}-${suffix}-v49-r1`;
           const layer = {
             id, type: 'line', source: l.source,
@@ -2341,16 +2653,16 @@
             for (const t of targets) {
               const isRoad = t.kind === 'road';
               if (isRoad) {
-                // No stone shoulders or texture below zoom 5: retain the
+                // No stone shoulders or texture below zoom 8: retain the
                 // original orange overview colour until the detail transition.
                 add(t, 'shoulder', {'line-color': '#746e57', 'line-width': shoulderW, 'line-blur': 0.55,
-                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0, 5.5, 0.18, 7, 0.24, 9, 0.36, 12, 0.38]}, t.id);
+                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0, 8.5, 0.24, 9, 0.36, 12, 0.38]}, t.id);
                 add(t, 'stone-edge', {'line-color': '#625f52', 'line-width': rimW,
-                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0, 5.5, 0.58, 8, 0.82, 12, 0.90]}, t.id);
+                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0, 8.5, 0.82, 12, 0.90]}, t.id);
               } else {
                 add(t, 'earth-edge', {'line-color': '#697059', 'line-width': trailRimW,
-                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0, 5.7, 0.36]}, t.id);
-                map.setLayerZoomRange(t.id, Math.max(5, t.layer.minzoom ?? 0), t.layer.maxzoom ?? 24);
+                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0, 8.7, 0.36]}, t.id);
+                map.setLayerZoomRange(t.id, Math.max(8, t.layer.minzoom ?? 0), t.layer.maxzoom ?? 24);
               }
               // Retain the source, coordinates and filters, including the v18
               // route geometry. Sea and underground routes are never targeted.
@@ -2360,7 +2672,7 @@
               map.setPaintProperty(t.id, 'line-offset', 0);
               const overviewColor = t.layer.paint?.['line-color'] ?? '#e8a12f';
               map.setPaintProperty(t.id, 'line-color', isRoad ?
-                ['interpolate', ['linear'], ['zoom'], 5, overviewColor, 5.5, '#bab7a5'] : '#bab89b');
+                ['interpolate', ['linear'], ['zoom'], 8, overviewColor, 8.5, '#bab7a5'] : '#bab89b');
               map.setPaintProperty(t.id, 'line-width', isRoad ? roadW : trailW);
               map.setPaintProperty(t.id, 'line-opacity', isRoad ? 0.98 : trailOpacity);
               map.setPaintProperty(t.id, 'line-blur', 0);
@@ -2371,7 +2683,7 @@
                 const ordered = map.getStyle().layers || [];
                 const next = ordered[ordered.findIndex(l => l.id === t.id) + 1]?.id;
                 add(t, 'paving', {'line-pattern': roadPatternId, 'line-width': roadW,
-                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0, 5.5, 0.96, 8, 1]}, next);
+                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0, 8.5, 1]}, next);
               }
             }
             if (oldShadow && snapshots.has(oldShadow.id)) map.setLayoutProperty(oldShadow.id, 'visibility', 'none');
@@ -5672,6 +5984,7 @@
             };
 
             this.ensureModel = state => {
+              if (!biganeViewSettings.models) return state.loadingPromise;
               if (state.loaded || state.loading) return state.loadingPromise;
               state.loading = true;
               state.error = null;
@@ -5799,8 +6112,8 @@
                 const coordinates = this.resolveCoordinate(state, true);
                 const norm = this.getViewNorm(coordinates);
                 const forceSelected = this.selectedName === config.name && document.body.classList.contains("landmark-edit-mode");
-                const shouldLoad = config.visible !== false && coordinates && zoom >= LANDMARK_MIN_ZOOM && (norm <= LANDMARK_LOAD_RADIUS || forceSelected);
-                const shouldRender = config.visible !== false && coordinates && zoom >= LANDMARK_MIN_ZOOM && (norm <= LANDMARK_RENDER_RADIUS || forceSelected);
+                const shouldLoad = biganeViewSettings.models && config.visible !== false && coordinates && zoom >= LANDMARK_MIN_ZOOM && (norm <= LANDMARK_LOAD_RADIUS || forceSelected);
+                const shouldRender = biganeViewSettings.models && config.visible !== false && coordinates && zoom >= LANDMARK_MIN_ZOOM && (norm <= LANDMARK_RENDER_RADIUS || forceSelected);
                 if (allowLoad && shouldLoad && !state.loaded && !state.loading) this.ensureModel(state);
                 if (state.loaded && state.placement) {
                   const renderVisible = Boolean(shouldRender);
@@ -5834,7 +6147,7 @@
             };
 
             this.findNearestAtPoint = (point, maxPixels = 44) => {
-              if (!placeInteractionAllowed(this.map.getZoom())) return null;
+              if (!biganeViewSettings.models || !placeInteractionAllowed(this.map.getZoom())) return null;
               let best = null;
               let bestDistance = maxPixels;
               for (const state of landmarkStatesByName.values()) {
@@ -5933,26 +6246,18 @@
               this.setHovered(state?.config?.name || null);
               if (state) this.map.getCanvas().style.cursor = "pointer";
               else {
-                const cityLayers = ["Town names", "Capitals", "clickable"].filter(id => this.map.getLayer(id));
+                const cityLayers = ["Town names", "Capitals", "clickable", ...COUNTRY_LABEL_LAYERS, "States"].filter(id => this.map.getLayer(id));
                 const overCity = cityLayers.length ? this.map.queryRenderedFeatures(event.point, { layers: cityLayers }).length > 0 : false;
                 if (!overCity) this.map.getCanvas().style.cursor = "";
               }
             };
             this.onClick = event => {
-              if (!placeInteractionAllowed(this.map.getZoom())) return;
+              // Normal browsing is handled by one shared dispatcher. Keep the
+              // existing editor-only model selection, without opening a popup.
+              if (!biganeViewSettings.models || !placeInteractionAllowed(this.map.getZoom()) ||
+                  !document.body.classList.contains("landmark-edit-mode")) return;
               const state = this.findNearestAtPoint(event.point, 46);
-              if (!state) return;
-              if (document.body.classList.contains("landmark-edit-mode")) {
-                landmarkEditorSelectName?.(state.config.name);
-                return;
-              }
-              const cityLayers = ["Town names", "Capitals", "clickable"].filter(id => this.map.getLayer(id));
-              if (cityLayers.length && this.map.queryRenderedFeatures(event.point, { layers: cityLayers }).length) return;
-              openKankaPopup({
-                type: "Feature",
-                properties: { Burg: state.config.name },
-                geometry: { type: "Point", coordinates: state.coordinates }
-              });
+              if (state) landmarkEditorSelectName?.(state.config.name);
             };
 
             mapInstance.on("move", this.onMove);
@@ -5978,7 +6283,7 @@
               this.frameCount = 0;
               this.lastFpsAt = now;
             }
-            if (!this.visibleCount) return;
+            if (!biganeViewSettings.models || !this.visibleCount) return;
             this.camera.projectionMatrix = new THREE.Matrix4().fromArray(matrix);
             this.renderer.resetState();
             this.renderer.render(this.scene, this.camera);
@@ -6721,6 +7026,7 @@
         try { installCityLabelPolicy(); }
         catch (error) { console.warn("Plaatsnaamselectie kon niet starten:", error); }
 
+        installGeographicLabelPolicy();
         setupLayerSwitcher();
 
         // --- Terrain: original Bigane DEM, rendered by MapLibre ---
@@ -6788,22 +7094,7 @@
         installSnowOverlay();
         installLandscapePolish();
 
-        for (const layerId of ["Town names", "Capitals", "clickable"]) {
-          const layer = map.getLayer(layerId);
-          if (!layer) continue;
-          // Native hit testing for the transparent city targets also starts at 6.
-          if (layerId === "clickable") map.setLayerZoomRange(layerId,
-            Math.max(PLACE_INTERACTION_MIN_ZOOM, layer.minzoom || 0), layer.maxzoom || 24);
-          map.on("click", layerId, (event) => {
-            if (!placeInteractionAllowed()) return;
-            const feature = event.features?.[0];
-            if (feature) openKankaPopup(feature);
-          });
-          map.on("mouseenter", layerId, () => {
-            map.getCanvas().style.cursor = placeInteractionAllowed() ? "pointer" : "";
-          });
-          map.on("mouseleave", layerId, () => { map.getCanvas().style.cursor = ""; });
-        }
+        installPlaceClickDispatcher();
         updatePlaceInteractionState();
 
         loadKankaLocationsWithImages();
