@@ -605,18 +605,10 @@
       <input type="checkbox" id="toggle-forests" checked />
       <span>Bomen (3D + sprites)</span>
     </label>
-    <label title="Vooraf berekende ondiepwaterbanden aan/uit">
-      <input type="checkbox" id="toggle-waterbands" checked />
-      <span>Ondiep water</span>
-    </label>
     <!-- BIGANE_RURAL_UI_BEGIN -->
     <label title="Vooraf vastgelegde akkers en weiden; uitschakelen toont de oorspronkelijke biomes">
       <input type="checkbox" id="toggle-farmland" checked />
       <span>Akkerland en weiden</span>
-    </label>
-    <label title="Romeins geinspireerde steenwegen; bestrating vanaf zoom 8. Zee- en ondergrondse routes blijven ongewijzigd">
-      <input type="checkbox" id="toggle-roadstyle" checked />
-      <span>Romeinse hoofdwegen</span>
     </label>
     <div id="farmland-status" role="status" style="font-size:11px;line-height:1.4;color:#4e6053;max-width:218px;margin:5px 0 7px">Akkerland: vaste biomegegevens laden</div>
     <!-- BIGANE_RURAL_UI_END -->
@@ -883,6 +875,16 @@
       biganeLanduseSourceErrors.add(String(event.error?.message || 'De vaste biomegegevens zijn niet geladen.'));
     }
 
+    function biganeStateOverlayLayerIds(layers) {
+      return (layers || []).filter(layer => {
+        if (layer.id === 'States' || layer.id === 'Province colour') return true;
+        if (!['fill', 'line'].includes(layer.type)) return false;
+        if (/old[ _-]*hill/i.test(layer.id || '')) return true;
+        return /old[ _-]*hill/i.test(JSON.stringify(layer.filter || '')) &&
+          /state|province|border/i.test(`${layer.id} ${layer['source-layer'] || ''}`);
+      }).map(layer => layer.id);
+    }
+
     function prepareBiganeLanduseStyle(original) {
       const style = JSON.parse(JSON.stringify(original));
       const biomes = style.layers?.find(layer => layer.id === 'Biomes');
@@ -901,6 +903,11 @@
         if (!sameBiomeData(layer)) continue;
         layer.source = BIGANE_LANDUSE_SOURCE_ID;
         layer['source-layer'] = BIGANE_LANDUSE_SOURCE_LAYER;
+      }
+      // Hide political overlays before the very first rendered frame.
+      const stateOverlayIds = new Set(biganeStateOverlayLayerIds(style.layers));
+      for (const layer of style.layers) if (stateOverlayIds.has(layer.id)) {
+        layer.layout = {...layer.layout, visibility: 'none'};
       }
       // The original composite source also contains water, labels and towns.
       return style;
@@ -969,8 +976,6 @@
         kankaMinimum: 80000,
         capitalMinimum: 80000,
         maxPopulationForRanking: 10000000,
-        markerMinZoom: 8,
-        markerFadeEndZoom: 8.5,
         thresholds: Object.freeze([
           Object.freeze({population: 250000, zoom: 6}),
           Object.freeze({population: 80000, zoom: 7}),
@@ -1083,8 +1088,7 @@
           && zoom >= cityLabelZoom(properties);
       }
       function cityMarkerEligible(properties, zoom = map.getZoom()) {
-        return placeInteractionAllowed(zoom) && zoom >= CITY_LABEL_SETTINGS.markerMinZoom
-          && cityLabelEligible(properties, zoom);
+        return placeInteractionAllowed(zoom) && cityLabelEligible(properties, zoom);
       }
       function cityLabelCacheKey() {
         // Separate accounts without persisting the access token in this cache.
@@ -1153,7 +1157,7 @@
           map.setLayoutProperty(id, 'icon-allow-overlap', false);
           map.setLayoutProperty(id, 'icon-ignore-placement', false);
           map.setLayoutProperty(id, 'icon-optional', true);
-          map.setLayoutProperty(id, 'text-optional', true);
+          map.setLayoutProperty(id, 'text-optional', false); // A rendered symbol must include its name.
           map.setLayoutProperty(id, 'symbol-z-order', 'auto');
           map.setLayoutProperty(id, 'symbol-sort-key', ['-', 0, score]);
           map.setLayoutProperty(id, 'text-padding', 5);
@@ -1416,12 +1420,9 @@
         return "rgba(255,255,255,.96)";
       }
 
-      function markerOpacityForZoom(zoom) {
-        if (!Number.isFinite(zoom) || zoom <= CITY_LABEL_SETTINGS.markerMinZoom) return 0;
-        if (zoom >= CITY_LABEL_SETTINGS.markerFadeEndZoom) return 1;
-        const t = (zoom - CITY_LABEL_SETTINGS.markerMinZoom) /
-          (CITY_LABEL_SETTINGS.markerFadeEndZoom - CITY_LABEL_SETTINGS.markerMinZoom);
-        return Math.max(0, Math.min(1, t));
+      function markerOpacityForZoom(zoom, properties) {
+        // Same importance threshold as the text; no second zoom threshold.
+        return cityMarkerEligible(properties || {}, zoom) ? 1 : 0;
       }
 
       function markerYOffsetForZoom(zoom) {
@@ -1434,16 +1435,18 @@
 
       function updateKankaMarkerVisuals() {
         const zoom = map.getZoom();
-        const opacity = markerOpacityForZoom(zoom);
         const yOffset = markerYOffsetForZoom(zoom);
 
         for (const marker of kankaCityMarkers.values()) {
-          marker.setOffset([0, yOffset]);
+          if (marker.biganeYOffset !== yOffset) {
+            marker.setOffset([0, yOffset]);
+            marker.biganeYOffset = yOffset;
+          }
           const el = marker.getElement();
           if (!el) continue;
           const visual = el.querySelector('.kanka-city-marker-visual');
           if (!visual) continue;
-          const shown = cityMarkerEligible(marker.biganeCityProperties || {}, zoom) ? opacity : 0;
+          const shown = markerOpacityForZoom(zoom, marker.biganeCityProperties);
           visual.style.opacity = String(shown);
           visual.style.visibility = shown <= 0.001 ? 'hidden' : 'visible';
           el.style.pointerEvents = !placeInteractionAllowed(zoom) || shown < 0.12 ? 'none' : 'auto';
@@ -1462,12 +1465,14 @@
       function refreshKankaCityMarkers() {
         if (refreshingKankaMarkers) return;
         // Do not create or retain hidden DOM portraits in the overview.
-        if (map.getZoom() < CITY_LABEL_SETTINGS.markerMinZoom) {
+        if (!placeInteractionAllowed() || map.getZoom() < CITY_LABEL_SETTINGS.thresholds[0].zoom) {
           for (const marker of kankaCityMarkers.values()) marker.remove();
           kankaCityMarkers.clear();
           return;
         }
-        if (!kankaLocationsLoaded || !map.loaded()) return;
+        // Rendered labels can be queried while the camera is moving and tiles
+        // are arriving. map.loaded() would postpone the portraits until idle.
+        if (!kankaLocationsLoaded) return;
         refreshingKankaMarkers = true;
 
         try {
@@ -1488,10 +1493,9 @@
             wanted.add(key);
             if (kankaCityMarkers.has(key)) {
               const existingMarker = kankaCityMarkers.get(key);
-              const existingElement = existingMarker?.getElement();
-              const existingVisual = existingElement?.querySelector('.kanka-city-marker-visual');
-              if (existingVisual) existingVisual.style.borderColor = stateColorAt(coordinates);
-              continue;
+              existingMarker.biganeCityProperties = {...feature.properties};
+              continue; // State borders are fixed; do not re-query them every frame.
+
             }
 
             const el = document.createElement("div");
@@ -1512,7 +1516,7 @@
             el.appendChild(visual);
 
             el.addEventListener("click", (event) => {
-              if (!cityMarkerEligible(feature.properties) || markerOpacityForZoom(map.getZoom()) < 0.12) return;
+              if (!cityMarkerEligible(feature.properties) || markerOpacityForZoom(map.getZoom(), feature.properties) < 0.12) return;
               event.preventDefault();
               event.stopPropagation();
               openKankaPopup(feature);
@@ -1526,12 +1530,13 @@
               .setLngLat(coordinates)
               .addTo(map);
 
-            const initialOpacity = markerOpacityForZoom(map.getZoom());
+            const initialOpacity = markerOpacityForZoom(map.getZoom(), feature.properties);
             visual.style.opacity = String(initialOpacity);
             visual.style.visibility = initialOpacity <= 0.001 ? "hidden" : "visible";
             el.style.pointerEvents = !placeInteractionAllowed() || initialOpacity < 0.12 ? "none" : "auto";
 
             marker.biganeCityProperties = {...feature.properties};
+            marker.biganeYOffset = markerYOffsetForZoom(map.getZoom());
             kankaCityMarkers.set(key, marker);
           }
 
@@ -1548,6 +1553,20 @@
         }
       }
 
+
+      // Synchronize with native label placement, including collision suppression.
+      // At most one query per 100 ms during movement; idle supplies the final pass.
+      let kankaMarkerSyncPending = false;
+      let kankaMarkerLastSync = -Infinity;
+      function scheduleKankaMarkerSync() { kankaMarkerSyncPending = true; }
+      function syncKankaMarkersAfterRender() {
+        if (!kankaMarkerSyncPending || !kankaLocationsLoaded) return;
+        const now = performance.now();
+        if (now - kankaMarkerLastSync < 100) return;
+        kankaMarkerSyncPending = false;
+        kankaMarkerLastSync = now;
+        refreshKankaCityMarkers();
+      }
 
       function setLayerVisibility(layerId, visible) {
         if (!map.getLayer(layerId)) return;
@@ -1575,10 +1594,12 @@
         const townsToggle = document.getElementById("toggle-towns");
         const forestsToggle = document.getElementById("toggle-forests");
 
-        // Match the original style defaults.
-        const statesInitiallyVisible =
-          map.getLayer("States") &&
-          map.getLayoutProperty("States", "visibility") !== "none";
+        // The Old Hill highlight belongs to States, not the default terrain.
+        const stateLayerIds = biganeStateOverlayLayerIds(map.getStyle().layers);
+        const showStates = visible => {
+          for (const id of stateLayerIds) setLayerVisibility(id, visible);
+        };
+        showStates(false);
 
         const townLayerIds = ["Town names", "Capitals"];
         const townsInitiallyVisible = townLayerIds.some(
@@ -1586,10 +1607,8 @@
         );
 
         if (statesToggle) {
-          statesToggle.checked = Boolean(statesInitiallyVisible);
-          statesToggle.addEventListener("change", () => {
-            setLayerVisibility("States", statesToggle.checked);
-          });
+          statesToggle.checked = false;
+          statesToggle.addEventListener("change", () => showStates(statesToggle.checked));
         }
 
         if (townsToggle) {
@@ -1746,7 +1765,58 @@
       const BIGANE_WATER_SOURCE_ID = 'bigane-water-bands-v49';
       const BIGANE_WATER_LAYER_ID = 'bigane-water-depth-v49';
       const BIGANE_WATER_DATA_URL = './bigane-water-bands-v49.geojson';
+      const BIGANE_WATER_PALETTE = Object.freeze({
+        deep: '#3f7090', offshore: '#427492', mid: '#4a7d97', shallow: '#588b9c',
+        lake: '#488da2'
+      });
       let waterPolishController = null;
+
+      function biganeScaleLineWidth(expression, factor) {
+        const scale = value => typeof value === 'number' ? value * factor : ['*', factor, value];
+        // Keep zoom at the top level, as required by MapLibre paint expressions.
+        if (Array.isArray(expression) && expression[0] === 'interpolate') {
+          return expression.map((value, i) => i >= 4 && i % 2 === 0 ? scale(value) : value);
+        }
+        if (Array.isArray(expression) && expression[0] === 'step') {
+          return expression.map((value, i) => i >= 2 && i % 2 === 0 ? scale(value) : value);
+        }
+        return scale(expression);
+      }
+
+      function installBiganeRiverPalette() {
+        const river = (map.getStyle().layers || []).find(layer => layer.id === 'Rivers');
+        if (!river || river.type !== 'line') return;
+        const innerId = 'bigane-river-channel-v1';
+        const palette = BIGANE_WATER_PALETTE;
+        const width = river.paint?.['line-width'] ?? 1;
+        // Width is only a cartographic depth cue, not measured river bathymetry.
+        const size = ['max', 0, ['to-number', ['coalesce', ['get', 'width'], ['get', 'Width'], 0], 0]];
+        const channelColor = ['interpolate', ['linear'], size,
+          0, palette.mid, 1, palette.offshore, 4, palette.deep];
+        const channel = {
+          id: innerId, type: 'line', source: river.source,
+          ...(river['source-layer'] ? {'source-layer': river['source-layer']} : {}),
+          ...(river.filter ? {filter: river.filter} : {}),
+          ...(river.minzoom !== undefined ? {minzoom: river.minzoom} : {}),
+          ...(river.maxzoom !== undefined ? {maxzoom: river.maxzoom} : {}),
+          layout: {...river.layout, 'line-cap': 'round', 'line-join': 'round'},
+          paint: {
+            'line-color': channelColor,
+            'line-width': biganeScaleLineWidth(width, 0.64),
+            'line-opacity': river.paint?.['line-opacity'] ?? 1,
+            'line-blur': 0.65
+          }
+        };
+        // Draw inside the original river, below lake/sea fills and their bands.
+        // No additional sources, geometry generation or per-frame CPU work.
+        if (!map.getLayer(innerId)) {
+          const ordered = map.getStyle().layers || [];
+          const next = ordered[ordered.findIndex(layer => layer.id === 'Rivers') + 1]?.id;
+          map.addLayer(channel, next);
+        }
+        map.setPaintProperty('Rivers', 'line-color', palette.shallow);
+        map.setPaintProperty('Rivers', 'line-blur', 0.55);
+      }
 
       function installWaterPolish() {
         if (waterPolishController) return;
@@ -1762,7 +1832,6 @@
           cameraRebuilds: 0, dynamicReflections: false,
           enabled: true, error: null
         };
-        const toggle = document.getElementById('toggle-waterbands');
         let disposed = false;
 
         const setEnabled = enabled => {
@@ -1770,9 +1839,7 @@
           if (map.getLayer(BIGANE_WATER_LAYER_ID)) {
             map.setLayoutProperty(BIGANE_WATER_LAYER_ID, 'visibility', stats.enabled ? 'visible' : 'none');
           }
-          if (toggle) toggle.checked = stats.enabled;
         };
-        const onToggle = () => setEnabled(toggle.checked);
         const onData = event => {
           if (disposed || event?.sourceId !== BIGANE_WATER_SOURCE_ID) return;
           try {
@@ -1796,7 +1863,6 @@
             disposed = true;
             map.off('sourcedata', onData);
             map.off('error', onError);
-            toggle?.removeEventListener('change', onToggle);
             if (map.getLayer(BIGANE_WATER_LAYER_ID)) map.removeLayer(BIGANE_WATER_LAYER_ID);
             if (map.getSource(BIGANE_WATER_SOURCE_ID)) map.removeSource(BIGANE_WATER_SOURCE_ID);
           }
@@ -1811,17 +1877,20 @@
           // Match v45's base colours exactly. Never insert opaque water above
           // routes, modify the DEM, or add a second independently elevated sea.
           if (map.getLayer('background')) {
-            map.setPaintProperty('background', 'background-color', '#3f7090');
+            map.setPaintProperty('background', 'background-color', BIGANE_WATER_PALETTE.deep);
             map.setPaintProperty('background', 'background-pattern', null);
           }
           if (map.getLayer('Ocean')) {
-            map.setPaintProperty('Ocean', 'fill-color', '#3f7090');
+            map.setPaintProperty('Ocean', 'fill-color', BIGANE_WATER_PALETTE.deep);
             map.setPaintProperty('Ocean', 'fill-pattern', null);
           }
           if (map.getLayer('lakes')) {
-            map.setPaintProperty('lakes', 'fill-color', '#488da2');
+            map.setPaintProperty('lakes', 'fill-color', BIGANE_WATER_PALETTE.lake);
             map.setPaintProperty('lakes', 'fill-pattern', null);
           }
+
+          try { installBiganeRiverPalette(); }
+          catch (error) { console.warn('River palette: original geometry retained.', error); }
 
           // Keep the new surface immediately above native water, with labels,
           // routes and other existing map overlays retaining their order.
@@ -1846,8 +1915,7 @@
               'fill-antialias': false
             }
           }, beforeId);
-          toggle?.addEventListener('change', onToggle);
-          setEnabled(toggle ? toggle.checked : true);
+          setEnabled(true);
         } catch (error) {
           stats.phase = 'error'; stats.error = String(error?.message || error);
           console.warn('Water bands v49: native base water remains visible.', error);
@@ -2176,116 +2244,160 @@
         return image;
       }
 
-      let biganeRoadStylingController=null;
-      function installBiganeRoadStyling(){
-        if(biganeRoadStylingController)return;
-        const toggle=document.getElementById('toggle-roadstyle');
-        const initial=map.getStyle().layers||[],snapshots=new Map(),added=[];
-        const patternId='bigane-roman-stone-v49-r1';
-        const clone=value=>JSON.parse(JSON.stringify(value));
-        const targets=[{id:'Routes',kind:'road',type:'roads'},{id:'Trail 7000',kind:'trail',type:'trails'}]
-          .map(t=>({...t,layer:initial.find(l=>l.id===t.id)}))
-          .filter(t=>t.layer?.type==='line'&&JSON.stringify(t.layer.filter||'').includes('"'+t.type+'"'));
-        for(const t of targets)snapshots.set(t.id,clone(t.layer));
-        const oldShadow=initial.find(l=>l.id==='Trail 7000 black');
-        if(oldShadow&&targets.some(t=>t.kind==='trail'))snapshots.set(oldShadow.id,clone(oldShadow));
-        const paintKeys=['line-color','line-width','line-opacity','line-blur','line-translate','line-pattern','line-dasharray','line-gap-width','line-offset'];
-        const layoutKeys=['line-cap','line-join','visibility'];
-        let enabled=false,patternReady=false,patternOwned=false,lastError=null;
-        // Screen widths are deliberately cartographic; these are not metres.
-        const roadW=['interpolate',['linear'],['zoom'],4,0,5,0.8,6,1.5,7,2.5,8,4.3,9,6.8,10,9.5,11,12.5,12,16,14,22,17,28];
-        const rimW=['interpolate',['linear'],['zoom'],4,0,5,1.35,6,2.25,7,3.45,8,5.6,9,8.4,10,11.3,11,14.5,12,18.2,14,24.5,17,31];
-        const shoulderW=['interpolate',['linear'],['zoom'],4,0,5,1.6,6,2.8,7,4.6,8,7.6,9,11.2,10,14.7,11,18.5,12,23,14,30,17,37];
-        const trailW=['interpolate',['linear'],['zoom'],4,0,5,0.40,6,0.8,8,1.45,11,2.5,15,4.6];
-        const trailRimW=['interpolate',['linear'],['zoom'],4,0,5,0.90,6,1.4,8,2.05,11,3.2,15,5.4];
-        function registerPattern(){
-          if(map.hasImage(patternId)){patternReady=true;return;}
-          try{
-            const image=biganeRomanPavingImage();
-            map.addImage(patternId,{width:image.width,height:image.height,data:image.data},{pixelRatio:4});
-            patternReady=map.hasImage(patternId);patternOwned=patternReady;
-          }catch(error){patternReady=false;lastError=String(error?.message||error);console.warn('Romeinse bestrating: effen steenweg als terugval.',error);}
+      function biganeTrailTextureImage() {
+        const width = 128, height = 32;
+        const image = new ImageData(width, height);
+        // Deterministic fine gravel. Repeats seamlessly along the route.
+        for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+          const h = ((x * 73856093) ^ (y * 19349663)) >>> 0;
+          const noise = ((h % 19) - 9) * 0.7;
+          const cross = y / (height - 1);
+          const wear = 7 * Math.exp(-Math.pow((cross - 0.34) / 0.11, 2)) +
+            7 * Math.exp(-Math.pow((cross - 0.66) / 0.11, 2));
+          const edge = -14 * Math.pow(Math.abs(2 * cross - 1), 3);
+          const gravel = h % 47 === 0 ? 13 : 0;
+          const i = (y * width + x) * 4, shade = noise + wear + edge + gravel;
+          image.data[i] = Math.round(186 + shade);
+          image.data[i + 1] = Math.round(184 + shade);
+          image.data[i + 2] = Math.round(155 + shade);
+          image.data[i + 3] = 255;
         }
-        function common(t,id,paint,minzoom){
-          const l=t.layer;
-          return{id,type:'line',source:l.source,
-            ...(l['source-layer']?{'source-layer':l['source-layer']}:{}),
-            ...((minzoom!==undefined||l.minzoom!==undefined)?{minzoom:Math.max(l.minzoom??0,minzoom??0)}:{}),
-            ...(l.maxzoom!==undefined?{maxzoom:l.maxzoom}:{}),
-            filter:clone(l.filter),
-            layout:{'line-cap':'round','line-join':'round',visibility:l.layout?.visibility||'visible'},paint};
+        for (let y = 0; y < height; y++) for (let c = 0; c < 4; c++) {
+          image.data[(y * width + width - 1) * 4 + c] = image.data[y * width * 4 + c];
         }
-        function add(t,suffix,paint,before,minzoom){
-          const id=`bigane-roman-${t.kind}-${suffix}-v49-r1`;
-          const layer=common(t,id,paint,minzoom);
-          if(layer.maxzoom!==undefined&&layer.minzoom!==undefined&&layer.minzoom>=layer.maxzoom)return;
-          map.addLayer(layer,before);added.push(id);
+        return image;
+      }
+
+      let biganeRoadStylingController = null;
+      function installBiganeRoadStyling() {
+        if (biganeRoadStylingController) return;
+        const initial = map.getStyle().layers || [], snapshots = new Map(), added = [];
+        const roadPatternId = 'bigane-roman-stone-v49-r1';
+        const trailPatternId = 'bigane-trail-gravel-v1';
+        const ownedPatterns = new Set();
+        const clone = value => JSON.parse(JSON.stringify(value));
+        const targets = [
+          {id: 'Routes', kind: 'road', key: 'road', type: 'roads'},
+          {id: 'Trail 7000', kind: 'trail', key: 'trail', type: 'trails'},
+          {id: 'Trails', kind: 'trail', key: 'trail-legacy', type: 'trails'}
+        ].map(t => ({...t, layer: initial.find(l => l.id === t.id)}))
+          .filter(t => t.layer?.type === 'line' && JSON.stringify(t.layer.filter || '').includes('"' + t.type + '"'));
+        for (const t of targets) snapshots.set(t.id, clone(t.layer));
+        const oldShadow = initial.find(l => l.id === 'Trail 7000 black');
+        if (oldShadow && targets.some(t => t.kind === 'trail')) snapshots.set(oldShadow.id, clone(oldShadow));
+        const paintKeys = ['line-color', 'line-width', 'line-opacity', 'line-blur', 'line-translate',
+          'line-pattern', 'line-dasharray', 'line-gap-width', 'line-offset'];
+        const layoutKeys = ['line-cap', 'line-join', 'visibility'];
+        let enabled = false, roadPatternReady = false, trailPatternReady = false, lastError = null;
+        const roadW = ['interpolate', ['linear'], ['zoom'], 4, 0, 5, 0.8, 6, 1.5, 7, 2.5, 8, 4.3, 9, 6.8, 10, 9.5, 11, 12.5, 12, 16, 14, 22, 17, 28];
+        const rimW = ['interpolate', ['linear'], ['zoom'], 4, 0, 5, 1.35, 6, 2.25, 7, 3.45, 8, 5.6, 9, 8.4, 10, 11.3, 11, 14.5, 12, 18.2, 14, 24.5, 17, 31];
+        const shoulderW = ['interpolate', ['linear'], ['zoom'], 4, 0, 5, 1.6, 6, 2.8, 7, 4.6, 8, 7.6, 9, 11.2, 10, 14.7, 11, 18.5, 12, 23, 14, 30, 17, 37];
+        const trailW = ['interpolate', ['linear'], ['zoom'], 5, 0.40, 6, 0.8, 8, 1.45, 11, 2.5, 15, 4.6];
+        const trailRimW = ['interpolate', ['linear'], ['zoom'], 5, 0.90, 6, 1.4, 8, 2.05, 11, 3.2, 15, 5.4];
+        const trailOpacity = ['interpolate', ['linear'], ['zoom'], 5, 0, 5.7, 0.88];
+        function registerPattern(id, factory) {
+          if (map.hasImage(id)) return true;
+          try {
+            const image = factory();
+            map.addImage(id, {width: image.width, height: image.height, data: image.data}, {pixelRatio: 4});
+            if (map.hasImage(id)) { ownedPatterns.add(id); return true; }
+          } catch (error) {
+            lastError = String(error?.message || error);
+            console.warn('Route texture: solid surface fallback.', error);
+          }
+          return false;
         }
-        function restore(){
-          for(const id of added.slice().reverse())if(map.getLayer(id))map.removeLayer(id);
-          added.length=0;
-          for(const[id,l]of snapshots){
-            if(!map.getLayer(id))continue;
-            for(const p of paintKeys)map.setPaintProperty(id,p,l.paint?.[p]??null);
-            for(const p of layoutKeys)map.setLayoutProperty(id,p,l.layout?.[p]??null);
+        function add(t, suffix, paint, before, minzoom = 5) {
+          const l = t.layer, id = `bigane-roman-${t.key}-${suffix}-v49-r1`;
+          const layer = {
+            id, type: 'line', source: l.source,
+            ...(l['source-layer'] ? {'source-layer': l['source-layer']} : {}),
+            minzoom: Math.max(l.minzoom ?? 0, minzoom),
+            ...(l.maxzoom !== undefined ? {maxzoom: l.maxzoom} : {}),
+            filter: clone(l.filter),
+            layout: {'line-cap': 'round', 'line-join': 'round', visibility: l.layout?.visibility || 'visible'}, paint
+          };
+          if (layer.maxzoom !== undefined && layer.minzoom >= layer.maxzoom) return;
+          map.addLayer(layer, before); added.push(id);
+        }
+        function restore() {
+          for (const id of added.slice().reverse()) if (map.getLayer(id)) map.removeLayer(id);
+          added.length = 0;
+          for (const [id, layer] of snapshots) {
+            if (!map.getLayer(id)) continue;
+            for (const p of paintKeys) map.setPaintProperty(id, p, layer.paint?.[p] ?? null);
+            for (const p of layoutKeys) map.setLayoutProperty(id, p, layer.layout?.[p] ?? null);
+            map.setLayerZoomRange(id, layer.minzoom ?? 0, layer.maxzoom ?? 24);
           }
         }
-        function set(enabledNow){
-          const want=!!enabledNow;if(want===enabled)return;
-          if(!want){restore();enabled=false;if(toggle)toggle.checked=false;return;}
-          lastError=null;
-          try{
-            if(targets.some(t=>t.kind==='road'))registerPattern();
-            for(const t of targets){
-              const isRoad=t.kind==='road';
-              if(isRoad){
-                add(t,'shoulder',{'line-color':'#746e57','line-width':shoulderW,'line-blur':0.55,
-                  'line-opacity':['interpolate',['linear'],['zoom'],5,0,7,0.24,9,0.36,12,0.38]},t.id,6);
-                add(t,'stone-edge',{'line-color':'#625f52','line-width':rimW,
-                  'line-opacity':['interpolate',['linear'],['zoom'],4,0,6,0.64,8,0.82,12,0.90]},t.id);
-              }else{
-                add(t,'earth-edge',{'line-color':'#697059','line-width':trailRimW,'line-opacity':0.36},t.id);
+        function set(enabledNow) {
+          const want = !!enabledNow;
+          if (want === enabled) return;
+          if (!want) { restore(); enabled = false; return; }
+          lastError = null;
+          try {
+            if (targets.some(t => t.kind === 'road')) roadPatternReady = registerPattern(roadPatternId, biganeRomanPavingImage);
+            if (targets.some(t => t.kind === 'trail')) trailPatternReady = registerPattern(trailPatternId, biganeTrailTextureImage);
+            for (const t of targets) {
+              const isRoad = t.kind === 'road';
+              if (isRoad) {
+                // No stone shoulders or texture below zoom 5: retain the
+                // original orange overview colour until the detail transition.
+                add(t, 'shoulder', {'line-color': '#746e57', 'line-width': shoulderW, 'line-blur': 0.55,
+                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0, 5.5, 0.18, 7, 0.24, 9, 0.36, 12, 0.38]}, t.id);
+                add(t, 'stone-edge', {'line-color': '#625f52', 'line-width': rimW,
+                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0, 5.5, 0.58, 8, 0.82, 12, 0.90]}, t.id);
+              } else {
+                add(t, 'earth-edge', {'line-color': '#697059', 'line-width': trailRimW,
+                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0, 5.7, 0.36]}, t.id);
+                map.setLayerZoomRange(t.id, Math.max(5, t.layer.minzoom ?? 0), t.layer.maxzoom ?? 24);
               }
-              // Original source, filter, min/max zoom and geometry are retained.
-              map.setPaintProperty(t.id,'line-pattern',null);
-              map.setPaintProperty(t.id,'line-dasharray',null);
-              map.setPaintProperty(t.id,'line-gap-width',0);
-              map.setPaintProperty(t.id,'line-offset',0);
-              map.setPaintProperty(t.id,'line-color',isRoad?'#bab7a5':'#bab89b');
-              map.setPaintProperty(t.id,'line-width',isRoad?roadW:trailW);
-              map.setPaintProperty(t.id,'line-opacity',isRoad?0.98:0.88);
-              map.setPaintProperty(t.id,'line-blur',0);
-              map.setPaintProperty(t.id,'line-translate',[0,0]);
-              map.setLayoutProperty(t.id,'line-cap','round');
-              map.setLayoutProperty(t.id,'line-join','round');
-              if(isRoad&&patternReady){
-                const ordered=map.getStyle().layers||[];
-                const next=ordered[ordered.findIndex(l=>l.id===t.id)+1]?.id;
-                add(t,'paving',{'line-pattern':patternId,'line-width':roadW,
-                  'line-opacity':['interpolate',['linear'],['zoom'],7.5,0,8,0.35,9,0.80,10,0.96,12,1]},next,7.5);
+              // Retain the source, coordinates and filters, including the v18
+              // route geometry. Sea and underground routes are never targeted.
+              map.setPaintProperty(t.id, 'line-pattern', !isRoad && trailPatternReady ? trailPatternId : null);
+              map.setPaintProperty(t.id, 'line-dasharray', null);
+              map.setPaintProperty(t.id, 'line-gap-width', 0);
+              map.setPaintProperty(t.id, 'line-offset', 0);
+              const overviewColor = t.layer.paint?.['line-color'] ?? '#e8a12f';
+              map.setPaintProperty(t.id, 'line-color', isRoad ?
+                ['interpolate', ['linear'], ['zoom'], 5, overviewColor, 5.5, '#bab7a5'] : '#bab89b');
+              map.setPaintProperty(t.id, 'line-width', isRoad ? roadW : trailW);
+              map.setPaintProperty(t.id, 'line-opacity', isRoad ? 0.98 : trailOpacity);
+              map.setPaintProperty(t.id, 'line-blur', 0);
+              map.setPaintProperty(t.id, 'line-translate', [0, 0]);
+              map.setLayoutProperty(t.id, 'line-cap', 'round');
+              map.setLayoutProperty(t.id, 'line-join', 'round');
+              if (isRoad && roadPatternReady) {
+                const ordered = map.getStyle().layers || [];
+                const next = ordered[ordered.findIndex(l => l.id === t.id) + 1]?.id;
+                add(t, 'paving', {'line-pattern': roadPatternId, 'line-width': roadW,
+                  'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0, 5.5, 0.96, 8, 1]}, next);
               }
             }
-            if(oldShadow&&snapshots.has(oldShadow.id))map.setLayoutProperty(oldShadow.id,'visibility','none');
-            enabled=true;if(toggle)toggle.checked=true;
-          }catch(error){
-            lastError=String(error?.message||error);
-            try{restore();}catch(restoreError){console.warn('Wegstijl herstellen:',restoreError);}
-            enabled=false;if(toggle)toggle.checked=false;
-            console.warn('Romeinse wegen konden niet worden ingesteld; oorspronkelijke stijl hersteld.',error);
+            if (oldShadow && snapshots.has(oldShadow.id)) map.setLayoutProperty(oldShadow.id, 'visibility', 'none');
+            enabled = true;
+          } catch (error) {
+            lastError = String(error?.message || error);
+            try { restore(); } catch (restoreError) { console.warn('Wegstijl herstellen:', restoreError); }
+            enabled = false;
+            console.warn('Wegstijl kon niet starten; oorspronkelijke stijl hersteld.', error);
           }
         }
-        const onToggle=()=>set(toggle.checked);
-        set(toggle?.checked!==false);
-        toggle?.addEventListener('change',onToggle);
-        biganeRoadStylingController={setEnabled:set,
-          getStats:()=>({style:'Roman-inspired imperial roads',enabled,patternReady,patternPixels:[256,64],
-            patternFromZoom:7.5,restyled:targets.map(t=>t.id),added:added.slice(),geometryUnchanged:true,
-            seaAndUndergroundUntouched:true,extraSources:0,extraAnimations:0,error:lastError}),
-          dispose(){set(false);toggle?.removeEventListener('change',onToggle);
-            if(patternOwned&&map.hasImage(patternId))map.removeImage(patternId);
-            biganeRoadStylingController=null;}
+        set(true); // Always active; there is no separate road-style checkbox.
+        biganeRoadStylingController = {
+          setEnabled: set,
+          getStats: () => ({style: 'Roman-inspired imperial roads', enabled,
+            patternReady: roadPatternReady, trailPatternReady, patternPixels: [256, 64],
+            patternFromZoom: 5, patternFullyVisibleZoom: 5.5, trailsFromZoom: 5, trailsFullyVisibleZoom: 5.7,
+            restyled: targets.map(t => t.id), added: added.slice(), geometryUnchanged: true,
+            seaAndUndergroundUntouched: true, extraSources: 0, extraAnimations: 0, error: lastError}),
+          dispose() {
+            set(false);
+            for (const id of ownedPatterns) if (map.hasImage(id)) map.removeImage(id);
+            biganeRoadStylingController = null;
+          }
         };
-        window.biganeRoadDebug=()=>biganeRoadStylingController?.getStats();
+        window.biganeRoadDebug = () => biganeRoadStylingController?.getStats();
       }
       // END BIGANE_ROMAN_ROADS_V49
 
@@ -6697,8 +6809,17 @@
         loadKankaLocationsWithImages();
       });
 
+      map.on("move", scheduleKankaMarkerSync);
+      map.on("styledata", scheduleKankaMarkerSync);
+      map.on("sourcedata", event => {
+        const labelSource = map.getLayer('Town names')?.source;
+        if (event.sourceId === labelSource) scheduleKankaMarkerSync();
+      });
+      map.on("render", syncKankaMarkersAfterRender);
       map.on("idle", () => {
         queueSnowCalibration();
+        kankaMarkerSyncPending = false;
+        kankaMarkerLastSync = performance.now();
         refreshKankaCityMarkers();
       });
       map.on("zoom", updatePlaceInteractionState);
