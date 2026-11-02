@@ -1637,16 +1637,26 @@
 
       async function installBiomeSoftBlend() {
         try {
-          if (!map.getSource("biome-softblend")) {
-            map.addSource("biome-softblend", {
-              type: "image",
-              url: "./biome-blend-overlay.png",
-              coordinates: [
-                [-88.1391, 52.7208],
-                [93.3291, 52.7208],
-                [93.3291, -53.4408],
-                [-88.1391, -53.4408]
-              ]
+          // Offline Web Mercator correction. Soft blending remains enabled.
+          // Normalized biome colours avoid dark fringes at transparent coasts.
+          const sourceSpec = {
+            type: "image",
+            url: "./biome-blend-overlay-mercator-v1.png",
+            coordinates: [
+              [-88.1391, 52.7208],
+              [93.3291, 52.7208],
+              [93.3291, -53.4408],
+              [-88.1391, -53.4408]
+            ]
+          };
+          const existing = map.getSource("biome-softblend");
+          if (!existing) {
+            map.addSource("biome-softblend", sourceSpec);
+          } else if (typeof existing.updateImage === "function") {
+            // Also replace an old overlay inherited from an external style.
+            await existing.updateImage({
+              url: sourceSpec.url,
+              coordinates: sourceSpec.coordinates
             });
           }
 
@@ -1663,13 +1673,13 @@
               map.addLayer(layer);
             }
           }
+          map.setLayoutProperty("Biome soft blend", "visibility", "visible");
 
-          // Keep the normal biome base fully opaque at all times. The soft overlay sits above it.
+          // The original opaque biome base remains under the corrected overlay.
           if (map.getLayer("Sandwich")) {
             map.setPaintProperty("Sandwich", "fill-opacity", 1);
           }
         } catch (error) {
-          // Fail safe: keep the normal opaque biome colour if the overlay fails.
           console.warn("Biome soft blend overgeslagen:", error);
           if (map.getLayer("Sandwich")) {
             map.setPaintProperty("Sandwich", "fill-opacity", 1);
