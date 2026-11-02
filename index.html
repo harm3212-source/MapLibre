@@ -166,6 +166,30 @@
     }
 
 
+    /* Export only country-link choices, not credentials or model settings. */
+    #kanka-links-export {
+      display: block;
+      width: 100%;
+      margin-top: 9px;
+      padding: 7px 9px;
+      border: 1px solid #c7c7c7;
+      border-radius: 6px;
+      background: #f7f7f7;
+      color: #222;
+      font: inherit;
+      cursor: pointer;
+    }
+    #kanka-links-export:hover { background: #ececec; }
+    #kanka-links-export:focus-visible { outline: 2px solid #26719a; outline-offset: 2px; }
+    #kanka-links-export:disabled { cursor: wait; opacity: .6; }
+    #kanka-links-export-status {
+      max-width: 218px;
+      margin: 6px 0 0;
+      font-size: 11px;
+      line-height: 1.4;
+      color: #4e6053;
+    }
+
     .landmark-editor {
       position: absolute;
       z-index: 20;
@@ -620,6 +644,9 @@
     </label>
     <div id="farmland-status" role="status" style="font-size:11px;line-height:1.4;color:#4e6053;max-width:218px;margin:5px 0 7px">Akkerland: vaste biomegegevens laden</div>
     <!-- BIGANE_RURAL_UI_END -->
+    <button type="button" id="kanka-links-export" disabled
+      title="Download je handmatig ingestelde landenkoppelingen als JSON">Exporteer Kanka-koppelingen</button>
+    <p id="kanka-links-export-status" role="status" aria-live="polite" hidden></p>
     <button type="button" id="edit-mode-toggle" class="edit-mode-toggle">Bewerken</button>
   </div>
 
@@ -1363,6 +1390,53 @@
           export: () => JSON.stringify(stateLinkOverrides, null, 2)
         };
       }
+      function downloadStateLinkOverrides() {
+        const feedback = document.getElementById('kanka-links-export-status');
+        let anchor = null, objectUrl = null;
+        try {
+          const serialized = window.BiganeStateLinks?.export?.();
+          if (typeof serialized !== 'string') throw new Error('De kaart is nog niet klaar voor export.');
+          const value = JSON.parse(serialized);
+          if (!value || typeof value !== 'object' || Array.isArray(value))
+            throw new Error('De opgeslagen koppelingen zijn niet geldig.');
+          // Explicit allowlist: never export credentials, API responses or browser storage.
+          const links = Object.create(null);
+          for (const key of Object.keys(value).sort()) {
+            const article = value[key];
+            if (Number.isSafeInteger(article?.entityId) && article.entityId > 0 &&
+                typeof article.articleName === 'string') {
+              links[key] = {entityId: article.entityId, articleName: article.articleName};
+            }
+          }
+          const blob = new Blob([JSON.stringify(links, null, 2) + '\n'],
+            {type: 'application/json;charset=utf-8'});
+          objectUrl = URL.createObjectURL(blob);
+          anchor = document.createElement('a');
+          anchor.href = objectUrl;
+          anchor.download = 'bigane-kanka-landenkoppelingen.json';
+          anchor.hidden = true;
+          document.body.appendChild(anchor);
+          anchor.click();
+          const count = Object.keys(links).length;
+          if (feedback) {
+            feedback.hidden = false;
+            feedback.textContent = count
+              ? 'Export gestart. Upload bigane-kanka-landenkoppelingen.json in de chat. Alleen handmatige landenkoppelingen zijn opgenomen.'
+              : 'Nog geen handmatige landenkoppelingen ingesteld. Het gedownloade bestand is leeg ({}). Automatische koppelingen worden niet meegenomen.';
+          }
+        } catch (error) {
+          if (feedback) {
+            feedback.hidden = false;
+            feedback.textContent = 'Export mislukt: ' + (error?.message || String(error));
+          }
+          console.warn('Kanka-koppelingen exporteren:', error);
+        } finally {
+          if (anchor) anchor.remove();
+          // Give the browser time to start the download before releasing the URL.
+          if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+        }
+      }
+
       function addStateLinkEditor(popup, feature, request, resolution) {
         const root = popup.getElement()?.querySelector('[data-state-link-editor]');
         if (!root) return;
@@ -1892,6 +1966,11 @@
       }
 
       function setupLayerSwitcher() {
+        const exportLinksButton = document.getElementById('kanka-links-export');
+        if (exportLinksButton) {
+          exportLinksButton.disabled = false;
+          exportLinksButton.onclick = downloadStateLinkOverrides;
+        }
         const statesToggle = document.getElementById("toggle-states");
         const townsToggle = document.getElementById("toggle-towns");
         const forestsToggle = document.getElementById("toggle-forests");
