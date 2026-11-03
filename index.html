@@ -690,6 +690,11 @@
       <input type="checkbox" id="toggle-kanka-markers" checked />
       <span>Kanka-bolletjes</span>
     </label>
+    <label title="Lichte animatie op bestaande wegen en zeeroutes, vanaf zoom 8">
+      <input type="checkbox" id="toggle-trade-traffic" />
+      <span>Handelaren en schepen</span>
+    </label>
+    <div id="trade-traffic-status" role="status" style="font-size:11px;max-width:190px;line-height:1.35;margin:3px 0 7px;color:#59636b;" hidden></div>
     <!-- BIGANE_RURAL_UI_BEGIN -->
     <label title="Vooraf vastgelegde akkers en weiden; uitschakelen toont de oorspronkelijke biomes">
       <input type="checkbox" id="toggle-farmland" checked />
@@ -1568,6 +1573,13 @@
           map.setLayoutProperty(id, 'symbol-z-order', 'auto');
           map.setLayoutProperty(id, 'symbol-sort-key', ['-', 0, score]);
           map.setLayoutProperty(id, 'text-padding', 5);
+          // Name and portrait share a centred, screen-aligned anchor. The old
+          // radial offset grew to many em and separated the name from its photo.
+          map.setLayoutProperty(id, 'text-anchor', 'bottom');
+          map.setLayoutProperty(id, 'text-radial-offset', 0);
+          map.setLayoutProperty(id, 'text-offset', [0, -0.25]);
+          map.setLayoutProperty(id, 'text-pitch-alignment', 'viewport');
+          map.setLayoutProperty(id, 'text-rotation-alignment', 'viewport');
           map.setPaintProperty(id, 'text-opacity', 1);
           map.setPaintProperty(id, 'icon-opacity', 1);
           // Moderate label sizes; original font, colour and halo are preserved.
@@ -2366,11 +2378,9 @@
       }
 
       function markerYOffsetForZoom(zoom) {
-        // Keep the image bubble spatially below the city label/point.
-        // Slightly more separation at higher zooms where labels get larger.
-        if (zoom <= 4) return 12;
-        if (zoom >= 7) return 24;
-        return 12 + (zoom - 4) * 4;
+        // CSS pixels from the shared label/point anchor to the TOP of the photo.
+        // Keep the gap small and constant; zoom must not pull the photo away.
+        return 4;
       }
 
       function updateKankaMarkerVisuals() {
@@ -2471,7 +2481,9 @@
             const marker = new maplibregl.Marker({
               element: el,
               anchor: "top",
-              offset: [0, markerYOffsetForZoom(map.getZoom())]
+              offset: [0, markerYOffsetForZoom(map.getZoom())],
+              pitchAlignment: 'viewport', rotationAlignment: 'viewport',
+              opacityWhenCovered: 0
             })
               .setLngLat(coordinates)
               .addTo(map);
@@ -2593,6 +2605,256 @@
           });
         }
       }
+
+
+      /* BIGANE_TRADE_TRAFFIC_V1_BEGIN */
+      function installBiganeTradeTraffic() {
+        const toggle = document.getElementById('toggle-trade-traffic');
+        const status = document.getElementById('trade-traffic-status');
+        if (!toggle) return;
+        // Decorative, bounded screen sprites. This canvas never calls setData or
+        // triggerRepaint, so traffic alone does not redraw the heavy WebGL map.
+        const limits = Object.freeze({minZoom: 8, carts: 10, ships: 6, fps: 20});
+        let enabled = false, removed = false, catalogue = null, preparation = null;
+        let generation = 0, canvas = null, ctx = null, sprites = null, frame = 0;
+        let lastFrame = 0, lastSelection = 0, dirty = true, cssWidth = 0, cssHeight = 0;
+        let elapsed = 0, loading = false, failure = '', reduced = false, drawn = 0;
+        let actors = [], sequence = 0;
+        const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+        reduced = motion.matches;
+        const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+        const hash = text => { let n = 2166136261; for (const c of text) n = Math.imul(n ^ c.charCodeAt(0), 16777619); return n >>> 0; };
+        const xy = c => [(c[0] + 180) / 360, (1 - Math.log(Math.tan(Math.PI/4 + clamp(c[1],-85,85)*Math.PI/360))/Math.PI)/2];
+        const lnglat = p => [p[0]*360 - 180, Math.atan(Math.sinh(Math.PI*(1 - 2*p[1])))*180/Math.PI];
+        const running = () => enabled && !removed && !document.hidden && map.getZoom() >= limits.minZoom;
+        function message() {
+          if (!status) return;
+          status.hidden = !enabled;
+          status.textContent = failure || (loading ? 'Routes voorbereiden...' : map.getZoom() < limits.minZoom
+            ? 'Zichtbaar vanaf zoom 8.' : reduced ? 'Stilstaande figuurtjes: verminderde beweging staat aan.'
+            : 'Handelaren en schepen op zichtbare routes.');
+        }
+        function screenVisible(p) { return p && Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= 0 && p.y >= 0 && p.x < cssWidth && p.y < cssHeight; }
+        function routeShown(route) {
+          const id = route.type === 'searoutes' ? 'Searoutes' : route.type === 'trails' ? 'Trail 7000' : 'Routes';
+          const layer = map.getLayer(id); if (!layer) return false;
+          return map.getLayoutProperty(id,'visibility') !== 'none' && map.getZoom() >= (layer.minzoom || 0) && map.getZoom() < (layer.maxzoom ?? 24);
+        }
+        function makeRoute(coordinates, key, type) {
+          const points = [], distance = []; let total = 0;
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const c of coordinates) {
+            if (!Array.isArray(c) || !Number.isFinite(c[0]) || !Number.isFinite(c[1])) continue;
+            const p = xy(c), prev = points[points.length-1];
+            if (prev) { const d = Math.hypot(p[0]-prev[0],p[1]-prev[1]); if (d < 1e-12) continue; total += d; }
+            points.push(p); distance.push(total);
+            minX=Math.min(minX,p[0]);minY=Math.min(minY,p[1]);maxX=Math.max(maxX,p[0]);maxY=Math.max(maxY,p[1]);
+          }
+          if (points.length<2 || total<1e-8) return null;
+          return {key,type,kind:type==='searoutes'?'ship':'cart',points,distance,total,bbox:[minX,minY,maxX,maxY],seed:hash(key)};
+        }
+        async function prepare() {
+          if (catalogue || preparation || !running()) return preparation;
+          const token = generation; loading = true; failure = ''; message();
+          preparation = (async () => {
+            const source = map.getSource('routes-v18');
+            if (!source) throw new Error('Routebron niet beschikbaar.');
+            let data;
+            if (typeof source.getData === 'function') data = await source.getData();
+            else {
+              const spec = map.getStyle().sources['routes-v18'];
+              if (typeof spec?.data === 'object') data = spec.data;
+              else { const response = await fetch(new URL(spec.data,document.baseURI)); if (!response.ok) throw new Error('Routebestand kon niet laden.'); data = await response.json(); }
+            }
+            const records = []; let n = 0;
+            for (const feature of data.features || []) {
+              if (token !== generation || !enabled || removed) return;
+              const type = String(feature.properties?.type || '').toLowerCase();
+              if (!['roads','trails','searoutes'].includes(type)) continue; // Never drive on underground routes.
+              const lines = feature.geometry?.type==='LineString' ? [feature.geometry.coordinates]
+                : feature.geometry?.type==='MultiLineString' ? feature.geometry.coordinates : [];
+              for (let part=0;part<lines.length;part++) {
+                const route = makeRoute(lines[part],String(feature.properties?.id || n)+'|'+type+'|'+n+'|'+part,type);
+                if (route) records.push(route);
+              }
+              if (++n % 150 === 0) await new Promise(resolve => setTimeout(resolve,0));
+            }
+            if (token === generation && enabled && !removed) { catalogue=records; dirty=true; }
+          })().catch(error => { if (token===generation) {failure=error.message||String(error);console.warn('Handelsanimatie:',error);} })
+            .finally(() => { preparation=null;loading=false;message(); if (running() && !failure) wake(); });
+          return preparation;
+        }
+        function buildSprite(kind, phase) {
+          const image = document.createElement('canvas'); image.width=96; image.height=64;
+          const c=image.getContext('2d'); c.scale(1.5,1.5); c.lineJoin='round'; c.lineCap='round';
+          c.translate(32,21); c.lineWidth=1.2;
+          const ellipse=(x,y,rx,ry,color)=>{c.fillStyle=color;c.beginPath();c.ellipse(x,y,rx,ry,0,0,Math.PI*2);c.fill();};
+          if (kind==='ship') {
+            // Bow points right. Small wake, dark hull, deck and two pale sails.
+            c.strokeStyle='rgba(218,239,235,0.64)'; c.lineWidth=1;
+            for(let k=0;k<3;k++){c.beginPath();c.moveTo(-19-k*3, -3-k*2);c.lineTo(-27-k*2-phase, -5-k*2);c.stroke();c.beginPath();c.moveTo(-19-k*3,3+k*2);c.lineTo(-27-k*2-phase,5+k*2);c.stroke();}
+            c.fillStyle='#463b2d';c.strokeStyle='#272c29';c.beginPath();c.moveTo(-21,-5);c.quadraticCurveTo(1,-12,25,0);c.quadraticCurveTo(1,12,-21,5);c.closePath();c.fill();c.stroke();
+            c.fillStyle='#a98250';c.beginPath();c.moveTo(-16,-4);c.quadraticCurveTo(2,-8,20,0);c.quadraticCurveTo(2,8,-16,4);c.closePath();c.fill();
+            c.strokeStyle='#3c342a';c.beginPath();c.moveTo(-1,-13);c.lineTo(-1,9);c.stroke();
+            c.fillStyle='#eee4c8';c.beginPath();c.moveTo(0,-15);c.lineTo(14,-2);c.quadraticCurveTo(5,1,0,-1);c.closePath();c.fill();c.stroke();
+            c.fillStyle='#d4cfb6';c.beginPath();c.moveTo(-3,-12);c.lineTo(-15,-1);c.lineTo(-3,0);c.closePath();c.fill();c.stroke();
+            c.fillStyle='#527e74';c.beginPath();c.moveTo(0,-15);c.lineTo(7,-14);c.lineTo(0,-11);c.fill();
+          } else {
+            // Covered wagon, visible wheels, driver and harnessed horse.
+            ellipse(-7,5,15,5,'rgba(32,37,25,0.18)');
+            c.strokeStyle='#333129';c.lineWidth=2;
+            for(const y of [-8,8]) {c.beginPath();c.moveTo(-18,y);c.lineTo(-1,y);c.stroke();}
+            c.fillStyle='#715331';c.strokeStyle='#352d23';c.lineWidth=1;c.fillRect(-19,-7,21,14);c.strokeRect(-19,-7,21,14);
+            c.fillStyle='#e1d4af';c.beginPath();c.moveTo(-18,-5);c.quadraticCurveTo(-8,-15,1,-5);c.lineTo(1,5);c.quadraticCurveTo(-8,11,-18,5);c.closePath();c.fill();c.stroke();
+            c.strokeStyle='#ae9e77';for(const x of [-13,-6]){c.beginPath();c.moveTo(x,-7);c.lineTo(x,7);c.stroke();}
+            for(const x of [-16,-3])for(const y of [-8,8]){ellipse(x,y,3,3,'#2c3029');c.strokeStyle='#bca477';c.beginPath();c.moveTo(x-2,y+(phase%2?1:0));c.lineTo(x+2,y-(phase%2?1:0));c.stroke();}
+            c.strokeStyle='#704f2b';c.lineWidth=1.4;c.beginPath();c.moveTo(1,-3);c.lineTo(14,-3);c.moveTo(1,3);c.lineTo(14,3);c.stroke();
+            ellipse(5,-1,3.5,4,'#456374');ellipse(6,-4,2,2,'#c8a07a');
+            c.strokeStyle='#3b2c20';c.lineWidth=1.7;
+            for(const x of [14,22])for(const y of [-1,1]){c.beginPath();c.moveTo(x,y*2);c.lineTo(x+(phase%2?2:-1),y*6);c.stroke();}
+            ellipse(19,0,8,3.7,'#8c633b');ellipse(26,-1,4,2.4,'#714e30');
+            c.fillStyle='#403026';c.fillRect(23,-4,1.5,4);c.beginPath();c.moveTo(27,-2);c.lineTo(26,-6);c.lineTo(29,-3);c.fill();
+            c.strokeStyle='#3c3027';c.beginPath();c.moveTo(11,0);c.lineTo(8,1);c.stroke();
+          }
+          return image;
+        }
+        function ensureCanvas() {
+          if (!canvas) {
+            canvas=document.createElement('canvas');canvas.className='bigane-trade-traffic';canvas.setAttribute('aria-hidden','true');
+            canvas.style.cssText='position:absolute;inset:0;pointer-events:none;';
+            map.getCanvasContainer().appendChild(canvas);ctx=canvas.getContext('2d');
+            sprites={cart:[0,1,2,3].map(n=>buildSprite('cart',n)),ship:[0,1,2,3].map(n=>buildSprite('ship',n))};
+          }
+          const c=map.getCanvas(),w=c.clientWidth,h=c.clientHeight,ratio=Math.min(1.5,window.devicePixelRatio||1);
+          if (cssWidth!==w || cssHeight!==h || canvas.width!==Math.round(w*ratio)) {
+            cssWidth=w;cssHeight=h;canvas.width=Math.max(1,Math.round(w*ratio));canvas.height=Math.max(1,Math.round(h*ratio));
+            canvas.style.width=w+'px';canvas.style.height=h+'px';ctx.setTransform(ratio,0,0,ratio,0,0);dirty=true;
+          }
+          canvas.hidden=false;
+        }
+        function sample(route,distance) {
+          distance=clamp(distance,0,route.total);
+          let lo=0,hi=route.distance.length-1;
+          while(lo+1<hi){const mid=(lo+hi)>>1;if(route.distance[mid]<=distance)lo=mid;else hi=mid;}
+          const a=route.points[lo],b=route.points[hi],span=route.distance[hi]-route.distance[lo];
+          const t=span>0?(distance-route.distance[lo])/span:0;
+          return lnglat([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]);
+        }
+        // Return the visible fraction of a segment; true screen clipping also
+        // handles tilted/rotated views where geographic bounds are too generous.
+        function clip(a,b) {
+          let lo=0,hi=1;const dx=b.x-a.x,dy=b.y-a.y;
+          const p=[-dx,dx,-dy,dy],q=[a.x,cssWidth-a.x,a.y,cssHeight-a.y];
+          for(let i=0;i<4;i++){if(Math.abs(p[i])<1e-9){if(q[i]<0)return null;continue;}const t=q[i]/p[i];if(p[i]<0)lo=Math.max(lo,t);else hi=Math.min(hi,t);if(lo>hi)return null;}
+          return [lo,hi];
+        }
+        function selectActors() {
+          if (!catalogue) return;
+          const b=map.getBounds(),nw=xy([b.getWest(),b.getNorth()]),se=xy([b.getEast(),b.getSouth()]);
+          actors=actors.filter(a=>routeShown(a.route)&&screenVisible(map.project(sample(a.route,a.distance))));
+          const existing=new Set(actors.map(a=>a.route.key)),candidates=[];
+          for(const route of catalogue) {
+            if(existing.has(route.key)||!routeShown(route)||route.bbox[2]<nw[0]||route.bbox[0]>se[0]||route.bbox[3]<nw[1]||route.bbox[1]>se[1])continue;
+            let best=null;
+            for(let i=1;i<route.points.length;i++) {
+              const a=route.points[i-1],c=route.points[i];
+              if(Math.max(a[0],c[0])<nw[0]||Math.min(a[0],c[0])>se[0]||Math.max(a[1],c[1])<nw[1]||Math.min(a[1],c[1])>se[1])continue;
+              const pa=map.project(lnglat(a)),pc=map.project(lnglat(c));
+              if(![pa.x,pa.y,pc.x,pc.y].every(Number.isFinite))continue;
+              const range=clip(pa,pc);if(!range)continue;
+              const t=range[0]+(range[1]-range[0])*(0.2+(route.seed%600)/1000);
+              const distance=route.distance[i-1]+(route.distance[i]-route.distance[i-1])*t;
+              const point=map.project(sample(route,distance));if(!screenVisible(point))continue;
+              const score=Math.hypot(point.x-cssWidth/2,point.y-cssHeight/2)+(route.type==='trails'?40:0);
+              if(!best||score<best.score)best={route,distance,score,point};
+            }
+            if(best)candidates.push(best);
+          }
+          candidates.sort((a,b)=>a.score-b.score);
+          const occupied=actors.map(a=>map.project(sample(a.route,a.distance)));
+          for(const c of candidates) {
+            if(actors.filter(a=>a.route.kind===c.route.kind).length >= (c.route.kind==='ship'?limits.ships:limits.carts))continue;
+            if(occupied.some(p=>Math.hypot(p.x-c.point.x,p.y-c.point.y)<68))continue;
+            actors.push({route:c.route,distance:c.distance,direction:c.route.seed%2?1:-1,pause:0,id:++sequence,checkAt:0,uncovered:true});
+            occupied.push(c.point);
+          }
+          dirty=false;
+        }
+        function uncovered(actor,coordinates,point,now) {
+          if(map.getPitch()<1 || !map.getTerrain())return true;
+          if(now-actor.checkAt<250)return actor.uncovered;
+          actor.checkAt=now;
+          try { const front=map.unproject(point),a=xy([front.lng,front.lat]),b=xy(coordinates);
+            const allowance=4/(512*2**map.getZoom())/Math.max(0.4,Math.cos(map.getPitch()*Math.PI/180));
+            actor.uncovered=Math.hypot(a[0]-b[0],a[1]-b[1])<=allowance;
+          } catch(_){actor.uncovered=false;}
+          return actor.uncovered;
+        }
+        function draw(now,dt) {
+          ensureCanvas();ctx.clearRect(0,0,cssWidth,cssHeight);drawn=0;
+          if(catalogue && (dirty && (reduced || now-lastSelection>250) || now-lastSelection>1500)) {selectActors();lastSelection=now;}
+          const worldSize=512*2**map.getZoom();
+          for(const actor of actors) {
+            if(!routeShown(actor.route))continue;
+            if(!reduced) {
+              if(actor.pause>0)actor.pause=Math.max(0,actor.pause-dt);
+              else {
+                actor.distance+=actor.direction*(actor.route.kind==='ship'?11:8)/worldSize*dt;
+                if(actor.distance<=0||actor.distance>=actor.route.total){actor.distance=clamp(actor.distance,0,actor.route.total);actor.direction*=-1;actor.pause=1.5;}
+              }
+            }
+            const coordinates=sample(actor.route,actor.distance),p=map.project(coordinates);
+            if(!screenVisible(p)||!uncovered(actor,coordinates,p,now))continue;
+            let d=clamp(actor.distance+actor.direction*3/worldSize,0,actor.route.total);
+            if(Math.abs(d-actor.distance)<1e-12)d=clamp(actor.distance-actor.direction*3/worldSize,0,actor.route.total);
+            const q=map.project(sample(actor.route,d));
+            let angle=Math.atan2(q.y-p.y,q.x-p.x);if((d-actor.distance)*actor.direction<0)angle+=Math.PI;
+            const size=clamp(30+(map.getZoom()-8)*2,30,42),phase=reduced?0:Math.floor(elapsed*4+actor.id)%4;
+            ctx.save();ctx.translate(p.x,p.y);ctx.rotate(angle);
+            ctx.globalAlpha=clamp((map.getZoom()-8)*2,0,1);
+            ctx.drawImage(sprites[actor.route.kind][phase],-size/2,-size/3,size,size*2/3);ctx.restore();drawn++;
+          }
+        }
+        function tick(now) {
+          frame=0;if(!running())return;
+          if(reduced || now-lastFrame>=1000/limits.fps) {
+            const dt=lastFrame?Math.min(0.12,(now-lastFrame)/1000):0;
+            lastFrame=now;elapsed+=dt;
+            try {draw(now,dt);}catch(error){failure='Animatie gepauzeerd: '+(error.message||error);enabled=false;toggle.checked=false;message();stop();return;}
+          }
+          if(!reduced)frame=requestAnimationFrame(tick);
+        }
+        function stop() {
+          cancelAnimationFrame(frame);frame=0;lastFrame=0;drawn=0;
+          if(canvas){canvas.hidden=true;canvas.width=1;canvas.height=1;cssWidth=0;cssHeight=0;}
+        }
+        function wake() {
+          message();if(!running()){stop();return;}
+          if(!catalogue&&!preparation&&!failure)prepare();
+          if(!frame)frame=requestAnimationFrame(tick);
+        }
+        const changed=()=>{dirty=true;for(const a of actors)a.checkAt=0;wake();};
+        const setEnabled=value=>{enabled=!!value;toggle.checked=enabled;failure='';
+          if(!enabled){generation++;actors=[];catalogue=null;stop();}wake();};
+        const onToggle=()=>setEnabled(toggle.checked);
+        toggle.checked=false;toggle.addEventListener('change',onToggle);
+        const onMotion=()=>{reduced=motion.matches;changed();};
+        motion.addEventListener?.('change',onMotion);
+        document.addEventListener('visibilitychange',changed);
+        for(const event of ['move','moveend','resize','terrain'])map.on(event,changed);
+        // A final terrain tile can change projection without changing the camera.
+        const sourceChanged=e=>{if(e.sourceId==='bigane-dem'&&e.isSourceLoaded)changed();};
+        map.on('sourcedata',sourceChanged);
+        const dispose=()=>{removed=true;enabled=false;generation++;stop();canvas?.remove();actors=[];catalogue=null;
+          toggle.removeEventListener('change',onToggle);motion.removeEventListener?.('change',onMotion);
+          document.removeEventListener('visibilitychange',changed);
+          for(const event of ['move','moveend','resize','terrain'])map.off(event,changed);
+          map.off('sourcedata',sourceChanged);map.off('remove',dispose);};
+        map.on('remove',dispose);
+        window.BiganeTradeTraffic={setEnabled,getStats:()=>({enabled,loading,routeCount:catalogue?.length||0,actors:actors.length,drawn,
+          maxActors:limits.carts+limits.ships,minZoom:limits.minZoom,maximumFPS:limits.fps,reducedMotion:reduced,error:failure||null}),dispose};
+      }
+      /* BIGANE_TRADE_TRAFFIC_V1_END */
 
 
       async function installBiomeTextures() {
@@ -6210,8 +6472,10 @@
 
       const LANDMARK_LAYER_ID = "bigane-landmarks-3d";
       const LANDMARK_MIN_ZOOM = 3.85;
-      const LANDMARK_LOAD_RADIUS = 3.0;
-      const LANDMARK_RENDER_RADIUS = 1.85;
+      // No off-screen model prefetch. These settings do NOT change the forest buffer.
+      const LANDMARK_MAX_CONCURRENT_LOADS = 1;
+      const LANDMARK_HIDDEN_CACHE_COUNT = 2;
+      const LANDMARK_HIDDEN_CACHE_MS = 15000;
       const LANDMARK_EDITOR_STORAGE_KEY = "bigane-landmark-editor-v45";
       const LANDMARK_EDITOR_LEGACY_STORAGE_KEY = "bigane-landmark-editor-v2";
       const landmarkStatesByName = new Map();
@@ -6462,6 +6726,10 @@
             this.auditStartedAt = new Date().toISOString();
             this.terrainRefreshPending = false;
             this.terrainRefreshForce = false;
+            this.destroyed = false;
+            this.activeLoads = 0;
+            this.loadPumpTimer = null;
+            this.hiddenCacheTimer = null;
 
             this.scene.add(new THREE.HemisphereLight(0xf5f1df, 0x3f463d, 2.15));
             const sun = new THREE.DirectionalLight(0xffe7ba, 2.5);
@@ -6480,6 +6748,10 @@
                 loaded: false,
                 loading: false,
                 loadingPromise: null,
+                loadAbort: null,
+                loadGeneration: 0,
+                retryAfter: 0,
+                lastVisibleAt: 0,
                 error: null,
                 renderVisible: false,
                 elevationCacheKey: "",
@@ -6520,17 +6792,87 @@
               return state.coordinates;
             };
 
-            this.getViewNorm = coordinates => {
-              if (!coordinates) return Infinity;
-              const bounds = this.map.getBounds();
-              const center = this.map.getCenter();
-              const nw = maplibregl.MercatorCoordinate.fromLngLat([bounds.getWest(), bounds.getNorth()]);
-              const se = maplibregl.MercatorCoordinate.fromLngLat([bounds.getEast(), bounds.getSouth()]);
-              const c = maplibregl.MercatorCoordinate.fromLngLat([center.lng, center.lat]);
-              const p = maplibregl.MercatorCoordinate.fromLngLat(coordinates);
-              const halfW = Math.max(Math.abs(se.x - nw.x) * 0.5, 1e-8);
-              const halfH = Math.max(Math.abs(se.y - nw.y) * 0.5, 1e-8);
-              return Math.hypot((p.x - c.x) / halfW, (p.y - c.y) / halfH);
+            // Test the projected anchor, not the geographic bounding box (which
+            // includes extra corners on a rotated or pitched map).
+            this.isInViewport = state => {
+              if (this.destroyed || document.hidden || !biganeViewSettings.models ||
+                  state.config.visible === false || this.map.getZoom() < LANDMARK_MIN_ZOOM) return false;
+              const coordinates = this.resolveCoordinate(state, true);
+              if (!coordinates) return false;
+              try {
+                const point = this.map.project(coordinates), canvas = this.map.getCanvas();
+                return Number.isFinite(point.x) && Number.isFinite(point.y) &&
+                  point.x >= 0 && point.y >= 0 && point.x < canvas.clientWidth && point.y < canvas.clientHeight;
+              } catch (_) { return false; }
+            };
+            this.disposeRoot = root => {
+              if (!root) return;
+              const geometries = new Set(), materials = new Set(), textures = new Set(), images = new Set();
+              root.traverse(object => {
+                if (object.geometry) geometries.add(object.geometry);
+                for (const material of (Array.isArray(object.material) ? object.material : [object.material])) {
+                  if (!material) continue;
+                  materials.add(material);
+                  for (const value of Object.values(material)) if (value?.isTexture) textures.add(value);
+                }
+              });
+              for (const texture of textures) {
+                const image = texture.source?.data || texture.image;
+                if (image && typeof image.close === 'function') images.add(image);
+                texture.dispose();
+              }
+              for (const geometry of geometries) geometry.dispose();
+              for (const material of materials) material.dispose();
+              // Models do not share texture objects across independent GLTF parses.
+              for (const image of images) image.close();
+            };
+            this.releaseModel = state => {
+              if (!state.loaded) return;
+              this.scene.remove(state.placement);
+              this.disposeRoot(state.modelRoot);
+              state.placement = null; state.modelRoot = null; state.loaded = false;
+              state.renderVisible = false; state.baseScale = null;
+              state.elevationCacheKey = '';
+              state.audit.status = 'unloaded';
+            };
+            this.trimHiddenModels = () => {
+              clearTimeout(this.hiddenCacheTimer); this.hiddenCacheTimer = null;
+              if (this.destroyed) return;
+              const now = performance.now();
+              const hidden = [...landmarkStatesByName.values()]
+                .filter(state => state.loaded && !this.isInViewport(state))
+                .sort((a,b) => b.lastVisibleAt - a.lastVisibleAt);
+              for (let i = 0; i < hidden.length; i++) {
+                const state = hidden[i];
+                if (!biganeViewSettings.models || i >= LANDMARK_HIDDEN_CACHE_COUNT ||
+                    now - state.lastVisibleAt >= LANDMARK_HIDDEN_CACHE_MS) this.releaseModel(state);
+              }
+              const retained = hidden.filter(state => state.loaded);
+              if (retained.length) {
+                const remaining = Math.min(...retained.map(state =>
+                  LANDMARK_HIDDEN_CACHE_MS - (now - state.lastVisibleAt)));
+                this.hiddenCacheTimer = setTimeout(() => this.trimHiddenModels(), Math.max(100, remaining + 20));
+              }
+            };
+            this.queueModelLoad = () => {
+              if (this.destroyed || this.loadPumpTimer !== null || document.hidden || !biganeViewSettings.models) return;
+              // Throttle without restarting on every mousemove, so dragging does
+              // not postpone every load until the mouse is released.
+              this.loadPumpTimer = setTimeout(() => {
+                this.loadPumpTimer = null; this.pumpModelLoads();
+              }, 100);
+            };
+            this.pumpModelLoads = () => {
+              if (this.destroyed || this.activeLoads >= LANDMARK_MAX_CONCURRENT_LOADS) return;
+              const canvas = this.map.getCanvas(), now = performance.now();
+              const candidates = [...landmarkStatesByName.values()].filter(state =>
+                !state.loaded && !state.loading && now >= state.retryAfter && this.isInViewport(state));
+              const distance = state => {
+                const p = this.map.project(state.coordinates);
+                return Math.hypot(p.x - canvas.clientWidth / 2, p.y - canvas.clientHeight / 2);
+              };
+              candidates.sort((a,b) => distance(a) - distance(b));
+              if (candidates[0]) this.ensureModel(candidates[0]);
             };
 
             this.getElevationSampleCoordinates = state => {
@@ -6634,69 +6976,70 @@
             };
 
             this.ensureModel = state => {
-              if (!biganeViewSettings.models) return state.loadingPromise;
               if (state.loaded || state.loading) return state.loadingPromise;
-              state.loading = true;
-              state.error = null;
-              state.audit.status = "loading";
-              const modelAtStart = state.config.model;
-
+              if (!this.isInViewport(state) || this.activeLoads >= LANDMARK_MAX_CONCURRENT_LOADS) return null;
+              state.loading = true; state.error = null; state.audit.status = 'loading';
+              const modelAtStart = state.config.model, generation = ++state.loadGeneration;
+              const abort = new AbortController(); state.loadAbort = abort;
+              this.activeLoads++;
+              const current = () => !abort.signal.aborted && generation === state.loadGeneration &&
+                state.config.model === modelAtStart && this.isInViewport(state);
               state.loadingPromise = (async () => {
+                let parsedRoot = null;
                 try {
-                  try {
-                    const head = await fetch(modelAtStart, { method: "HEAD", cache: "no-store" });
-                    const bytes = Number(head.headers.get("content-length"));
-                    if (Number.isFinite(bytes) && bytes > 0) state.audit.bytes = bytes;
-                  } catch (_) {}
-
-                  const gltf = await this.loader.loadAsync(modelAtStart);
-                  if (state.config.model !== modelAtStart) {
-                    state.loading = false;
-                    state.loadingPromise = null;
-                    return;
-                  }
-                  const root = gltf.scene;
+                  // One request instead of a separate HEAD plus GLTFLoader fetch.
+                  // An off-screen download is aborted before decoding textures.
+                  const response = await fetch(modelAtStart, {signal: abort.signal});
+                  if (!response.ok) throw new Error('Model HTTP ' + response.status);
+                  const bytes = Number(response.headers.get('content-length'));
+                  if (Number.isFinite(bytes) && bytes > 0) state.audit.bytes = bytes;
+                  const data = await response.arrayBuffer();
+                  if (!current()) return;
+                  const path = new URL('.', new URL(modelAtStart, document.baseURI)).href;
+                  const gltf = await this.loader.parseAsync(data, path);
+                  parsedRoot = gltf.scene;
+                  // Parsing already in progress cannot be interrupted safely.
+                  // Dispose its result if the user moved away during decoding.
+                  if (!current()) return;
+                  const root = parsedRoot;
                   root.traverse(object => {
                     if (!object.isMesh) return;
                     const materials = Array.isArray(object.material) ? object.material : [object.material];
                     for (const material of materials) {
                       if (!material) continue;
-                      if ("roughness" in material && Number.isFinite(material.roughness)) material.roughness = Math.max(0.68, material.roughness);
-                      if ("metalness" in material && Number.isFinite(material.metalness)) material.metalness = Math.min(0.14, material.metalness);
-                      if ("envMapIntensity" in material) material.envMapIntensity = Math.min(Number(material.envMapIntensity || 1), 0.75);
+                      if ('roughness' in material && Number.isFinite(material.roughness)) material.roughness = Math.max(0.68, material.roughness);
+                      if ('metalness' in material && Number.isFinite(material.metalness)) material.metalness = Math.min(0.14, material.metalness);
+                      if ('envMapIntensity' in material) material.envMapIntensity = Math.min(Number(material.envMapIntensity || 1), 0.75);
                       material.needsUpdate = true;
                     }
                   });
                   root.updateMatrixWorld(true);
-                  const bbox = new THREE.Box3().setFromObject(root);
-                  const size = new THREE.Vector3();
+                  const bbox = new THREE.Box3().setFromObject(root), size = new THREE.Vector3();
                   bbox.getSize(size);
-                  const cx = (bbox.min.x + bbox.max.x) * 0.5;
-                  const cy = (bbox.min.y + bbox.max.y) * 0.5;
                   state.horizontalSize = Math.max(size.x, size.y, 0.0001);
-                  root.position.set(-cx, -cy, -bbox.min.z);
-
-                  const placement = new THREE.Group();
-                  placement.add(root);
-                  placement.visible = false;
-                  placement.userData.landmarkName = state.config.name;
-                  this.scene.add(placement);
-                  state.modelRoot = root;
-                  state.placement = placement;
-                  state.loaded = true;
-                  state.loading = false;
-                  state.error = null;
+                  root.position.set(-(bbox.min.x + bbox.max.x) * 0.5, -(bbox.min.y + bbox.max.y) * 0.5, -bbox.min.z);
+                  const placement = new THREE.Group(); placement.add(root);
+                  placement.visible = false; placement.userData.landmarkName = state.config.name;
+                  this.scene.add(placement); state.modelRoot = root; state.placement = placement;
+                  state.loaded = true; state.error = null; state.lastVisibleAt = performance.now();
+                  parsedRoot = null; // Ownership transferred to the retained model.
                   this.auditModel(state, root, bbox);
-                  this.updateStatePlacement(state, true);
-                  this.queueTerrainRefresh(true);
-                  this.updateVisibilityAndLoading(false);
-                  this.map.triggerRepaint();
+                  this.updateStatePlacement(state, true); this.queueTerrainRefresh(true);
+                  this.updateVisibilityAndLoading(false); this.map.triggerRepaint();
                 } catch (error) {
-                  state.loading = false;
-                  state.error = error;
-                  state.audit.status = "error";
-                  state.audit.error = error?.message || String(error);
-                  console.warn(`${state.config.name} GLB kon niet laden:`, error);
+                  if (error?.name !== 'AbortError' && current()) {
+                    state.error = error; state.audit.status = 'error';
+                    state.audit.error = error?.message || String(error);
+                    state.retryAfter = performance.now() + 15000;
+                    console.warn(state.config.name + ' GLB kon niet laden:', error);
+                  }
+                } finally {
+                  if (parsedRoot) this.disposeRoot(parsedRoot);
+                  state.loading = false; state.loadingPromise = null;
+                  if (state.loadAbort === abort) state.loadAbort = null;
+                  if (!state.loaded && !state.error) state.audit.status = 'not-loaded';
+                  this.activeLoads = Math.max(0, this.activeLoads - 1);
+                  this.queueModelLoad();
                 }
               })();
               return state.loadingPromise;
@@ -6718,27 +7061,12 @@
             };
 
             this.reloadModel = name => {
-              const state = landmarkStatesByName.get(name);
-              if (!state) return;
-              if (state.placement) {
-                state.placement.traverse(object => {
-                  if (!object.isMesh) return;
-                  object.geometry?.dispose?.();
-                  const materials = Array.isArray(object.material) ? object.material : [object.material];
-                  for (const material of materials) {
-                    if (!material) continue;
-                    for (const value of Object.values(material)) if (value?.isTexture) value.dispose?.();
-                    material.dispose?.();
-                  }
-                });
-                this.scene.remove(state.placement);
-                state.placement = null;
-              }
-              state.loaded = false;
-              state.loading = false;
-              state.loadingPromise = null;
-              state.error = null;
-              state.audit = { ...state.audit, status: "not-loaded", model: state.config.model, error: null };
+              const state = landmarkStatesByName.get(name); if (!state) return;
+              state.loadGeneration++; state.loadAbort?.abort();
+              this.releaseModel(state); state.error = null; state.retryAfter = 0;
+              state.audit = {...state.audit, status: 'not-loaded', model: state.config.model, error: null};
+              // Keep an in-flight promise marked loading until its finally handler
+              // completes; a replacement must not overlap the abandoned parse.
               this.updateVisibilityAndLoading(true);
             };
 
@@ -6755,22 +7083,16 @@
             };
 
             this.updateVisibilityAndLoading = (allowLoad = true, deferTerrain = false) => {
-              const zoom = this.map.getZoom();
               let visibleCount = 0, changed = false;
+              const now = performance.now();
               for (const state of landmarkStatesByName.values()) {
-                const config = state.config;
-                const coordinates = this.resolveCoordinate(state, true);
-                const norm = this.getViewNorm(coordinates);
-                const forceSelected = this.selectedName === config.name && document.body.classList.contains("landmark-edit-mode");
-                const shouldLoad = biganeViewSettings.models && config.visible !== false && coordinates && zoom >= LANDMARK_MIN_ZOOM && (norm <= LANDMARK_LOAD_RADIUS || forceSelected);
-                const shouldRender = biganeViewSettings.models && config.visible !== false && coordinates && zoom >= LANDMARK_MIN_ZOOM && (norm <= LANDMARK_RENDER_RADIUS || forceSelected);
-                if (allowLoad && shouldLoad && !state.loaded && !state.loading) this.ensureModel(state);
+                const inside = this.isInViewport(state);
+                if (!inside && state.loading) state.loadAbort?.abort();
+                if (inside) state.lastVisibleAt = now;
                 if (state.loaded && state.placement) {
-                  const renderVisible = Boolean(shouldRender);
-                  if (state.renderVisible !== renderVisible) changed = true;
-                  state.renderVisible = renderVisible;
-                  state.placement.visible = renderVisible;
-                  if (renderVisible) {
+                  if (state.renderVisible !== inside) changed = true;
+                  state.renderVisible = inside; state.placement.visible = inside;
+                  if (inside) {
                     visibleCount++;
                     if ((allowLoad || !state.baseScale) && (!deferTerrain || !state.baseScale)) {
                       const previousZ = state.placement.position.z;
@@ -6781,8 +7103,8 @@
                 }
               }
               this.visibleCount = visibleCount;
-              // Loading completion already requests its own frame. Repainting
-              // an unchanged scene on every idle event would create a loop.
+              this.trimHiddenModels();
+              if (allowLoad) this.queueModelLoad();
               if (allowLoad && changed) this.map.triggerRepaint();
             };
 
@@ -6844,7 +7166,9 @@
               loaded: [...landmarkStatesByName.values()].filter(state => state.loaded).length,
               loading: [...landmarkStatesByName.values()].filter(state => state.loading).length,
               visible: [...landmarkStatesByName.values()].filter(state => state.renderVisible).length,
-              errors: [...landmarkStatesByName.values()].filter(state => state.error).length
+              errors: [...landmarkStatesByName.values()].filter(state => state.error).length,
+              loadPolicy: 'viewport-anchors-only', concurrentLimit: LANDMARK_MAX_CONCURRENT_LOADS,
+              hiddenCached: [...landmarkStatesByName.values()].filter(state => state.loaded && !state.renderVisible).length
             });
 
             this.queueTerrainRefresh = (force = false) => {
@@ -6873,8 +7197,13 @@
             };
             this.onMove = () => {
               this.updateVisibilityAndLoading(false);
+              this.queueModelLoad();
               this.queueTerrainRefresh();
             };
+            this.onVisibilityChange = () => {
+              this.updateVisibilityAndLoading(true);
+            };
+            document.addEventListener('visibilitychange', this.onVisibilityChange);
             this.onMoveEnd = () => {
               this.queueTerrainRefresh(true);
               this.updateVisibilityAndLoading(true, true);
@@ -6901,6 +7230,7 @@
             };
 
             mapInstance.on("move", this.onMove);
+            mapInstance.on("resize", this.onMoveEnd);
             mapInstance.on("moveend", this.onMoveEnd);
             mapInstance.on("zoom", this.onZoom);
             mapInstance.on("zoomend", this.onZoomEnd);
@@ -6910,6 +7240,7 @@
             mapInstance.on("click", this.onClick);
             this.updateVisibilityAndLoading(true);
             landmarkController = this;
+            window.BiganeModelLoading = {getStats: () => this.getStats()};
           },
 
           render(gl, args) {
@@ -6929,8 +7260,14 @@
           },
 
           onRemove() {
+            this.destroyed = true;
+            clearTimeout(this.loadPumpTimer); clearTimeout(this.hiddenCacheTimer);
+            document.removeEventListener('visibilitychange', this.onVisibilityChange);
+            for (const state of landmarkStatesByName.values()) {
+              state.loadAbort?.abort(); this.releaseModel(state);
+            }
             for (const [event, handler] of [
-              ["move", this.onMove], ["moveend", this.onMoveEnd],
+              ["move", this.onMove], ["moveend", this.onMoveEnd], ["resize", this.onMoveEnd],
               ["zoom", this.onZoom], ["zoomend", this.onZoomEnd],
               ["idle", this.onIdle], ["sourcedata", this.onSourceData],
               ["render", this.onTerrainRender],
@@ -7787,6 +8124,7 @@
         // Add only native layers and a passive source observer after the
         // original terrain, snow and model initialization. No farm planner runs.
         try { installStaticBiganeLanduse(); } catch (error) { ruralStartupError=String(error?.message||error);console.warn("Vaste landbouwbiomes overgeslagen:", error); }
+        try { installBiganeTradeTraffic(); } catch (error) { console.warn('Verkeersanimatie niet beschikbaar:', error); }
       });
       /* BIGANE_RURAL_START_END */
 
