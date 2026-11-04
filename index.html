@@ -515,7 +515,7 @@
           </label>
           <label class="bg-quality-option">
             <input id="bg-quality-light" type="radio" name="bigane-quality" value="light" />
-            <span><strong>Light</strong><span class="bg-quality-tag">Tablet / minder belasting</span><span class="bg-quality-description">Lagere tekenresolutie en een kleinere blendafbeelding. Alle kaartfuncties blijven beschikbaar.</span></span>
+            <span><strong>Light</strong><span class="bg-quality-tag">Tablet / minder belasting</span><span class="bg-quality-description">Lagere tekenresolutie, een kleinere blendafbeelding en bomen bij de start uit. Bomen kun je later zelf aanzetten.</span></span>
           </label>
         </div>
       </fieldset>
@@ -571,6 +571,7 @@
   return Object.freeze({mode, label:light?'Light':'Hoge kwaliteit',
    // High deliberately omits pixelRatio: retain MapLibre's native default.
    mapOptions:Object.freeze(light?{pixelRatio:Math.min(1,Math.max(.5,ratio))}:{}),
+   forestInitiallyEnabled:!light,
    blendUrl:light?'./biome-blend-overlay-mercator-light-v1.png':'./biome-blend-overlay-mercator-v1.png'});
  }
  function selection(){return form.querySelector('input[name="bigane-quality"]:checked')?.value||'high';}
@@ -584,12 +585,14 @@
  function start(event){
   event?.preventDefault();if(started)return;
   active=profile(selection());started=true;button.disabled=true;
+   const forestToggle=byId('toggle-forests');
+   if(forestToggle)forestToggle.checked=active.forestInitiallyEnabled;
   try {if(remember.checked)localStorage.setItem(KEY,active.mode);else localStorage.removeItem(KEY);}
   catch (_) {const note=byId('bg-quality-storage-note');note.hidden=false;note.textContent='De keuze kan niet worden bewaard, maar geldt wel voor dit bezoek.';}
   form.hidden=true;progress.hidden=false;
   byId('bg49-progress-title').textContent='Je kaart wordt geopend';
   byId('bg-quality-intro').textContent='De eerste kaartweergave wordt geladen.';
-  byId('bg-quality-current').textContent=active.mode==='light'?'Light: lagere tekenresolutie, dezelfde kaartfuncties.':'Hoge kwaliteit: volledige schermscherpte.';
+  byId('bg-quality-current').textContent=active.mode==='light'?'Light: lagere tekenresolutie; bomen starten uit.':'Hoge kwaliteit: volledige schermscherpte.';
   byId('bg-quality-restart-light').hidden=active.mode==='light';
   byId('bg49-progress-open').focus({preventScroll:true});
   document.documentElement.dataset.biganeQuality=active.mode;
@@ -707,7 +710,7 @@
         if (state.water?.enabled === false) stage('water', 'skip', 'Uitgeschakeld');
         else if (state.water?.phase === 'error' || errors.has('bigane-water-bands-v49')) stage('water', 'warning', 'Niet geladen');
         else stage('water', state.water?.phase === 'ready' ? 'ready' : 'pending', state.water?.phase === 'ready' ? 'Gereed' : 'Laden');
-        if (!state.forestRequired) stage('forest', 'skip', 'Niet nodig in dit beeld');
+        if (!state.forestRequired) stage('forest', 'skip', state.forestEnabled === false ? 'Uitgeschakeld' : 'Niet nodig in dit beeld');
         else stage('forest', state.forestReady ? 'ready' : 'pending', state.forestReady ? 'Gereed' : 'Opbouwen');
         stage('snow', state.snowReady ? 'ready' : 'pending', state.snowReady ? 'Gereed' : 'Hoogtes laden');
         const models = state.models || {};
@@ -1249,7 +1252,7 @@
    window.addEventListener('bigane-blend-status',updateBlend);removers.push(()=>window.removeEventListener('bigane-blend-status',updateBlend));
    const quality=window.BiganeQualityStart.active;
    id('hud-quality-mode').value=quality.mode;
-   id('hud-quality-active').textContent=quality.mode==='light'?'Light actief: tekenresolutie maximaal 1 pixel per CSS-pixel.':'Hoge kwaliteit actief: de normale schermscherpte.';
+   id('hud-quality-active').textContent=quality.mode==='light'?'Light actief: tekenresolutie maximaal 1 pixel per CSS-pixel; bomen starten uit.':'Hoge kwaliteit actief: de normale schermscherpte.';
    updateBlend();map.once('load',updateBlend);map.on('remove',()=>window.BiganeHUD.dispose());
   },
   getState:()=>({menuOpen:!drawer.hidden,tab,partyOpen:party.open,editorOpen:document.body.classList.contains('landmark-edit-mode')}),
@@ -3055,12 +3058,11 @@
         }
 
         if (forestsToggle) {
+          // A fresh Light visit starts without trees, regardless of browser form
+          // restoration. Do not overwrite the saved forest tuning or High mode.
+          forestsToggle.checked = BIGANE_QUALITY.forestInitiallyEnabled;
           forestsToggle.addEventListener("change", () => {
-            if (hybridForestController) {
-              hybridForestController.enabled = forestsToggle.checked;
-              hybridForestController.scheduleRebuild?.(false, 0);
-              map.triggerRepaint();
-            }
+            setBiganeForestEnabled(forestsToggle.checked);
           });
         }
       }
@@ -4543,6 +4545,36 @@
 
       let hybridForestController = null;
 
+      /* BIGANE_LIGHT_FOREST_START_V1_BEGIN */
+      function setBiganeForestEnabled(visible) {
+        const toggle = document.getElementById('toggle-forests');
+        const enabled = Boolean(visible);
+        if (toggle) toggle.checked = enabled;
+        // No custom layer, forest shaders, atlas decoding, height texture or
+        // tree preparation is started in Light until the visitor opts in.
+        if (!enabled && !hybridForestController) return false;
+        try {
+          if (enabled && !hybridForestController) {
+            installHybridForestLayer();
+            if (!hybridForestController) throw new Error('De boslaag kon niet worden gestart.');
+            hybridForestController.spritesOnly = document.getElementById('forest-sprites-only')?.value === 'sprites';
+          } else {
+            hybridForestController.enabled = enabled;
+            hybridForestController.scheduleRebuild?.(false, 0);
+          }
+          map.triggerRepaint();
+          return enabled;
+        } catch (error) {
+          if (toggle) toggle.checked = false;
+          if (hybridForestController) hybridForestController.enabled = false;
+          console.warn('Hybride boslaag overgeslagen; kaart blijft werken:', error);
+          window.BiganeHUD?.notice('forest-start', 'Bomen konden niet starten: ' + (error?.message || String(error)), true);
+          map.triggerRepaint();
+          return false;
+        }
+      }
+      /* BIGANE_LIGHT_FOREST_START_V1_END */
+
       const HF_TYPES = [
         {
           id: "deciduous",
@@ -5614,7 +5646,8 @@
       }
 
       function installHybridForestLayer() {
-        if (map.getLayer(HF_LAYER_ID)) return;
+        // Guard the allocation path as well as the visible checkbox.
+        if (document.getElementById('toggle-forests')?.checked === false || map.getLayer(HF_LAYER_ID)) return;
 
         const forestLayer = {
           id: HF_LAYER_ID,
@@ -8490,7 +8523,7 @@
           if(!el)return;
           const z=map.getZoom();
           const st=hybridForestController?.getStats?.();
-          const mode=st?.mode==='hidden'?'geen bomen':st?.mode==='sprites-only'?'alleen sprites':'3D toegestaan + sprites';
+          const mode=!hybridForestController||st?.mode==='hidden'?'geen bomen':st?.mode==='sprites-only'?'alleen sprites':'3D toegestaan + sprites';
           el.textContent=`Zoom ${z.toFixed(2)} | ${mode} | bomen vanaf ${HF_SETTINGS.minZoom.toFixed(2)} | 3D vanaf ${HF_SETTINGS.threeDStartZoom.toFixed(2)} | modelpasses ${st?.modelDrawCalls||0}, spritepasses ${st?.spriteDrawCalls||0} | sprites aangeboden ${st?.submittedSpriteRoots||0} / budget ${hfOverviewSpriteBudget(z)}`;
         }
         function applyForestFields(key,element) {
@@ -8798,11 +8831,8 @@
         hfApplyPerformanceDefaultsOnce();
         hfApplyOverviewSpriteCapOnce();
 
-        try {
-          installHybridForestLayer();
-        } catch (error) {
-          console.warn("Hybride boslaag overgeslagen; kaart blijft werken:", error);
-        }
+        // Saved tuning is ready, but Light does not construct the forest layer.
+        setBiganeForestEnabled(document.getElementById('toggle-forests')?.checked !== false);
 
         ensureThreeJs()
           .then(() => {
@@ -8888,6 +8918,7 @@
             farmlandRequired: biganeLanduseEnabled() && map.getZoom() >= BIGANE_LANDUSE_MIN_ZOOM,
             farmlandError: ruralStartupError || biganeLanduseSourceErrors.values().next().value || null,
             snowReady: snowCalibrated,
+            forestEnabled: document.getElementById('toggle-forests')?.checked !== false,
             forestRequired: document.getElementById('toggle-forests')?.checked !== false && map.getZoom() >= HF_SETTINGS.minZoom,
             forestReady: Boolean(hybridForestController?.lastBuildKey && hybridForestController?.heightReady),
             models: {
