@@ -1098,7 +1098,7 @@
   attach(instance){map=instance;sync();
    const error=e=>notice('source:'+String(e.sourceId||'kaart'),e.error?.message||'Een kaartonderdeel kon niet laden.',true);
    map.on('error',error);removers.push(()=>map?.off('error',error));
-   const updateBlend=()=>{const s=window.BiganeBlendTiles?.getStats?.();if(!s)return;id('hud-blend-status').textContent=s.ready?'Hele kleurkaart beschikbaar. Blendtegels worden lokaal uit het pakket gelezen.':s.error?'Reserveweergave: de bestaande PNG. '+s.error:'Kleurkaart voorbereiden...';};
+   const updateBlend=()=>{const s=window.BiganeBlendTiles?.getStats?.();if(!s)return;id('hud-blend-status').textContent=s.ready?'De volledige kleurkaart is vooraf geladen als één geprojecteerde PNG. Er worden geen blendchunks per viewport ingeladen.':s.error?'Vooraf laden van de kleurkaart mislukte. De kaart gebruikt dezelfde PNG rechtstreeks: '+s.error:'Kleurkaart voorbereiden...';};
    updateBlend();map.once('load',updateBlend);map.on('remove',()=>window.BiganeHUD.dispose());
   },
   getState:()=>({menuOpen:!drawer.hidden,tab,partyOpen:party.open,editorOpen:document.body.classList.contains('landmark-edit-mode')}),
@@ -1534,124 +1534,79 @@
     }
     /* BIGANE_TUNNEL_STYLE_FIX_V2_END */
 
-    /* BIGANE_SOFTBLEND_PACK_V2_BEGIN */
-    // Offline PNG pyramid, fetched once; panning never downloads a PNG tile.
-    // MapLibre still owns terrain draping, native raster fallback and GPU caches.
+    /* BIGANE_SOFTBLEND_PACK_V3_BEGIN */
+    // Preload the already aligned world PNG once. Keep soft blend as one projected
+    // image so panning never swaps visible blend tiles chunk-by-chunk.
     const biganeBlendPack = (() => {
-      const scheme = 'bigane-blend-v2';
-      const file = './bigane-blend-v2.bin';
-      const expectedBounds = [-88.1391, -53.4408, 93.3291, 52.7208];
-      let data = null, meta = null, payload = 0, ready = false, failed = '', disposed = false;
-      let requests = 0, networkRequests = 0, promise = null, installed = false;
-      const controller = new AbortController();
-      const abortError = () => new DOMException('Verzoek geannuleerd', 'AbortError');
-      function validate(buffer) {
-        if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 16 || buffer.byteLength > 24000000)
-          throw Error('Ongeldig blendpakket.');
-        if (new TextDecoder().decode(new Uint8Array(buffer, 0, 8)) !== 'BGBLND2\n')
-          throw Error('Blendpakket heeft een onbekend formaat.');
-        const n = new DataView(buffer).getUint32(8, true);
-        if (n < 16 || n > 1000000 || 12+n >= buffer.byteLength) throw Error('Blendindex is beschadigd.');
-        const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 12, n)));
-        if (header.format !== 'bigane-blend-pack-v2' || header.tileSize !== 512 || header.maxzoom !== 4 || header.overviewSize !== 1024)
-          throw Error('Dit blendpakket past niet bij deze index.');
-        if (!Array.isArray(header.bounds) || header.bounds.length !== 4 || header.bounds.some((v,i) => v !== expectedBounds[i]))
-          throw Error('Blendcoordinaten komen niet overeen.');
-        const length = buffer.byteLength - (12+n);
-        for (const range of Object.values(header.tiles || {})) {
-          if (!Array.isArray(range) || range.length !== 2 || !range.every(Number.isSafeInteger) ||
-              range[0] < 0 || range[1] < 8 || range[0] + range[1] > length)
-            throw Error('Een blendtegel is beschadigd.');
-          const p = 12+n+range[0];
-          if (new DataView(buffer).getUint32(p, false) !== 0x89504e47) throw Error('Blendtegel is geen PNG.');
-        }
-        if (!header.tiles?.overview) throw Error('Wereldoverzicht ontbreekt in blendpakket.');
-        for (let z=0;z<=4;z++) for(let x=0;x<2**z;x++) for(let y=0;y<2**z;y++)
-          if (!header.tiles[`${z}/${x}/${y}`]) throw Error('Onvolledige blendpiramide.');
-        return {header, offset:12+n};
-      }
+      const file = './biome-blend-overlay-mercator-v1.png';
+      let ready = false, failed = '', disposed = false, promise = null, image = null;
+      let networkRequests = 0;
       async function preload() {
         if (promise) return promise;
         promise = (async () => {
-          const timeout = setTimeout(() => controller.abort(), 30000);
           try {
             networkRequests++;
-            const response = await fetch(new URL(file, document.baseURI), {signal:controller.signal, cache:'default'});
-            if (!response.ok) throw Error(`Blendpakket kon niet laden (HTTP ${response.status}).`);
-            const buffer = await response.arrayBuffer();
-            if (disposed) throw abortError();
-            const checked = validate(buffer);
-            data = buffer; meta = checked.header; payload = checked.offset; ready = true;
+            const response = await fetch(new URL(file, document.baseURI), {cache:'default'});
+            if (!response.ok) throw Error(`Kleurkaart kon niet laden (HTTP ${response.status}).`);
+            const blob = await response.blob();
+            if (disposed) return false;
+            const url = URL.createObjectURL(blob);
+            image = new Image();
+            image.decoding = 'async';
+            image.src = url;
+            if (image.decode) await image.decode();
+            else await new Promise((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(Error('Kleurkaart kon niet worden gedecodeerd.'));});
+            URL.revokeObjectURL(url);
+            if (disposed) return false;
+            ready = true;
             return true;
           } catch (error) {
-            failed = error?.name === 'AbortError' ? 'Blendpakket niet op tijd geladen.' : String(error?.message || error);
-            // Restore the established, aligned PNG rather than dropping soft blend.
-            console.warn('Blendpakket: terugval op de bestaande PNG.', failed);
+            failed = String(error?.message || error);
+            console.warn('Kleurkaart vooraf laden mislukt; de kaart gebruikt dezelfde PNG rechtstreeks.', failed);
             window.BiganeHUD?.notice('blend', failed + ' De bestaande zachte biome-overgangen blijven actief.', true);
             return false;
-          } finally { clearTimeout(timeout); }
+          }
         })();
         return promise;
       }
-      async function tile(params, abortController) {
-        if (abortController?.signal?.aborted || disposed) throw abortError();
-        if (!ready && !(await preload())) throw Error(failed || 'Blendpakket niet beschikbaar.');
-        const match = /^bigane-blend-v2:\/\/(overview|detail)\/(\d+)\/(\d+)\/(\d+)\.png(?:\?.*)?$/.exec(params.url);
-        if (!match) throw Error('Onbekend blendtegeladres.');
-        const z=Number(match[2]), x=Number(match[3]), y=Number(match[4]);
-        if (z > 4 || x >= 2**z || y >= 2**z || (match[1] === 'overview' && (z || x || y)))
-          throw Error('Blendtegel valt buiten het pakket.');
-        const key = match[1] === 'overview' ? 'overview' : `${z}/${x}/${y}`;
-        const range = meta.tiles[key];
-        if (!range) throw Error('Blendtegel ontbreekt.');
-        if (abortController?.signal?.aborted || disposed) throw abortError();
-        requests++;
-        // Return a COPY: a worker is allowed to transfer/detach this buffer.
-        return {data:data.slice(payload+range[0], payload+range[0]+range[1]), cacheControl:'max-age=31536000'};
+      function install() { /* No custom protocol needed for the single-image overlay. */ }
+      function dispose() {
+        disposed = true;
+        if (image) { image.onload = null; image.onerror = null; image = null; }
       }
-      function install() {
-        if (installed) return;
-        maplibregl.addProtocol(scheme, tile); installed = true;
-      }
-      const stats=()=>({ready, mode:ready?'preloaded-png-pyramid':'aligned-png-fallback', networkRequests,
-        tileRequests:requests, bytes:data?.byteLength||0, maxSourceZoom:4, maxMapZoom:12,
-        encodedTileEntries:meta?Object.keys(meta.tiles).length:0, error:failed||null});
-      window.BiganeBlendTiles={getStats:stats};
-      function dispose(){disposed=true;controller.abort();if(installed)maplibregl.removeProtocol(scheme);data=null;meta=null;}
-      return {preload, install, stats, dispose, get ready(){return ready;}};
+      const stats = () => ({
+        ready,
+        mode: 'single-projected-png',
+        networkRequests,
+        error: failed || null,
+        file
+      });
+      window.BiganeBlendTiles = { getStats: stats };
+      return { preload, install, dispose, get ready(){ return ready; } };
     })();
-    // Start the single download in parallel with the style request.
+
+    // Start the single PNG download in parallel with the style request.
     biganeBlendPack.preload();
     function biganeSoftBlendSourceSpec() {
-      if (biganeBlendPack.ready) return {
-        type:'raster', tiles:['bigane-blend-v2://detail/{z}/{x}/{y}.png'], tileSize:512,
-        minzoom:0, maxzoom:4, bounds:[-88.1391,-53.4408,93.3291,52.7208]
+      return {
+        type:'image', url:'./biome-blend-overlay-mercator-v1.png',
+        coordinates:[[-88.1391,52.7208],[93.3291,52.7208],[93.3291,-53.4408],[-88.1391,-53.4408]]
       };
-      return {type:'image', url:'./biome-blend-overlay-mercator-v1.png',
-        coordinates:[[-88.1391,52.7208],[93.3291,52.7208],[93.3291,-53.4408],[-88.1391,-53.4408]]};
     }
     function prepareBiganeSoftBlendStyle(style) {
       style.sources = style.sources || {};
       style.sources['biome-softblend'] = biganeSoftBlendSourceSpec();
       style.layers = (style.layers || []).filter(layer => !['Biome soft blend','Biome blend overview'].includes(layer.id));
-      const layers = [];
-      if (biganeBlendPack.ready) {
-        // This single 1024px world tile stays available when detail changes.
-        // Both overview and detail are opaque and come from the same colours.
-        style.sources['biome-softblend-overview']={type:'raster',tileSize:1024,minzoom:0,maxzoom:0,
-          tiles:['bigane-blend-v2://overview/{z}/{x}/{y}.png']};
-        layers.push({id:'Biome blend overview',type:'raster',source:'biome-softblend-overview',
-          paint:{'raster-opacity':1,'raster-resampling':'linear','raster-fade-duration':0}});
-      }
-      layers.push({id:'Biome soft blend',type:'raster',source:'biome-softblend',layout:{visibility:'visible'},
-        paint:{'raster-opacity':1,'raster-resampling':'linear','raster-fade-duration':biganeBlendPack.ready?160:0}});
       const before=style.layers.findIndex(layer=>layer.id==='Biomes');
-      style.layers.splice(before<0?style.layers.length:before,0,...layers);
+      style.layers.splice(before<0?style.layers.length:before,0,{
+        id:'Biome soft blend',type:'raster',source:'biome-softblend',layout:{visibility:'visible'},
+        paint:{'raster-opacity':1,'raster-resampling':'linear','raster-fade-duration':0}
+      });
       const base=style.layers.find(layer=>layer.id==='Sandwich');
       if(base)base.paint={...base.paint,'fill-opacity':1};
       return style;
     }
-    /* BIGANE_SOFTBLEND_PACK_V2_END */
+    /* BIGANE_SOFTBLEND_PACK_V3_END */
 
     function prepareBiganeLanduseStyle(original) {
       const style = JSON.parse(JSON.stringify(original));
