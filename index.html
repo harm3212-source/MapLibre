@@ -930,6 +930,186 @@
   </div>
 
 
+<!-- BIGANE_COMPACT_HUD_V1_BEGIN -->
+<style id="bigane-compact-hud-style">
+ :root{--hud-ink:#203c35;--hud-border:#c6d2c9;--hud-paper:#fbfcf8;--hud-accent:#365f50;--hud-right:58px;}
+ #hud-menu-toggle,#hud-drawer,#party-tools-details,.landmark-editor{font-family:Arial,Helvetica,sans-serif;}
+ #hud-menu-toggle,#hud-drawer,#hud-drawer *,#party-tools-details{box-sizing:border-box;}
+ #hud-menu-toggle{position:fixed;z-index:35;top:12px;right:var(--hud-right);height:44px;display:flex;align-items:center;gap:9px;padding:0 15px;border:1px solid var(--hud-border);border-radius:9px;background:var(--hud-paper);color:var(--hud-ink);box-shadow:0 2px 10px #0003;font:700 14px Arial,sans-serif;cursor:pointer;}
+ #hud-menu-toggle svg{width:18px;height:18px;}
+ #hud-menu-toggle[aria-expanded=true]{background:#e9f0e9;}
+ #hud-menu-dot{height:7px;width:7px;border-radius:50%;background:#a96823;display:none;}
+ #hud-menu-toggle[data-warning=true] #hud-menu-dot{display:block;}
+ #hud-drawer{position:fixed;z-index:34;right:var(--hud-right);top:68px;width:350px;max-width:calc(100vw - 80px);max-height:calc(100dvh - 102px);display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--hud-border);border-radius:12px;background:var(--hud-paper);color:var(--hud-ink);box-shadow:0 6px 24px #0003;font-size:13px;}
+ #hud-drawer[hidden],#hud-drawer [hidden]{display:none!important;}
+ .hud-head{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:17px 17px 12px;}
+ .hud-eyebrow{display:block;font-size:10px;letter-spacing:.16em;color:#718278;margin-bottom:5px;}
+ .hud-head h2{font-size:18px;margin:0;line-height:1.2;}
+ .hud-close{border:0;background:#edf1eb;width:32px;height:32px;border-radius:6px;color:#456354;font-size:22px;cursor:pointer;}
+ .hud-tabs{display:flex;border-bottom:1px solid #dce3db;padding:0 12px;gap:4px;flex:none;}
+ .hud-tabs button{flex:1;min-height:40px;border:0;border-bottom:3px solid transparent;background:none;font:600 13px Arial,sans-serif;color:#687b6f;cursor:pointer;}
+ .hud-tabs button[aria-selected=true]{border-bottom-color:#4d7560;color:#244c3a;}
+ .hud-tab-panel{padding:14px 16px 17px;overflow-y:auto;overscroll-behavior:contain;line-height:1.45;}
+ .hud-intro{color:#6b7b70;font-size:12px;margin:0 0 11px;}
+ #hud-drawer .layer-switcher{position:static;min-width:0;padding:0;margin:0;border:0;border-radius:0;box-shadow:none;background:none;font:inherit;}
+ #hud-drawer .layer-switcher>strong{display:none;}
+ #hud-drawer .layer-switcher label{margin:0;min-height:43px;padding:8px 0;display:flex;gap:11px;border-bottom:1px solid #e7ece5;}
+ #hud-drawer .layer-switcher label:last-of-type{border-bottom:0;}
+ #hud-drawer input[type=checkbox]{width:17px;height:17px;accent-color:var(--hud-accent);flex:0 0 auto;cursor:pointer;}
+ .hud-action-list{display:grid;gap:8px;}
+ #hud-drawer .hud-action-list>button,#hud-drawer #kanka-links-export,#hud-drawer #edit-mode-toggle{display:block;text-align:left;min-height:44px;margin:0;width:100%;border:1px solid #d3ded3;border-radius:7px;padding:11px 12px;background:#f0f4ed;color:#2c4c3c;font:600 13px Arial,sans-serif;cursor:pointer;}
+ #hud-drawer button:disabled{opacity:.5;cursor:wait;}
+ #hud-drawer .hud-action-list>button:hover,#hud-drawer #edit-mode-toggle:hover,#hud-drawer #kanka-links-export:hover{background:#e6eee3;}
+ #hud-drawer .hud-note{font-size:11px;line-height:1.5;color:#758377;margin:12px 0 0;}
+ #hud-drawer .hud-status-box{border:1px solid #dbe4d9;border-radius:8px;padding:11px;background:#f3f6ef;margin:0 0 10px;}
+ #hud-drawer #status{position:static;z-index:auto;padding:0;max-width:none;margin:0;background:none;border:0;border-radius:0;box-shadow:none;color:#365240;font:12px/1.5 Arial,sans-serif;}
+ #hud-drawer #farmland-status,#hud-drawer #trade-traffic-status,#hud-drawer #kanka-links-export-status{max-width:none!important;}
+ #hud-log{padding:0;margin:0;list-style:none;}
+ #hud-log li{border-top:1px solid #e2e8df;padding:9px 0;font-size:12px;overflow-wrap:anywhere;}
+ #hud-log li[data-warning=true]{color:#81521d;}
+ #hud-blend-status{font-size:12px;margin:9px 0 0;color:#607363;}
+ #hud-menu-toggle:focus-visible,#hud-drawer button:focus-visible,#party-drawer-close:focus-visible{outline:3px solid #7a9f82;outline-offset:2px;}
+ #bigane-search{top:12px;left:12px;width:min(350px,calc(100vw - 245px));}
+ #bigane-search-panel{max-height:calc(100dvh - 145px);}
+ #bigane-search-results{max-height:min(390px,48dvh);}
+ #bigane-party-tools{position:fixed;left:12px;bottom:32px;width:235px;z-index:30;}
+ #bigane-party-tools #party-focus{font-size:14px;min-height:44px;padding:11px 13px;border-radius:9px;}
+ #party-focus-note{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+ #party-tools-details:not([open]){display:none;}
+ #party-tools-details[open]{position:fixed;z-index:34;left:auto;right:var(--hud-right);top:68px;bottom:auto;width:350px;max-width:calc(100vw - 80px);max-height:calc(100dvh - 102px);margin:0;overflow:auto;background:var(--hud-paper);border:1px solid var(--hud-border);border-radius:12px;box-shadow:0 6px 24px #0003;}
+ #party-tools-details>summary{padding:17px 50px 17px 17px;list-style:none;position:sticky;top:0;background:var(--hud-paper);z-index:1;font-size:16px;border-bottom:1px solid #dce3db;}
+ #party-tools-details>summary::-webkit-details-marker{display:none;}
+ #party-tools-body{padding:8px 17px 17px;max-height:none;overflow:visible;}
+ #party-tools-body button{min-height:38px;}
+ #party-drawer-close{position:absolute;right:12px;top:11px;width:32px;height:32px;font:22px Arial,sans-serif!important;background:#edf1eb;border:0;border-radius:6px;cursor:pointer;}
+ .landmark-editor{position:fixed;z-index:34;left:auto;right:var(--hud-right);top:68px;width:375px;max-width:calc(100vw - 80px);max-height:calc(100dvh - 102px);padding:16px;background:var(--hud-paper);border:1px solid var(--hud-border);border-radius:12px;box-shadow:0 6px 24px #0003;overscroll-behavior:contain;}
+ .landmark-editor .editor-title-row{position:sticky;top:-16px;background:var(--hud-paper);z-index:1;padding:3px 0 11px;}
+ .landmark-editor button{min-height:34px;}
+ .kanka-token-control{display:none!important;}
+ .maplibregl-ctrl-top-right{top:2px;right:2px;}
+ @media(max-width:660px){
+  #bigane-search{left:10px;top:10px;width:calc(100vw - 68px);}
+  .maplibregl-ctrl-top-right{top:2px;right:0;}
+  #hud-menu-toggle{top:auto;right:10px;bottom:max(30px,env(safe-area-inset-bottom));width:126px;justify-content:center;padding:0 9px;font-size:13px;}
+  #bigane-party-tools{left:10px;bottom:max(30px,env(safe-area-inset-bottom));width:calc(100vw - 156px);max-width:240px;}
+  #bigane-party-tools #party-focus{padding:10px 8px;font-size:13px;}
+  #party-focus-note{position:absolute;bottom:-21px;max-width:100%;padding:3px 6px;font-size:10px;}
+  #hud-drawer,#party-tools-details[open],.landmark-editor{left:10px;right:10px;top:auto;bottom:90px;width:auto;max-width:none;max-height:calc(100dvh - 163px);border-radius:13px;}
+  #hud-drawer .hud-head{padding:13px 15px 10px;}
+  #hud-drawer .hud-tab-panel{padding:12px 15px 14px;}
+  #hud-drawer .layer-switcher label{min-height:44px;}
+  #party-tools-details>summary{padding-top:16px;padding-bottom:16px;}
+  #bigane-search-panel{max-height:calc(100dvh - 160px);}
+  #bigane-search-results{max-height:45dvh;}
+ }
+ @media(prefers-reduced-motion:reduce){#hud-drawer *{scroll-behavior:auto!important;}}
+</style>
+<button id="hud-menu-toggle" type="button" aria-controls="hud-drawer" aria-expanded="false" title="Kaartlagen, beheer en status">
+ <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>Kaartmenu</span><span id="hud-menu-dot" aria-hidden="true"></span>
+</button>
+<section id="hud-drawer" hidden aria-label="Kaartmenu">
+ <header class="hud-head"><div><span class="hud-eyebrow">BIGANE</span><h2>Kaartmenu</h2></div><button id="hud-menu-close" type="button" class="hud-close" aria-label="Kaartmenu sluiten">&#215;</button></header>
+ <div class="hud-tabs" role="tablist" aria-label="Kaartinstellingen">
+  <button id="hud-tab-view" type="button" role="tab" aria-selected="true" aria-controls="hud-page-view" data-hud-tab="view">Weergave</button>
+  <button id="hud-tab-manage" type="button" role="tab" aria-selected="false" aria-controls="hud-page-manage" tabindex="-1" data-hud-tab="manage">Beheer</button>
+  <button id="hud-tab-status" type="button" role="tab" aria-selected="false" aria-controls="hud-page-status" tabindex="-1" data-hud-tab="status">Status</button>
+ </div>
+ <div id="hud-page-view" role="tabpanel" aria-labelledby="hud-tab-view" class="hud-tab-panel"><p class="hud-intro">Kies wat je op de kaart wilt zien.</p><div id="hud-layer-slot"></div></div>
+ <div id="hud-page-manage" role="tabpanel" aria-labelledby="hud-tab-manage" class="hud-tab-panel" hidden>
+  <p class="hud-intro">Posities en instellingen aanpassen.</p>
+  <div class="hud-action-list" id="hud-manage-actions">
+   <button id="hud-open-party" type="button">Partymarkers beheren</button>
+   <button id="hud-open-forest" type="button" disabled>Bosinstellingen</button>
+  </div>
+  <div id="hud-export-feedback"></div>
+  <p class="hud-note">Lokale wijzigingen gelden voor deze browser. Gebruik de bestaande exportknoppen om ze te delen.</p>
+ </div>
+ <div id="hud-page-status" role="tabpanel" aria-labelledby="hud-tab-status" class="hud-tab-panel" hidden>
+  <p class="hud-intro">Laadstatus en meldingen, zonder tekst over de kaart.</p>
+  <div class="hud-status-box" id="hud-status-slot"></div>
+  <div class="hud-status-box"><strong>Ondergrond</strong><p id="hud-blend-status">Zachte biome-overgangen laden...</p></div>
+  <div id="hud-other-status"></div><ul id="hud-log" aria-live="polite"></ul>
+ </div>
+</section>
+<script id="bigane-compact-hud-script">
+(() => {
+ 'use strict';
+ const id=x=>document.getElementById(x), drawer=id('hud-drawer'), button=id('hud-menu-toggle');
+ const party=id('party-tools-details'), editor=id('landmark-editor'), edit=id('edit-mode-toggle');
+ const forest=id('hud-open-forest'), tabs=[...drawer.querySelectorAll('[data-hud-tab]')];
+ let tab='view', map=null, syncPending=false, disposed=false;
+ const notices=new Map(), removers=[];
+ const on=(node,type,fn,opts)=>{if(!node)return;node.addEventListener(type,fn,opts);removers.push(()=>node.removeEventListener(type,fn,opts));};
+ const clean=x=>String(x||'').replace(/([?&](?:access_token|token|api_key)=)[^&\s]+/gi,'$1[verborgen]');
+ function notice(key,message,warning=false){notices.set(key,{message:clean(message),warning});
+  if(notices.size>10)notices.delete(notices.keys().next().value);
+  const list=id('hud-log');list.replaceChildren();
+  for(const n of notices.values()){const li=document.createElement('li');li.textContent=n.message;li.dataset.warning=String(n.warning);list.append(li);}
+  button.dataset.warning=String([...notices.values()].some(x=>x.warning));
+ }
+ function selectTab(next){tab=next;for(const t of tabs){const active=t.dataset.hudTab===next;t.setAttribute('aria-selected',String(active));t.tabIndex=active?0:-1;id(t.getAttribute('aria-controls')).hidden=!active;}}
+ function hideMenu(){drawer.hidden=true;button.setAttribute('aria-expanded','false');}
+ function closeEditor(){if(document.body.classList.contains('landmark-edit-mode'))id('landmark-editor-close').click();}
+ function closeParty(){if(party.open){id('party-cancel')?.click();party.open=false;}}
+ function showMenu(next=tab){closeEditor();closeParty();selectTab(next);drawer.hidden=false;button.setAttribute('aria-expanded','true');}
+ function openParty(){hideMenu();closeEditor();party.open=true;id('party-select').focus({preventScroll:true});}
+ function sync(){syncPending=false;if(disposed)return;
+  if(document.body.classList.contains('landmark-edit-mode')){hideMenu();closeParty();}
+  else if(party.open)hideMenu();
+  const ready=!!id('landmark-select')?.options.length;forest.disabled=!ready;edit.disabled=!ready;
+  if(!document.body.classList.contains('landmark-edit-mode'))edit.textContent='Modellen bewerken';
+  // Move the ORIGINAL token button, keeping its existing listener and behaviour.
+  const token=document.querySelector('.kanka-token-control button');
+  if(token){token.textContent='Kanka-verbinding instellen';token.classList.add('hud-token-button');id('hud-manage-actions').append(token);}
+ }
+ function scheduleSync(){if(!syncPending){syncPending=true;queueMicrotask(sync);}}
+ // Reparent, never clone controls: all existing IDs/listeners/state stay intact.
+ const actions=id('hud-manage-actions');
+ edit.textContent='Modellen bewerken';edit.disabled=true;actions.insertBefore(edit,forest);
+ actions.append(id('kanka-links-export'));id('hud-export-feedback').append(id('kanka-links-export-status'));
+ id('hud-layer-slot').append(id('layer-switcher'));id('hud-status-slot').append(id('status'));
+ for(const key of ['farmland-status','trade-traffic-status']){const node=id(key);if(node)id('hud-other-status').append(node);}
+ const labels={'toggle-states':'Landen en grenzen','toggle-towns':'Plaatsnamen','toggle-forests':'Bomen','toggle-models':'3D-stadsmodellen','toggle-kanka-markers':'Kanka-bolletjes'};
+ for(const [key,label]of Object.entries(labels)){const span=id(key)?.parentElement.querySelector('span');if(span)span.textContent=label;}
+ const partyClose=document.createElement('button');partyClose.id='party-drawer-close';partyClose.type='button';partyClose.textContent='\u00d7';partyClose.setAttribute('aria-label','Partybeheer sluiten');party.querySelector('summary').append(partyClose);
+ on(partyClose,'click',e=>{e.preventDefault();e.stopPropagation();closeParty();button.focus({preventScroll:true});});
+ on(button,'click',()=>{if(!drawer.hidden){hideMenu();return;}showMenu();});
+ on(id('hud-menu-close'),'click',()=>{hideMenu();button.focus({preventScroll:true});});
+ on(id('hud-open-party'),'click',openParty);
+ on(edit,'click',()=>{closeParty();hideMenu();});
+ on(forest,'click',()=>{closeParty();hideMenu();if(!document.body.classList.contains('landmark-edit-mode'))edit.click();
+  requestAnimationFrame(()=>{const details=id('forest-tree-size')?.closest('details');if(details){details.open=true;details.scrollIntoView({block:'nearest'});details.querySelector('summary')?.focus({preventScroll:true});}});
+ });
+ on(party,'toggle',()=>{if(party.open){closeEditor();hideMenu();}});
+ tabs.forEach((t,i)=>{on(t,'click',()=>selectTab(t.dataset.hudTab));on(t,'keydown',e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const n=e.key==='Home'?0:e.key==='End'?tabs.length-1:(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;selectTab(tabs[n].dataset.hudTab);tabs[n].focus();});});
+ on(document,'keydown',e=>{if(e.key!=='Escape'||e.defaultPrevented)return;
+  // Let a single Esc cancel placement first; do not discard or move any marker.
+  if(document.body.classList.contains('bigane-party-placing')){id('party-cancel')?.click();e.preventDefault();return;}
+  if(!id('bigane-search-panel')?.hidden&&id('bigane-search')?.contains(e.target))return;
+  const any=!drawer.hidden||party.open||document.body.classList.contains('landmark-edit-mode');
+  if(any){hideMenu();closeParty();closeEditor();button.focus({preventScroll:true});e.preventDefault();}
+ });
+ on(id('bigane-search-input'),'focus',()=>{hideMenu();closeParty();closeEditor();});
+ const bodyObserver=new MutationObserver(scheduleSync);bodyObserver.observe(document.body,{attributes:true,attributeFilter:['class']});
+ const editorObserver=new MutationObserver(scheduleSync);editorObserver.observe(id('landmark-select'),{childList:true});
+ const statusObserver=new MutationObserver(()=>{const text=id('status').textContent.trim();if(/^Fout:|kon niet|mislukt/i.test(text))notice('map-status',text,true);});
+ statusObserver.observe(id('status'),{childList:true,characterData:true,subtree:true});
+ window.BiganeHUD={notice,showMenu,openParty,
+  attach(instance){map=instance;sync();
+   const error=e=>notice('source:'+String(e.sourceId||'kaart'),e.error?.message||'Een kaartonderdeel kon niet laden.',true);
+   map.on('error',error);removers.push(()=>map?.off('error',error));
+   const updateBlend=()=>{const s=window.BiganeBlendTiles?.getStats?.();if(!s)return;id('hud-blend-status').textContent=s.ready?'Hele kleurkaart beschikbaar. Blendtegels worden lokaal uit het pakket gelezen.':s.error?'Reserveweergave: de bestaande PNG. '+s.error:'Kleurkaart voorbereiden...';};
+   updateBlend();map.once('load',updateBlend);map.on('remove',()=>window.BiganeHUD.dispose());
+  },
+  getState:()=>({menuOpen:!drawer.hidden,tab,partyOpen:party.open,editorOpen:document.body.classList.contains('landmark-edit-mode')}),
+  dispose(){if(disposed)return;disposed=true;bodyObserver.disconnect();editorObserver.disconnect();statusObserver.disconnect();for(const remove of removers.splice(0))remove();map=null;}
+ };
+ sync();
+})();
+</script>
+<!-- BIGANE_COMPACT_HUD_V1_END -->
+
+
   <script id="bigane-search-script">
 /* BIGANE_PLACE_SEARCH_V1_BEGIN
    Read-only, lazy world catalogue. Uses the SAME vector sources as the map,
@@ -1354,40 +1534,124 @@
     }
     /* BIGANE_TUNNEL_STYLE_FIX_V2_END */
 
-    /* BIGANE_SOFTBLEND_STARTUP_V1_BEGIN */
-    // Include the corrected blend in the INITIAL style. MapLibre starts its
-    // request with the other map sources and decodes/uploads it only once.
-    // Coordinates and asset are the established Mercator projection fix.
+    /* BIGANE_SOFTBLEND_PACK_V2_BEGIN */
+    // Offline PNG pyramid, fetched once; panning never downloads a PNG tile.
+    // MapLibre still owns terrain draping, native raster fallback and GPU caches.
+    const biganeBlendPack = (() => {
+      const scheme = 'bigane-blend-v2';
+      const file = './bigane-blend-v2.bin';
+      const expectedBounds = [-88.1391, -53.4408, 93.3291, 52.7208];
+      let data = null, meta = null, payload = 0, ready = false, failed = '', disposed = false;
+      let requests = 0, networkRequests = 0, promise = null, installed = false;
+      const controller = new AbortController();
+      const abortError = () => new DOMException('Verzoek geannuleerd', 'AbortError');
+      function validate(buffer) {
+        if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 16 || buffer.byteLength > 24000000)
+          throw Error('Ongeldig blendpakket.');
+        if (new TextDecoder().decode(new Uint8Array(buffer, 0, 8)) !== 'BGBLND2\n')
+          throw Error('Blendpakket heeft een onbekend formaat.');
+        const n = new DataView(buffer).getUint32(8, true);
+        if (n < 16 || n > 1000000 || 12+n >= buffer.byteLength) throw Error('Blendindex is beschadigd.');
+        const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 12, n)));
+        if (header.format !== 'bigane-blend-pack-v2' || header.tileSize !== 512 || header.maxzoom !== 4 || header.overviewSize !== 1024)
+          throw Error('Dit blendpakket past niet bij deze index.');
+        if (!Array.isArray(header.bounds) || header.bounds.length !== 4 || header.bounds.some((v,i) => v !== expectedBounds[i]))
+          throw Error('Blendcoordinaten komen niet overeen.');
+        const length = buffer.byteLength - (12+n);
+        for (const range of Object.values(header.tiles || {})) {
+          if (!Array.isArray(range) || range.length !== 2 || !range.every(Number.isSafeInteger) ||
+              range[0] < 0 || range[1] < 8 || range[0] + range[1] > length)
+            throw Error('Een blendtegel is beschadigd.');
+          const p = 12+n+range[0];
+          if (new DataView(buffer).getUint32(p, false) !== 0x89504e47) throw Error('Blendtegel is geen PNG.');
+        }
+        if (!header.tiles?.overview) throw Error('Wereldoverzicht ontbreekt in blendpakket.');
+        for (let z=0;z<=4;z++) for(let x=0;x<2**z;x++) for(let y=0;y<2**z;y++)
+          if (!header.tiles[`${z}/${x}/${y}`]) throw Error('Onvolledige blendpiramide.');
+        return {header, offset:12+n};
+      }
+      async function preload() {
+        if (promise) return promise;
+        promise = (async () => {
+          const timeout = setTimeout(() => controller.abort(), 30000);
+          try {
+            networkRequests++;
+            const response = await fetch(new URL(file, document.baseURI), {signal:controller.signal, cache:'default'});
+            if (!response.ok) throw Error(`Blendpakket kon niet laden (HTTP ${response.status}).`);
+            const buffer = await response.arrayBuffer();
+            if (disposed) throw abortError();
+            const checked = validate(buffer);
+            data = buffer; meta = checked.header; payload = checked.offset; ready = true;
+            return true;
+          } catch (error) {
+            failed = error?.name === 'AbortError' ? 'Blendpakket niet op tijd geladen.' : String(error?.message || error);
+            // Restore the established, aligned PNG rather than dropping soft blend.
+            console.warn('Blendpakket: terugval op de bestaande PNG.', failed);
+            window.BiganeHUD?.notice('blend', failed + ' De bestaande zachte biome-overgangen blijven actief.', true);
+            return false;
+          } finally { clearTimeout(timeout); }
+        })();
+        return promise;
+      }
+      async function tile(params, abortController) {
+        if (abortController?.signal?.aborted || disposed) throw abortError();
+        if (!ready && !(await preload())) throw Error(failed || 'Blendpakket niet beschikbaar.');
+        const match = /^bigane-blend-v2:\/\/(overview|detail)\/(\d+)\/(\d+)\/(\d+)\.png(?:\?.*)?$/.exec(params.url);
+        if (!match) throw Error('Onbekend blendtegeladres.');
+        const z=Number(match[2]), x=Number(match[3]), y=Number(match[4]);
+        if (z > 4 || x >= 2**z || y >= 2**z || (match[1] === 'overview' && (z || x || y)))
+          throw Error('Blendtegel valt buiten het pakket.');
+        const key = match[1] === 'overview' ? 'overview' : `${z}/${x}/${y}`;
+        const range = meta.tiles[key];
+        if (!range) throw Error('Blendtegel ontbreekt.');
+        if (abortController?.signal?.aborted || disposed) throw abortError();
+        requests++;
+        // Return a COPY: a worker is allowed to transfer/detach this buffer.
+        return {data:data.slice(payload+range[0], payload+range[0]+range[1]), cacheControl:'max-age=31536000'};
+      }
+      function install() {
+        if (installed) return;
+        maplibregl.addProtocol(scheme, tile); installed = true;
+      }
+      const stats=()=>({ready, mode:ready?'preloaded-png-pyramid':'aligned-png-fallback', networkRequests,
+        tileRequests:requests, bytes:data?.byteLength||0, maxSourceZoom:4, maxMapZoom:12,
+        encodedTileEntries:meta?Object.keys(meta.tiles).length:0, error:failed||null});
+      window.BiganeBlendTiles={getStats:stats};
+      function dispose(){disposed=true;controller.abort();if(installed)maplibregl.removeProtocol(scheme);data=null;meta=null;}
+      return {preload, install, stats, dispose, get ready(){return ready;}};
+    })();
+    // Start the single download in parallel with the style request.
+    biganeBlendPack.preload();
     function biganeSoftBlendSourceSpec() {
-      return {
-        type: 'image',
-        url: './biome-blend-overlay-mercator-v1.png',
-        coordinates: [
-          [-88.1391, 52.7208], [93.3291, 52.7208],
-          [93.3291, -53.4408], [-88.1391, -53.4408]
-        ]
+      if (biganeBlendPack.ready) return {
+        type:'raster', tiles:['bigane-blend-v2://detail/{z}/{x}/{y}.png'], tileSize:512,
+        minzoom:0, maxzoom:4, bounds:[-88.1391,-53.4408,93.3291,52.7208]
       };
+      return {type:'image', url:'./biome-blend-overlay-mercator-v1.png',
+        coordinates:[[-88.1391,52.7208],[93.3291,52.7208],[93.3291,-53.4408],[-88.1391,-53.4408]]};
     }
     function prepareBiganeSoftBlendStyle(style) {
       style.sources = style.sources || {};
       style.sources['biome-softblend'] = biganeSoftBlendSourceSpec();
-      style.layers = (style.layers || []).filter(layer => layer.id !== 'Biome soft blend');
-      const layer = {
-        id: 'Biome soft blend', type: 'raster', source: 'biome-softblend',
-        layout: {visibility: 'visible'},
-        paint: {
-          'raster-opacity': 1,
-          'raster-resampling': 'linear',
-          'raster-fade-duration': 0
-        }
-      };
-      const before = style.layers.findIndex(item => item.id === 'Biomes');
-      style.layers.splice(before < 0 ? style.layers.length : before, 0, layer);
-      const base = style.layers.find(item => item.id === 'Sandwich');
-      if (base) base.paint = {...base.paint, 'fill-opacity': 1};
+      style.layers = (style.layers || []).filter(layer => !['Biome soft blend','Biome blend overview'].includes(layer.id));
+      const layers = [];
+      if (biganeBlendPack.ready) {
+        // This single 1024px world tile stays available when detail changes.
+        // Both overview and detail are opaque and come from the same colours.
+        style.sources['biome-softblend-overview']={type:'raster',tileSize:1024,minzoom:0,maxzoom:0,
+          tiles:['bigane-blend-v2://overview/{z}/{x}/{y}.png']};
+        layers.push({id:'Biome blend overview',type:'raster',source:'biome-softblend-overview',
+          paint:{'raster-opacity':1,'raster-resampling':'linear','raster-fade-duration':0}});
+      }
+      layers.push({id:'Biome soft blend',type:'raster',source:'biome-softblend',layout:{visibility:'visible'},
+        paint:{'raster-opacity':1,'raster-resampling':'linear','raster-fade-duration':biganeBlendPack.ready?160:0}});
+      const before=style.layers.findIndex(layer=>layer.id==='Biomes');
+      style.layers.splice(before<0?style.layers.length:before,0,...layers);
+      const base=style.layers.find(layer=>layer.id==='Sandwich');
+      if(base)base.paint={...base.paint,'fill-opacity':1};
       return style;
     }
-    /* BIGANE_SOFTBLEND_STARTUP_V1_END */
+    /* BIGANE_SOFTBLEND_PACK_V2_END */
 
     function prepareBiganeLanduseStyle(original) {
       const style = JSON.parse(JSON.stringify(original));
@@ -1421,7 +1685,10 @@
     try {
       const response = await fetch("./style-maplibre.json", { cache: "no-store" });
       if (!response.ok) throw new Error(`style-maplibre.json kon niet worden geladen (HTTP ${response.status})`);
-      const style = prepareBiganeSoftBlendStyle(prepareBiganeLanduseStyle(await response.json()));
+      const originalStyle = await response.json();
+      await biganeBlendPack.preload();
+      if (biganeBlendPack.ready) biganeBlendPack.install();
+      const style = prepareBiganeSoftBlendStyle(prepareBiganeLanduseStyle(originalStyle));
 
       const map = new maplibregl.Map({
         container: "map",
@@ -1433,6 +1700,7 @@
         minZoom: 1,
         maxZoom: 12,
         maxPitch: 60,
+        cancelPendingTileRequestsWhileZooming: false,
         renderWorldCopies: false
       });
 
@@ -1440,6 +1708,8 @@
       map.on('error', rememberBiganeLanduseSourceError);
       map.addControl(new maplibregl.NavigationControl(), "top-right");
       map.addControl(new KankaTokenControl(), "top-right");
+      window.BiganeHUD?.attach(map);
+      map.once('remove', () => biganeBlendPack.dispose());
 
       // Verified article identities are independent of saved model placement.
       // Keep these canonical links usable even when the Kanka API is unavailable.
@@ -3343,7 +3613,7 @@
       async function installBiomeSoftBlend() {
         try {
           // Normally already present in the INITIAL style. Do not call
-          // updateImage here: that would decode/upload the same PNG a second time.
+          // updateImage here: the source is a preloaded raster pyramid (or the aligned PNG fallback).
           if (!map.getSource('biome-softblend')) {
             map.addSource('biome-softblend', biganeSoftBlendSourceSpec());
           }
@@ -3351,7 +3621,7 @@
             map.addLayer({
               id: 'Biome soft blend', type: 'raster', source: 'biome-softblend',
               layout: {visibility: 'visible'},
-              paint: {'raster-opacity': 1, 'raster-resampling': 'linear', 'raster-fade-duration': 0}
+              paint: {'raster-opacity': 1, 'raster-resampling': 'linear', 'raster-fade-duration': biganeBlendPack.ready ? 160 : 0}
             }, map.getLayer('Biomes') ? 'Biomes' : undefined);
           }
           map.setLayoutProperty('Biome soft blend', 'visibility', 'visible');
