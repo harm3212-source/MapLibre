@@ -668,6 +668,61 @@
 <!-- BIGANE_V49_PASSIVE_LOADER_BODY_END -->
 
 
+<!-- BIGANE_PARTY_UI_V1_BEGIN -->
+<style>
+ #bigane-party-tools {position:absolute;z-index:25;left:12px;bottom:32px;width:270px;max-width:calc(100vw - 24px);color:#243530;font:13px/1.4 Arial,sans-serif;}
+ #bigane-party-tools * {box-sizing:border-box;}
+ #bigane-party-tools button,#bigane-party-tools input,#bigane-party-tools select {font:inherit;}
+ #bigane-party-tools #party-focus {width:100%;display:block;padding:13px 12px;border:1px solid #573e1d;border-radius:10px;background:#e9bc6c;color:#282717;font-weight:700;font-size:16px;cursor:pointer;box-shadow:0 3px 12px #0004;}
+ #party-focus:disabled {opacity:.75;cursor:default;}
+ #party-focus-note {margin:0;padding:5px 9px;background:#fffffff0;border-radius:0 0 6px 6px;font-size:12px;}
+ #party-tools-details {margin-top:6px;background:#fffffff5;border:1px solid #bcc9c2;border-radius:8px;box-shadow:0 2px 9px #0002;}
+ #party-tools-details>summary {padding:9px 11px;cursor:pointer;font-weight:700;}
+ #party-tools-body {padding:0 11px 11px;max-height:55vh;overflow:auto;}
+ #party-tools-body p {margin:6px 0;font-size:12px;}
+ #party-tools-body label {display:block;font-size:12px;margin:8px 0 3px;}
+ #party-tools-body input:not([type=checkbox]),#party-tools-body select {width:100%;padding:6px;border:1px solid #a7b9ad;border-radius:5px;background:#fff;}
+ #party-tools-body button {padding:7px 8px;border:1px solid #a6b7ac;border-radius:5px;background:#edf2ee;color:#243530;cursor:pointer;}
+ #party-tools-body button:disabled {opacity:.45;cursor:default;}
+ .party-row {display:flex;gap:6px;margin:7px 0;} .party-row>* {flex:1;min-width:0;}
+ #party-tools-body .party-primary {background:#2c594b;color:white;border-color:#214536;}
+ #party-tools-body .party-danger {color:#8e3028;}
+ #party-tools-body .party-status {color:#405d50;min-height:18px;font-weight:600;}
+ #party-tools-body .party-help {border-top:1px solid #cad5cf;padding-top:7px;}
+ #party-tools-body [hidden] {display:none!important;}
+ #bigane-party-tools :focus-visible {outline:3px solid #d59138;outline-offset:2px;}
+ .bigane-party-handle {width:26px;height:26px;border-radius:50%;border:3px solid #fff;background:#df9d3c;box-shadow:0 0 0 2px #3d403a,0 2px 8px #0008;cursor:grab;}
+ body.bigane-party-placing .maplibregl-canvas {cursor:crosshair!important;}
+ @media(max-width:600px){#bigane-party-tools{left:8px;bottom:28px;width:226px;}#bigane-party-tools #party-focus{font-size:14px;padding:10px;}#party-tools-body{max-height:43vh;}}
+</style>
+<section id="bigane-party-tools" aria-label="Party vinden en beheren">
+ <button id="party-focus" type="button" disabled>Naar de party</button>
+ <p id="party-focus-note" aria-live="polite">Partymarkers laden...</p>
+ <details id="party-tools-details">
+  <summary>Partymarkers beheren</summary>
+  <div id="party-tools-body">
+   <label for="party-select">Actieve marker</label><select id="party-select" aria-label="Partymarker selecteren"></select>
+   <div class="party-row"><button id="party-add" type="button">+ Nieuwe marker</button><button id="party-delete" type="button" class="party-danger">Verwijderen</button></div>
+   <label for="party-name">Naam voor spelers</label><input id="party-name" maxlength="80" type="text" placeholder="Bijvoorbeeld: De Runeseekers" />
+   <label><input id="party-visible" type="checkbox" checked /> Zichtbaar en meenemen in focusknop</label>
+   <div class="party-row"><button id="party-move" type="button" class="party-primary">Verplaatsen op kaart</button><button id="party-selected-focus" type="button">Deze bekijken</button></div>
+   <button id="party-cancel" type="button" hidden>Verplaatsen annuleren (Esc)</button>
+   <p>Nieuwe markers komen in het midden van je huidige beeld. Verplaats met een kaartklik of sleep de gouden greep.</p>
+   <details><summary>Grootte, draaiing en hoogte</summary>
+    <label for="party-size">Modelhoogte in kaartmeters</label><input id="party-size" type="number" min="100" max="50000" step="100" value="6500" />
+    <label for="party-rotation">Draaiing in graden</label><input id="party-rotation" type="number" step="5" value="0" />
+    <label for="party-offset">Hoogte boven terrein in kaartmeters</label><input id="party-offset" type="number" min="-100000" max="100000" step="50" value="0" />
+   </details>
+   <p id="party-status" class="party-status" role="status"></p>
+   <p class="party-help">Bewerken bewaart alleen in deze browser. Voor spelers: download het spelersbestand en vervang <strong>bigane-party-markers.json</strong> op je website.</p>
+   <div class="party-row"><button id="party-export" type="button" class="party-primary">Download spelersbestand</button><button id="party-import" type="button">Importeren</button></div>
+   <input id="party-import-file" type="file" accept=".json,application/json" hidden />
+   <button id="party-published" type="button">Gebruik gepubliceerde posities</button>
+  </div>
+ </details>
+</section>
+<!-- BIGANE_PARTY_UI_V1_END -->
+
   <div class="layer-switcher" id="layer-switcher">
     <strong>Lagen</strong>
     <label>
@@ -690,7 +745,7 @@
       <input type="checkbox" id="toggle-kanka-markers" checked />
       <span>Kanka-bolletjes</span>
     </label>
-    <label title="Lichte animatie op bestaande wegen en zeeroutes, vanaf zoom 8">
+    <label title="Maximaal 3 echte 3D-voertuigen samen, vanaf zoom 8">
       <input type="checkbox" id="toggle-trade-traffic" />
       <span>Handelaren en schepen</span>
     </label>
@@ -1582,11 +1637,11 @@
           map.setLayoutProperty(id, 'text-rotation-alignment', 'viewport');
           map.setPaintProperty(id, 'text-opacity', 1);
           map.setPaintProperty(id, 'icon-opacity', 1);
-          // Moderate label sizes; original font, colour and halo are preserved.
+          // Slightly larger names; retain the existing font, anchor and rules.
           map.setLayoutProperty(id, 'text-size', ['interpolate', ['linear'], ['zoom'],
-            6, id === 'Capitals' ? 16 : 13,
-            9, id === 'Capitals' ? 18 : 14,
-            12, id === 'Capitals' ? 21 : 17]);
+            6, id === 'Capitals' ? 17 : 15,
+            9, id === 'Capitals' ? 19 : 16,
+            12, id === 'Capitals' ? 22 : 18]);
         }
         cityLabelLastSignature = signature;
         updateKankaMarkerVisuals();
@@ -2099,6 +2154,7 @@
         const clickable = map.getLayer('clickable');
         if (clickable) map.setLayerZoomRange('clickable', Math.max(PLACE_INTERACTION_MIN_ZOOM, clickable.minzoom || 0), clickable.maxzoom || 24);
         map.on('click', event => {
+          if (window.BiganePartyMarkers?.isPlacing?.() || event.__biganePartyPlacement) return;
           if (!placeInteractionAllowed() || document.body.classList.contains('landmark-edit-mode')) return;
           invalidateBiganeCityVisibility(); // Recheck stale DOM/placement on every click.
           const target = biganePlaceAtPoint(event.point);
@@ -2532,18 +2588,23 @@
         map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
       }
 
-      // Restrained halo styling. The label policy below supplies population /
-      // Kanka importance, visibility and collision rules; colours stay original.
+      // Opaque ink plus a clean, light halo stays legible over detailed models.
+      // Reuse the existing symbol layers: no additional DOM labels, hit targets,
+      // textures or per-frame work. Zoom filters and collision policy stay intact.
       function improveCityLabelReadability() {
         for (const name of ["Town names", "Capitals"]) {
           const layer = map.getLayer(name);
           if (!layer || layer.type !== "symbol") continue;
           try {
-            // Preserve text colour. Visibility is handled by native filters.
-            map.setPaintProperty(name, "text-halo-color", "rgba(253,251,246,0.93)");
+            const capital = name === "Capitals";
+            map.setPaintProperty(name, "text-color", "#17201d");
+            map.setPaintProperty(name, "text-halo-color", "#fff9eb");
             map.setPaintProperty(name, "text-halo-width",
-              name === "Capitals" ? 1.6 : 0.9);
-            map.setPaintProperty(name, "text-halo-blur", 0.3);
+              ["interpolate", ["linear"], ["zoom"],
+                6, capital ? 2.0 : 1.7,
+                9, capital ? 2.6 : 2.3,
+                12, capital ? 2.8 : 2.6]);
+            map.setPaintProperty(name, "text-halo-blur", 0.15);
           } catch (error) { console.warn("Label styling:", name, error); }
         }
       }
@@ -2607,34 +2668,219 @@
       }
 
 
-      /* BIGANE_TRADE_TRAFFIC_V2_BEGIN */
-      function installBiganeTradeTraffic() {
-        const toggle = document.getElementById('toggle-trade-traffic');
-        const status = document.getElementById('trade-traffic-status');
-        if (!toggle) return;
-        // Decorative, bounded world-space meshes. The animation never calls setData or
-        // triggerRepaint, so traffic alone does not redraw the heavy WebGL map.
-        const limits = Object.freeze({minZoom: 8, carts: 10, ships: 6, fps: 20});
-        let enabled = false, removed = false, catalogue = null, preparation = null;
-        let generation = 0, canvas = null, ctx = null, sprites = null, frame = 0;
-        let lastFrame = 0, lastSelection = 0, dirty = true, cssWidth = 0, cssHeight = 0;
-        let elapsed = 0, loading = false, failure = '', reduced = false, drawn = 0;
-        let actors = [], sequence = 0;
-        const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-        reduced = motion.matches;
-        const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-        const hash = text => { let n = 2166136261; for (const c of text) n = Math.imul(n ^ c.charCodeAt(0), 16777619); return n >>> 0; };
-        const xy = c => [(c[0] + 180) / 360, (1 - Math.log(Math.tan(Math.PI/4 + clamp(c[1],-85,85)*Math.PI/360))/Math.PI)/2];
-        const lnglat = p => [p[0]*360 - 180, Math.atan(Math.sinh(Math.PI*(1 - 2*p[1])))*180/Math.PI];
-        const running = () => enabled && !removed && !document.hidden && map.getZoom() >= limits.minZoom;
-        function message() {
-          if (!status) return;
-          status.hidden = !enabled;
-          status.textContent = failure || (loading ? 'Routes voorbereiden...' : map.getZoom() < limits.minZoom
-            ? 'Zichtbaar vanaf zoom 8.' : reduced ? 'Stilstaande figuurtjes: verminderde beweging staat aan.'
-            : 'Handelaren en schepen op zichtbare routes.');
+      /* BIGANE_ACTORS_WEBGL_V1_BEGIN */
+      // Parties and traffic share ONE additional Three renderer and the map's GL
+      // context/depth buffer. No overlay canvas and no second WebGL context.
+      let biganeActorsPromise = null;
+      function ensureBiganeActorsLayer() {
+        if (biganeActorsPromise) return biganeActorsPromise;
+        biganeActorsPromise = (async () => {
+          await ensureThreeJs();
+          const state = {scene:new THREE.Scene(), parties:new THREE.Group(), traffic:new THREE.Group(),
+            updates:new Set(), cleanups:new Set(), camera:new THREE.Camera(), removed:false, renderer:null};
+          state.scene.add(state.parties,state.traffic);
+          state.scene.add(new THREE.AmbientLight(0xffffff,1.75));
+          const sun=new THREE.DirectionalLight(0xffefd4,2.5);sun.position.set(-.6,-.8,1.5);state.scene.add(sun);
+          const layer={id:'bigane-party-traffic-3d',type:'custom',renderingMode:'3d',
+            onAdd(m,gl) {
+              state.renderer=new THREE.WebGLRenderer({canvas:m.getCanvas(),context:gl});
+              state.renderer.autoClear=false;
+              state.renderer.outputColorSpace=THREE.SRGBColorSpace;
+              state.renderer.toneMapping=THREE.ACESFilmicToneMapping;
+              state.renderer.toneMappingExposure=1.05;
+            },
+            render(gl,args) {
+              const matrix=args?.defaultProjectionData?.mainMatrix;if(!matrix||state.removed)return;
+              for(const update of state.updates)update(performance.now());
+              if(!state.parties.children.some(n=>n.visible)&&!state.traffic.children.some(n=>n.visible))return;
+              state.camera.projectionMatrix.fromArray(matrix);
+              state.camera.projectionMatrixInverse.copy(state.camera.projectionMatrix).invert();
+              state.renderer.resetState();
+              state.renderer.render(state.scene,state.camera);
+              state.renderer.resetState();
+            },
+            onRemove() {
+              state.removed=true;for(const cleanup of state.cleanups)cleanup();state.cleanups.clear();
+              state.updates.clear();state.renderer?.dispose();state.scene.clear();biganeActorsPromise=null;
+            }};
+          map.addLayer(layer,map.getLayer('Town names')?'Town names':undefined);
+          state.invalidate=()=>{if(!state.removed)map.triggerRepaint();};
+          return state;
+        })().catch(error=>{biganeActorsPromise=null;throw error;});
+        return biganeActorsPromise;
+      }
+      function biganeDisposeModel(root) {
+        const gs=new Set(),ms=new Set(),ts=new Set();
+        root?.traverse(o=>{if(o.geometry)gs.add(o.geometry);for(const m of (Array.isArray(o.material)?o.material:[o.material]))if(m){ms.add(m);for(const t of Object.values(m))if(t?.isTexture)ts.add(t);}});
+        gs.forEach(g=>g.dispose());ts.forEach(t=>t.dispose());ms.forEach(m=>m.dispose());
+      }
+      /* BIGANE_ACTORS_WEBGL_V1_END */
+
+
+      // Compact Z-up, +X-forward low-poly vehicles. Static pieces are merged to
+      // a single vertex-coloured mesh; wheels and legs are small moving parts.
+      function buildBiganeVehicle(kind) {
+        const root=new THREE.Group(),fixed=new THREE.Group(),wheels=[],legs=[];
+        const material=new THREE.MeshStandardMaterial({vertexColors:true,roughness:.92,metalness:0,flatShading:true,side:THREE.DoubleSide});
+        function piece(g,c,x=0,y=0,z=0,rx=0,ry=0,rz=0,parent=fixed) {
+          const m=new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:c}));m.position.set(x,y,z);m.rotation.set(rx,ry,rz);parent.add(m);return m;
         }
-        function screenVisible(p) { return p && Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= 0 && p.y >= 0 && p.x < cssWidth && p.y < cssHeight; }
+        const box=(x,y,z,sx,sy,sz,c,parent=fixed)=>piece(new THREE.BoxGeometry(sx,sy,sz),c,x,y,z,0,0,0,parent);
+        const rod=(a,b,r,c,parent=fixed)=>{const d=new THREE.Vector3(...b).sub(new THREE.Vector3(...a));const m=piece(new THREE.CylinderGeometry(r,r,d.length(),6),c,0,0,0,0,0,0,parent);m.position.copy(new THREE.Vector3(...a).add(new THREE.Vector3(...b)).multiplyScalar(.5));m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),d.normalize());return m;};
+        function poly(points,c) {const v=[];for(let i=1;i<points.length-1;i++)v.push(...points[0],...points[i],...points[i+1]);const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(v,3));g.computeVertexNormals();piece(g,c);}
+        function merge(group) {
+          const pos=[],normal=[],color=[];group.updateMatrixWorld(true);
+          for(const m of [...group.children]) {
+            const g=m.geometry.index?m.geometry.toNonIndexed():m.geometry.clone();g.applyMatrix4(m.matrixWorld);
+            const p=g.attributes.position.array,n=g.attributes.normal.array,c=m.material.color;
+            for(let i=0;i<p.length;i++)pos.push(p[i]);for(let i=0;i<n.length;i++)normal.push(n[i]);
+            for(let i=0;i<p.length/3;i++)color.push(c.r,c.g,c.b);
+            g.dispose();m.geometry.dispose();m.material.dispose();
+          }
+          const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setAttribute('normal',new THREE.Float32BufferAttribute(normal,3));g.setAttribute('color',new THREE.Float32BufferAttribute(color,3));g.computeBoundingSphere();
+          const mesh=new THREE.Mesh(g,material);mesh.frustumCulled=false;return mesh;
+        }
+        if(kind==='ship') {
+          const ring=[[-2,-.35],[-1.45,-.70],[.85,-.67],[1.95,-.2],[2.35,0],[1.95,.2],[.85,.67],[-1.45,.70],[-2,.35]];
+          const low=ring.map(([x,y])=>[x*.88,y*.58,.03]),rim=ring.map(([x,y])=>[x,y,.64]);poly(rim,0xae8250);
+          for(let i=0;i<ring.length;i++)poly([low[i],low[(i+1)%ring.length],rim[(i+1)%ring.length],rim[i]],i%2?0x5c3622:0x704327);
+          for(let i=0;i<rim.length;i++)rod(rim[i],rim[(i+1)%rim.length],.045,0x3c291c);
+          for(let x=-1.6;x<1.6;x+=.29)box(x,0,.655,.022,1.15,.012,0x8c623c);
+          box(-1.4,0,.82,.65,.9,.3,0x82552d);box(-1.4,0,.99,.8,1.05,.06,0xae8250);
+          rod([-.1,0,.64],[-.1,0,3.30],.065,0x634024);rod([1.05,0,.6],[1.05,0,2.18],.04,0x634024);
+          rod([1.7,0,.6],[2.85,0,1.02],.035,0x634024);
+          // Billowed square sail (real curved geometry), plus a triangular jib.
+          rod([-.1,-1.02,2.9],[-.1,1.02,2.9],.036,0x634024);
+          const sail=(u,v)=>[-.12+.36*Math.sin(u*Math.PI)*Math.sin(v*Math.PI), (u-.5)*1.95,2.88-v*1.56];
+          for(let u=0;u<6;u++)for(let v=0;v<4;v++)poly([sail(u/6,v/4),sail((u+1)/6,v/4),sail((u+1)/6,(v+1)/4),sail(u/6,(v+1)/4)],u%2?0xe1d2ae:0xeae0c2);
+          poly([[1.05,0,2.1],[2.65,.08,1.02],[1.12,.07,.92]],0xd3c59e);
+          rod([-.1,0,3.2],[-1.9,0,.7],.012,0x594a38);rod([-.1,0,3.2],[2.4,0,.78],.012,0x594a38);
+          poly([[-.1,0,3.3],[.68,.03,3.17],[-.1,0,3.02]],0x42766d);
+          box(-.75,.27,.84,.24,.3,.38,0x855b32);piece(new THREE.CylinderGeometry(.2,.21,.4,8),0x9a703d,-.48,-.29,.84,Math.PI/2);
+          root.add(merge(fixed));
+        } else {
+          box(-.95,0,.65,1.8,.88,.18,0x754825);box(-.95,0,.85,1.65,.84,.24,0xa1743f);
+          for(const x of [-1.55,-.45])rod([x,-.68,.47],[x,.68,.47],.065,0x473424);
+          for(const y of [-.47,.47])box(-.95,y,.95,1.8,.06,.25,0x81572d);
+          // Arched canvas, rather than a solid flat roof.
+          for(let i=0;i<8;i++) {
+            const a=i*Math.PI/8,b=(i+1)*Math.PI/8;
+            const ya=.50*Math.cos(a),za=1.04+.60*Math.sin(a),yb=.50*Math.cos(b),zb=1.04+.60*Math.sin(b);
+            poly([[-1.86,ya,za],[-.16,ya,za],[-.16,yb,zb],[-1.86,yb,zb]],i%2?0xd6c394:0xe2d2aa);
+          }
+          for(const x of [-1.8,-1.28,-.74,-.2])for(let i=0;i<8;i++){const a=i*Math.PI/8,b=(i+1)*Math.PI/8;rod([x,.505*Math.cos(a),1.04+.605*Math.sin(a)],[x,.505*Math.cos(b),1.04+.605*Math.sin(b)],.015,0xa9956b);}
+          box(-.05,0,.85,.35,.78,.1,0x734a2b);
+          // Driver body, head and cap; hands holding reins.
+          box(-.07,0,1.10,.23,.31,.39,0x375c67);piece(new THREE.IcosahedronGeometry(.14,1),0xc99668,-.03,0,1.42);
+          piece(new THREE.CylinderGeometry(.16,.19,.07,8),0x66523a,-.03,0,1.54,Math.PI/2);
+          for(const y of [-.14,.14]){rod([-.01,y,1.25],[.24,y,1.05],.05,0x375c67);rod([.21,y,1.05],[1.4,y,.94],.012,0x55402c);rod([-.02,y,.99],[.14,y,.68],.06,0x493b31);}
+          for(const y of [-.40,.40])rod([-.1,y,.70],[1.45,y,.70],.04,0x8d6333);
+          // Rounded low-poly horse; long neck and visible ears.
+          const body=piece(new THREE.IcosahedronGeometry(1,1),0x805134,1.22,0,1.01);body.scale.set(.66,.28,.34);
+          const neck=piece(new THREE.IcosahedronGeometry(1,1),0x795032,1.69,0,1.30);neck.scale.set(.22,.19,.50);neck.rotation.y=-.28;
+          const head=piece(new THREE.IcosahedronGeometry(1,1),0x70492f,1.91,0,1.59);head.scale.set(.33,.16,.20);
+          for(const y of [-.1,.1])piece(new THREE.ConeGeometry(.065,.25,4),0x4e3529,1.80,y,1.82,Math.PI/2);
+          rod([.65,0,1.15],[.43,0,.58],.07,0x362821);
+          rod([1.8,-.18,1.5],[1.8,.18,1.5],.02,0x2f241a);
+          for(const x of [.86,1.62])for(const y of [-.20,.20]) {
+            const g=new THREE.Group();box(0,0,-.31,.10,.10,.62,0x754b30,g);box(.04,0,-.65,.19,.13,.12,0x332920,g);
+            const leg=merge(g);leg.position.set(x,y,.89);root.add(leg);legs.push(leg);
+          }
+          root.add(merge(fixed));
+          for(const x of [-1.55,-.45])for(const y of [-.59,.59]) {
+            const g=new THREE.Group();piece(new THREE.CylinderGeometry(.44,.44,.10,12),0x463021,0,0,0,0,0,0,g);
+            piece(new THREE.CylinderGeometry(.34,.34,.115,12),0x967042,0,0,0,0,0,0,g);
+            for(let i=0;i<6;i++){const a=i*Math.PI/3;rod([-.34*Math.cos(a),-.065,-.34*Math.sin(a)],[.34*Math.cos(a),-.065,.34*Math.sin(a)],.023,0xc09b63,g);}
+            piece(new THREE.CylinderGeometry(.09,.09,.16,8),0x503721,0,0,0,0,0,0,g);
+            const wheel=merge(g);wheel.position.set(x,y,.45);root.add(wheel);wheels.push(wheel);
+          }
+        }
+        for(const w of wheels)w.userData.wheel=true;for(const l of legs)l.userData.leg=true;root.userData={kind};root.traverse(n=>{if(n.isMesh)n.frustumCulled=false;});
+        return root;
+      }
+
+
+      /* BIGANE_CART_TERRAIN_POSE_V1_BEGIN */
+      function biganeCartTerrainPose(mapInstance, actor, coordinates, angle, scale, now) {
+        const center = maplibregl.MercatorCoordinate.fromLngLat(coordinates, 0);
+        const cos = Math.cos(angle), sin = Math.sin(angle);
+        const terrain = !!mapInstance.getTerrain();
+        let cache = actor.cartTerrain;
+        const changedScale = !cache || Math.abs(scale / cache.scale - 1) > 0.06;
+        const moved = !cache || Math.hypot(center.x - cache.x, center.y - cache.y) > scale * 0.5;
+        const turned = !cache || Math.abs(Math.atan2(Math.sin(angle-cache.angle), Math.cos(angle-cache.angle))) > 0.12;
+        const resample = !cache || cache.terrain !== terrain || changedScale || moved || turned || now-cache.sampleAt >= 160;
+        if (resample) {
+          const readZ = (u, v) => {
+            if (!terrain) return 0;
+            const x = center.x + (cos*u-sin*v)*scale, y = center.y + (sin*u+cos*v)*scale;
+            const lngLat = [x*360-180, Math.atan(Math.sinh(Math.PI*(1-2*y)))*180/Math.PI];
+            try {
+              const elevation = mapInstance.queryTerrainElevation(lngLat);
+              if (!Number.isFinite(elevation)) return null;
+              // queryTerrainElevation already includes the active exaggeration.
+              return maplibregl.MercatorCoordinate.fromLngLat(lngLat, elevation).z;
+            } catch (_) { return null; }
+          };
+          const z = readZ(0,0);
+          if (Number.isFinite(z)) {
+            let gx = cache?.gx || 0, gy = cache?.gy || 0;
+            if (terrain) {
+              // Match the displayed model footprint, not a fixed metre radius.
+              const front=readZ(1.85,0), back=readZ(-1.85,0);
+              const right=readZ(0,0.65), left=readZ(0,-0.65);
+              if ([front,back,right,left].every(Number.isFinite)) {
+                const along=(front-back)/(3.70*scale), across=(right-left)/(1.30*scale);
+                gx=along*cos-across*sin; gy=along*sin+across*cos;
+              }
+            } else { gx=0; gy=0; }
+            cache = actor.cartTerrain = {x:center.x,y:center.y,z,gx,gy,scale,angle,terrain,sampleAt:now,
+              smoothX:cache?.smoothX ?? gx,smoothY:cache?.smoothY ?? gy,lastAt:cache?.lastAt ?? now};
+          } else if (cache) {
+            // A missing DEM sample is not a measured zero-height valley.
+            cache.sampleAt=now;
+          } else { return null; }
+        }
+        if (!cache) return null;
+        const elapsed=Math.max(0,Math.min(0.25,(now-cache.lastAt)/1000));
+        const blend=terrain ? 1-Math.exp(-elapsed/0.12) : 1;
+        cache.smoothX += (cache.gx-cache.smoothX)*blend;
+        cache.smoothY += (cache.gy-cache.smoothY)*blend;
+        cache.lastAt=now;
+        const normalize=v=>{const length=Math.hypot(...v);return v.map(n=>n/length);};
+        const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+        const up=normalize([-cache.smoothX,-cache.smoothY,1]);
+        const forward=normalize([cos,sin,cache.smoothX*cos+cache.smoothY*sin]);
+        const side=normalize(cross(up,forward));
+        // Keep the wheel/hoof support plane above the sampled ground while
+        // the angle eases. A rigid vehicle cannot conform to every sharp crest.
+        let lift=0;
+        for (const [u,v,w] of [[-1.55,-0.59,0.01],[-1.55,0.59,0.01],[-0.45,-0.59,0.01],[-0.45,0.59,0.01],
+                              [0.86,-0.20,0.18],[0.86,0.20,0.18],[1.62,-0.20,0.18],[1.62,0.20,0.18]]) {
+          const dx=forward[0]*u+side[0]*v+up[0]*w, dy=forward[1]*u+side[1]*v+up[1]*w;
+          const dz=forward[2]*u+side[2]*v+up[2]*w;
+          lift=Math.max(lift,cache.gx*dx+cache.gy*dy-dz);
+        }
+        const z=cache.z+cache.gx*(center.x-cache.x)+cache.gy*(center.y-cache.y)+(lift+0.025)*scale;
+        return {x:center.x,y:center.y,z,forward,side,up};
+      }
+      /* BIGANE_CART_TERRAIN_POSE_V1_END */
+
+      /* BIGANE_TRADE_TRAFFIC_V3_BEGIN */
+      function installBiganeTradeTraffic() {
+        const toggle=document.getElementById('toggle-trade-traffic'),status=document.getElementById('trade-traffic-status');
+        const limits=Object.freeze({minZoom:8,total:3,fps:20});
+        let enabled=false,removed=false,catalogue=null,preparation=null,generation=0;
+        let shared=null,loading=false,failure='',dirty=true,lastSelection=0,lastStep=0,elapsed=0,drawn=0;
+        let actors=[],sequence=0,cssWidth=0,cssHeight=0,timer=0;
+        const prototypes=new Map(),motion=matchMedia('(prefers-reduced-motion: reduce)');let reduced=motion.matches;
+        const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+        const hash=text=>{let n=2166136261;for(const c of text)n=Math.imul(n^c.charCodeAt(0),16777619);return n>>>0;};
+        const xy=c=>[(c[0]+180)/360,(1-Math.log(Math.tan(Math.PI/4+clamp(c[1],-85,85)*Math.PI/360))/Math.PI)/2];
+        const lnglat=p=>[p[0]*360-180,Math.atan(Math.sinh(Math.PI*(1-2*p[1])))*180/Math.PI];
+        const running=()=>enabled&&!removed&&!document.hidden&&map.getZoom()>=limits.minZoom;
+        const screenVisible=p=>p&&Number.isFinite(p.x)&&Number.isFinite(p.y)&&p.x>=0&&p.y>=0&&p.x<cssWidth&&p.y<cssHeight;
+        function message(){if(!status)return;status.hidden=!enabled;status.textContent=failure||(loading?'Routes voorbereiden...':map.getZoom()<8?'Zichtbaar vanaf zoom 8.':reduced?'3D-voertuigen stilgezet: verminderde beweging.':'Maximaal 3 echte 3D-voertuigen samen.');}
         function routeShown(route) {
           const id = route.type === 'searoutes' ? 'Searoutes' : route.type === 'trails' ? 'Trail 7000' : 'Routes';
           const layer = map.getLayer(id); if (!layer) return false;
@@ -2684,182 +2930,6 @@
             .finally(() => { preparation=null;loading=false;message(); if (running() && !failure) wake(); });
           return preparation;
         }
-        // Small world-space meshes projected on the independent 2D canvas.
-        // X is the travel direction, Y across the route, Z is always upright.
-        function buildTrafficMesh(kind, phase) {
-          const vertices=[],faces=[];
-          const face=(points,color,outline=true)=>{const indices=points.map(p=>{vertices.push(p);return vertices.length-1;});faces.push({indices,color,outline});};
-          const box=(x0,y0,z0,x1,y1,z1,color)=>{
-            const a=[x0,y0,z0],b=[x1,y0,z0],c=[x1,y1,z0],d=[x0,y1,z0];
-            const e=[x0,y0,z1],f=[x1,y0,z1],g=[x1,y1,z1],h=[x0,y1,z1];
-            face([e,f,g,h],color);face([a,b,f,e],color);face([b,c,g,f],color);
-            face([c,d,h,g],color);face([d,a,e,h],color);
-          };
-          const wheel=(x,y,z,r)=>{
-            const n=10,inner=[],outer=[],sign=y<0?-1:1;
-            for(let i=0;i<n;i++){const a=i*Math.PI*2/n;inner.push([x+Math.cos(a)*r,y,z+Math.sin(a)*r]);outer.push([x+Math.cos(a)*r,y+sign*.035,z+Math.sin(a)*r]);}
-            face(outer,[58,49,36]);
-            for(let i=0;i<n;i++)face([inner[i],outer[i],outer[(i+1)%n],inner[(i+1)%n]],[75,57,36],false);
-            for(let i=0;i<3;i++){const a=i*Math.PI/3+phase*Math.PI/8,dx=Math.cos(a)*r*.82,dz=Math.sin(a)*r*.82;
-              face([[x-dx,y+sign*.038,z-dz],[x+dx,y+sign*.038,z+dz],[x+dx+.018,y+sign*.038,z+dz],[x-dx+.018,y+sign*.038,z-dz]],[189,159,104],false);}
-          };
-          if(kind==='ship') {
-            const ring=[[-.48,-.12],[-.24,-.20],[.20,-.16],[.51,0],[.20,.16],[-.24,.20],[-.48,.12]];
-            const deck=ring.map(([x,y])=>[x,y,.17]),keel=ring.map(([x,y])=>[x*.82,y*.70,.025]);
-            face(deck,[168,129,76]);
-            for(let i=0;i<ring.length;i++)face([keel[i],keel[(i+1)%ring.length],deck[(i+1)%ring.length],deck[i]],[86,61,38]);
-            box(-.38,-.105,.175,-.20,.105,.24,[128,91,48]);
-            box(-.035,-.015,.17,-.010,.015,.80,[89,67,39]);
-            box(.23,-.011,.17,.248,.011,.52,[89,67,39]);
-            // Vertical sails have real height; they are not screen-rotated icons.
-            face([[-.02,-.005,.77],[.32,.035,.31],[-.02,-.005,.29]],[235,224,191]);
-            face([[.24,.003,.50],[.48,.018,.245],[.24,.003,.235]],[218,210,179]);
-            face([[-.03,-.24,.56],[-.03,.24,.56],[-.06,.20,.25],[-.06,-.20,.25]],[228,217,186]);
-            face([[-.018,0,.80],[.15,.012,.775],[-.018,0,.73]],[70,119,105],false);
-            // Wake lies in the water plane and remains behind the stern.
-            for(const side of [-1,1])face([[-.48,side*.10,.005],[-.81-phase*.016,side*.22,.005],[-.72-phase*.016,side*.24,.005],[-.48,side*.13,.005]],[202,226,222],false);
-          } else {
-            box(-.50,-.16,.14,-.08,.16,.24,[126,90,47]);
-            const a=[-.48,-.17,.24],b=[-.08,-.17,.24],c=[-.08,.17,.24],d=[-.48,.17,.24],e=[-.48,0,.49],f=[-.08,0,.49];
-            face([a,b,f,e],[224,211,176]);face([d,e,f,c],[212,198,158]);face([a,e,d],[196,180,139]);face([b,c,f],[223,210,171]);
-            for(const x of [-.42,-.16])for(const y of [-.18,.18])wheel(x,y,.135,.13);
-            box(-.08,-.10,.17,.25,-.08,.195,[112,82,43]);box(-.08,.08,.17,.25,.10,.195,[112,82,43]);
-            // Driver, seat, horse body, neck, head and four gait frames.
-            box(-.105,-.07,.25,-.01,.07,.29,[106,75,40]);
-            box(-.085,-.04,.285,-.015,.04,.41,[67,96,108]);box(-.074,-.03,.41,-.024,.03,.47,[193,153,114]);
-            box(.17,-.078,.24,.43,.078,.37,[139,97,58]);
-            box(.36,-.055,.34,.43,.055,.48,[131,87,48]);box(.40,-.045,.43,.52,.045,.50,[113,76,45]);
-            box(.405,-.045,.49,.423,-.025,.56,[88,62,39]);box(.405,.025,.49,.423,.045,.56,[88,62,39]);
-            for(const x of [.20,.40])for(const y of [-.06,.06]) {
-              const step=Math.sin(phase*Math.PI/2+(x<.3?0:Math.PI)+(y<0?0:Math.PI))*.035;
-              face([[x-.018,y-.013,.27],[x+.018,y-.013,.27],[x+step+.012,y-.013,.035],[x+step-.012,y-.013,.035]],[90,61,38]);
-              face([[x-.018,y+.013,.27],[x+.018,y+.013,.27],[x+step+.012,y+.013,.035],[x+step-.012,y+.013,.035]],[99,67,40]);
-            }
-            face([[.17,0,.34],[.10,.025,.21],[.12,-.025,.22]],[62,44,30],false);
-          }
-          // Immutable geometry, generated once per animation phase.
-          for(const f of faces){const a=vertices[f.indices[0]],b=vertices[f.indices[1]],c=vertices[f.indices[2]];
-            const u=b.map((v,i)=>v-a[i]),v=c.map((x,i)=>x-a[i]);let n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
-            const len=Math.hypot(...n)||1;f.normal=n.map(x=>x/len);}
-          return {vertices,faces};
-        }
-        const projectionLayerId='bigane-trade-projection-frame';
-        let projectionFrame=null,ownsProjectionLayer=false,projectionRevision=0;
-        function ensureProjectionCapture() {
-          if(map.getLayer(projectionLayerId))return;
-          map.addLayer({id:projectionLayerId,type:'custom',renderingMode:'3d',
-            render(gl,args){
-              if(!enabled||removed)return;
-              const matrix=args?.defaultProjectionData?.mainMatrix;if(!matrix)return;
-              const c=map.getCanvas(),width=c.clientWidth,height=c.clientHeight;
-              // Pair matrix and zoom from the same rendered frame. Never combine
-              // a previous matrix with a newer move-event zoom.
-              const zoom=map.getZoom(),changed=!projectionFrame||projectionFrame.zoom!==zoom||projectionFrame.width!==width||projectionFrame.height!==height||matrix.some((v,i)=>v!==projectionFrame.matrix[i]);
-              if(changed){projectionFrame={matrix:Float64Array.from(matrix),zoom,width,height,revision:++projectionRevision};dirty=true;}
-              if(reduced&&changed)wake();
-            },onRemove(){projectionFrame=null;}});
-          ownsProjectionLayer=true;
-        }
-        function projectMercator(x,y,z,frame) {
-          const m=frame.matrix,cw=m[3]*x+m[7]*y+m[11]*z+m[15];
-          if(!(cw>1e-10))return null;
-          const nx=(m[0]*x+m[4]*y+m[8]*z+m[12])/cw,ny=(m[1]*x+m[5]*y+m[9]*z+m[13])/cw;
-          const depth=(m[2]*x+m[6]*y+m[10]*z+m[14])/cw;
-          if(!Number.isFinite(depth)||depth < -1 ||depth > 1)return null;
-          return {x:(nx+1)*frame.width*.5,y:(1-ny)*frame.height*.5,depth};
-        }
-        function actorGroundHeight(actor,coordinates,now) {
-          if(!map.getTerrain())return 0;
-          if(actor.heightAt!=null&&now-actor.heightAt<250)return actor.height||0;
-          actor.heightAt=now;const value=map.queryTerrainElevation(coordinates);
-          if(Number.isFinite(value))actor.height=value;
-          return actor.height||0;
-        }
-        const vec3Normalize=v=>{const len=Math.hypot(v[0],v[1],v[2])||1;return [v[0]/len,v[1]/len,v[2]/len];};
-        const vec3Sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
-        const vec3Cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
-        function actorBasis(actor,coordinates,angle,now) {
-          const center=xy(coordinates),mpu=1/(40075016.68557849*Math.cos(coordinates[1]*Math.PI/180));
-          const cs=Math.cos(angle),sn=Math.sin(angle),baseHeight=actorGroundHeight(actor,coordinates,now),baseZ=baseHeight*mpu;
-          const flatForward=[cs,sn,0],flatSide=[-sn,cs,0],flatUp=[0,0,1];
-          if(actor.route.kind==='ship' || !map.getTerrain()) return {center,baseZ,basisX:flatForward,basisY:flatSide,basisZ:flatUp};
-          const sampleFront=18*mpu,sampleSide=9*mpu;
-          if(actor.slopeAt!=null && now-actor.slopeAt<250 && actor.slopeAngle===angle && actor.slopeLat===coordinates[1] && actor.slopeLng===coordinates[0]) {
-            return actor.slopeBasis || {center,baseZ,basisX:flatForward,basisY:flatSide,basisZ:flatUp};
-          }
-          const sampleHeight = merc=> {
-            try {
-              const value = map.queryTerrainElevation(lnglat(merc));
-              return Number.isFinite(value) ? value*mpu : null;
-            } catch(_) { return null; }
-          };
-          const front=[center[0]+cs*sampleFront,center[1]+sn*sampleFront];
-          const back=[center[0]-cs*sampleFront,center[1]-sn*sampleFront];
-          const left=[center[0]-(-sn)*sampleSide,center[1]-cs*sampleSide];
-          const right=[center[0]+(-sn)*sampleSide,center[1]+cs*sampleSide];
-          const zf=sampleHeight(front),zb=sampleHeight(back),zl=sampleHeight(left),zr=sampleHeight(right);
-          let basisX=flatForward,basisY=flatSide,basisZ=flatUp;
-          if([zf,zb,zl,zr].every(Number.isFinite)) {
-            const frontPoint=[front[0],front[1],zf],backPoint=[back[0],back[1],zb],leftPoint=[left[0],left[1],zl],rightPoint=[right[0],right[1],zr];
-            const tangent=vec3Normalize(vec3Sub(frontPoint,backPoint));
-            const side=vec3Normalize(vec3Sub(rightPoint,leftPoint));
-            let normal=vec3Normalize(vec3Cross(tangent,side));
-            if(!Number.isFinite(normal[0])||!Number.isFinite(normal[1])||!Number.isFinite(normal[2])||Math.abs(normal[2])<1e-6) normal=flatUp;
-            if(normal[2]<0) normal=[-normal[0],-normal[1],-normal[2]];
-            let orthoSide=vec3Normalize(vec3Cross(normal,tangent));
-            if(!Number.isFinite(orthoSide[0])||!Number.isFinite(orthoSide[1])||!Number.isFinite(orthoSide[2])) orthoSide=flatSide;
-            let orthoForward=vec3Normalize(vec3Cross(orthoSide,normal));
-            if(orthoForward[0]*flatForward[0]+orthoForward[1]*flatForward[1] < 0) {
-              orthoForward=[-orthoForward[0],-orthoForward[1],-orthoForward[2]];
-              orthoSide=[-orthoSide[0],-orthoSide[1],-orthoSide[2]];
-            }
-            basisX=orthoForward;basisY=orthoSide;basisZ=normal;
-          }
-          actor.slopeAt=now;actor.slopeAngle=angle;actor.slopeLat=coordinates[1];actor.slopeLng=coordinates[0];
-          actor.slopeBasis={center,baseZ,basisX,basisY,basisZ};
-          return actor.slopeBasis;
-        }
-        function projectActorFaces(actor,coordinates,angle,phase,now,frame,faces) {
-          const {center,baseZ,basisX,basisY,basisZ}=actorBasis(actor,coordinates,angle,now);
-          const point=projectMercator(center[0],center[1],baseZ,frame);
-          if(!screenVisible(point)||!uncovered(actor,coordinates,point,now))return false;
-          const size=clamp(30+(frame.zoom-8)*2,30,42),scale=size/(512*2**frame.zoom);
-          const mesh=sprites[actor.route.kind][phase];
-          const vertices=mesh.vertices.map(v=>projectMercator(
-            center[0] + (basisX[0]*v[0] + basisY[0]*v[1] + basisZ[0]*v[2]) * scale,
-            center[1] + (basisX[1]*v[0] + basisY[1]*v[1] + basisZ[1]*v[2]) * scale,
-            baseZ     + (basisX[2]*v[0] + basisY[2]*v[1] + basisZ[2]*v[2]) * scale,
-            frame
-          ));
-          for(const f of mesh.faces) {
-            const points=f.indices.map(i=>vertices[i]);if(points.some(p=>!p))continue;
-            const n=f.normal;
-            const worldNormal=vec3Normalize([
-              basisX[0]*n[0] + basisY[0]*n[1] + basisZ[0]*n[2],
-              basisX[1]*n[0] + basisY[1]*n[1] + basisZ[1]*n[2],
-              basisX[2]*n[0] + basisY[2]*n[1] + basisZ[2]*n[2]
-            ]);
-            const shade=.70+.30*Math.abs(worldNormal[0]*-.35+worldNormal[1]*-.45+worldNormal[2]*.82);
-            faces.push({points,depth:points.reduce((s,p)=>s+p.depth,0)/points.length,
-              color:`rgb(${f.color.map(c=>Math.round(c*Math.min(1,shade))).join(',')})`,outline:f.outline});
-          }
-          return true;
-        }
-
-        function ensureCanvas() {
-          if (!canvas) {
-            canvas=document.createElement('canvas');canvas.className='bigane-trade-traffic';canvas.setAttribute('aria-hidden','true');
-            canvas.style.cssText='position:absolute;inset:0;pointer-events:none;';
-            map.getCanvasContainer().appendChild(canvas);ctx=canvas.getContext('2d');
-            sprites={cart:[0,1,2,3].map(n=>buildTrafficMesh('cart',n)),ship:[0,1,2,3].map(n=>buildTrafficMesh('ship',n))};
-          }
-          const c=map.getCanvas(),w=c.clientWidth,h=c.clientHeight,ratio=Math.min(1.5,window.devicePixelRatio||1);
-          if (cssWidth!==w || cssHeight!==h || canvas.width!==Math.round(w*ratio)) {
-            cssWidth=w;cssHeight=h;canvas.width=Math.max(1,Math.round(w*ratio));canvas.height=Math.max(1,Math.round(h*ratio));
-            canvas.style.width=w+'px';canvas.style.height=h+'px';ctx.setTransform(ratio,0,0,ratio,0,0);dirty=true;
-          }
-          canvas.hidden=false;
-        }
         function sample(route,distance) {
           distance=clamp(distance,0,route.total);
           let lo=0,hi=route.distance.length-1;
@@ -2879,7 +2949,8 @@
         function selectActors() {
           if (!catalogue) return;
           const b=map.getBounds(),nw=xy([b.getWest(),b.getNorth()]),se=xy([b.getEast(),b.getSouth()]);
-          actors=actors.filter(a=>routeShown(a.route)&&screenVisible(map.project(sample(a.route,a.distance))));
+          const keep=actors.filter(a=>routeShown(a.route)&&screenVisible(map.project(sample(a.route,a.distance))));
+          for(const a of actors)if(!keep.includes(a)&&a.root)shared.traffic.remove(a.root);actors=keep;
           const existing=new Set(actors.map(a=>a.route.key)),candidates=[];
           for(const route of catalogue) {
             if(existing.has(route.key)||!routeShown(route)||route.bbox[2]<nw[0]||route.bbox[0]>se[0]||route.bbox[3]<nw[1]||route.bbox[1]>se[1])continue;
@@ -2901,96 +2972,262 @@
           candidates.sort((a,b)=>a.score-b.score);
           const occupied=actors.map(a=>map.project(sample(a.route,a.distance)));
           for(const c of candidates) {
-            if(actors.filter(a=>a.route.kind===c.route.kind).length >= (c.route.kind==='ship'?limits.ships:limits.carts))continue;
+            if(actors.length>=limits.total)break;
             if(occupied.some(p=>Math.hypot(p.x-c.point.x,p.y-c.point.y)<68))continue;
             actors.push({route:c.route,distance:c.distance,direction:c.route.seed%2?1:-1,pause:0,id:++sequence,checkAt:0,uncovered:true});
             occupied.push(c.point);
           }
           dirty=false;
         }
-        function uncovered(actor,coordinates,point,now) {
-          if(map.getPitch()<1 || !map.getTerrain())return true;
-          if(now-actor.checkAt<250)return actor.uncovered;
-          actor.checkAt=now;
-          try { const front=map.unproject(point),a=xy([front.lng,front.lat]),b=xy(coordinates);
-            const allowance=4/(512*2**map.getZoom())/Math.max(0.4,Math.cos(map.getPitch()*Math.PI/180));
-            actor.uncovered=Math.hypot(a[0]-b[0],a[1]-b[1])<=allowance;
-          } catch(_){actor.uncovered=false;}
-          return actor.uncovered;
+
+        function model(kind) {
+          if(!prototypes.has(kind))prototypes.set(kind,buildBiganeVehicle(kind));
+          const root=prototypes.get(kind).clone(true);root.userData.wheels=[];root.userData.legs=[];
+          root.traverse(n=>{if(n.userData.wheel)root.userData.wheels.push(n);if(n.userData.leg)root.userData.legs.push(n);});
+          shared.traffic.add(root);return root;
         }
-        function draw(now,dt) {
-          ensureCanvas();ctx.clearRect(0,0,cssWidth,cssHeight);drawn=0;
-          if(!projectionFrame)return; // No guessed screen-space perspective.
-          const frame=projectionFrame;
-          if(catalogue && (dirty && (reduced || now-lastSelection>250) || now-lastSelection>1500)) {selectActors();lastSelection=now;}
-          const worldSize=512*2**frame.zoom,faces=[];
-          for(const actor of actors) {
-            if(!routeShown(actor.route))continue;
-            if(!reduced) {
-              if(actor.pause>0)actor.pause=Math.max(0,actor.pause-dt);
-              else {
-                actor.distance+=actor.direction*(actor.route.kind==='ship'?11:8)/worldSize*dt;
-                if(actor.distance<=0||actor.distance>=actor.route.total){actor.distance=clamp(actor.distance,0,actor.route.total);actor.direction*=-1;actor.pause=1.5;}
-              }
+        function update(now) {
+          if(!shared)return;
+          shared.traffic.visible=running();if(!running()){drawn=0;lastStep=0;return;}
+          const c=map.getCanvas();cssWidth=c.clientWidth;cssHeight=c.clientHeight;
+          if(!catalogue)return;
+          if((dirty&&now-lastSelection>250)||now-lastSelection>1500){selectActors();lastSelection=now;}
+          const dt=lastStep?Math.min(.12,(now-lastStep)/1000):0;
+          const advance=!reduced&&now-lastStep>=1000/limits.fps;
+          if(advance){elapsed+=dt;lastStep=now;}
+          const worldSize=512*2**map.getZoom();drawn=0;
+          for(const a of actors.slice(0,limits.total)) {
+            if(!a.root)a.root=model(a.route.kind);
+            if(advance){
+              if(a.pause>0)a.pause=Math.max(0,a.pause-dt);
+              else {a.distance+=a.direction*(a.route.kind==='ship'?9:6)/worldSize*dt;
+                if(a.distance<=0||a.distance>=a.route.total){a.distance=clamp(a.distance,0,a.route.total);a.direction*=-1;a.pause=1.5;}}
             }
-            const coordinates=sample(actor.route,actor.distance);
-            // Heading is a world-space route tangent, never a screen angle.
-            let d=clamp(actor.distance+actor.direction*3/worldSize,0,actor.route.total);
-            if(Math.abs(d-actor.distance)<1e-12)d=clamp(actor.distance-actor.direction*3/worldSize,0,actor.route.total);
-            const p=xy(coordinates),q=xy(sample(actor.route,d));
-            let angle=Math.atan2(q[1]-p[1],q[0]-p[0]);if((d-actor.distance)*actor.direction<0)angle+=Math.PI;
-            const phase=reduced?0:Math.floor(elapsed*4+actor.id)%4;
-            if(projectActorFaces(actor,coordinates,angle,phase,now,frame,faces))drawn++;
+            const coord=sample(a.route,a.distance),p=map.project(coord);
+            a.root.visible=routeShown(a.route)&&screenVisible(p);
+            if(!a.root.visible)continue;
+            let d=clamp(a.distance+a.direction*3/worldSize,0,a.route.total);
+            if(Math.abs(d-a.distance)<1e-12)d=clamp(a.distance-a.direction*3/worldSize,0,a.route.total);
+            const here=xy(coord),next=xy(sample(a.route,d));let angle=Math.atan2(next[1]-here[1],next[0]-here[0]);
+            if((d-a.distance)*a.direction<0)angle+=Math.PI;
+            const pixels=clamp(40+(map.getZoom()-8)*4,40,56),scale=pixels/worldSize/4.4;
+            a.root.scale.setScalar(scale);
+            if(a.route.kind==='ship') {
+              // Ships retain the water-level placement; never align to a slope.
+              if(!a.heightAt||now-a.heightAt>200){const h=map.getTerrain()?map.queryTerrainElevation(coord):0;if(Number.isFinite(h))a.height=h;a.heightAt=now;}
+              const m=maplibregl.MercatorCoordinate.fromLngLat(coord,a.height||0);
+              a.root.position.set(m.x,m.y,m.z+scale*.025);a.root.rotation.set(0,0,angle);
+              a.root.rotation.x=reduced?0:Math.sin(elapsed*1.3+a.id)*.025;
+            } else {
+              const pose=biganeCartTerrainPose(map,a,coord,angle,scale,now);
+              if(!pose){a.root.visible=false;continue;}
+              const f=pose.forward,s=pose.side,u=pose.up;
+              const basis=a.terrainBasis||(a.terrainBasis=new THREE.Matrix4());
+              basis.set(f[0],s[0],u[0],0, f[1],s[1],u[1],0, f[2],s[2],u[2],0, 0,0,0,1);
+              a.root.position.set(pose.x,pose.y,pose.z);a.root.quaternion.setFromRotationMatrix(basis);
+              for(const w of a.root.userData.wheels)w.rotation.y=-elapsed*2.7*a.direction;
+              a.root.userData.legs.forEach((l,i)=>l.rotation.y=reduced?0:Math.sin(elapsed*6+(i%3)*Math.PI)*.23);
+            }
+            drawn++;
           }
-          // Painter order applies across all vehicles too, not just within one.
-          faces.sort((a,b)=>b.depth-a.depth);ctx.globalAlpha=clamp((frame.zoom-8)*2,0,1);
-          ctx.lineJoin='round';ctx.lineWidth=.55;
-          for(const face of faces){ctx.beginPath();face.points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();
-            ctx.fillStyle=face.color;ctx.fill();if(face.outline){ctx.strokeStyle='rgba(40,34,25,.28)';ctx.stroke();}}
-          ctx.globalAlpha=1;
         }
-        function tick(now) {
-          frame=0;if(!running())return;
-          if(reduced || now-lastFrame>=1000/limits.fps) {
-            const dt=lastFrame?Math.min(0.12,(now-lastFrame)/1000):0;
-            lastFrame=now;elapsed+=dt;
-            try {draw(now,dt);}catch(error){failure='Animatie gepauzeerd: '+(error.message||error);enabled=false;toggle.checked=false;message();stop();return;}
-          }
-          if(!reduced)frame=requestAnimationFrame(tick);
-        }
-        function stop() {
-          cancelAnimationFrame(frame);frame=0;lastFrame=0;drawn=0;
-          if(canvas){canvas.hidden=true;canvas.width=1;canvas.height=1;cssWidth=0;cssHeight=0;}
+        function schedule() {
+          clearTimeout(timer);timer=0;
+          if(!running()||reduced||!shared||!catalogue)return;
+          timer=setTimeout(()=>{timer=0;if(!running())return;shared.invalidate();schedule();},actors.length?1000/limits.fps:1000);
         }
         function wake() {
-          message();if(!running()){stop();return;}
+          message();if(!running()){clearTimeout(timer);timer=0;if(shared){shared.traffic.visible=false;shared.invalidate();}return;}
           if(!catalogue&&!preparation&&!failure)prepare();
-          if(!frame)frame=requestAnimationFrame(tick);
+          if(shared){shared.traffic.visible=true;shared.invalidate();schedule();}
         }
-        const changed=()=>{dirty=true;for(const a of actors){a.checkAt=0;a.heightAt=null;}wake();};
-        const setEnabled=value=>{enabled=!!value;toggle.checked=enabled;failure='';
-          if(!enabled){generation++;actors=[];catalogue=null;projectionFrame=null;stop();}
-          else {ensureProjectionCapture();map.triggerRepaint();}wake();};
+        async function setEnabled(value) {
+          enabled=!!value;toggle.checked=enabled;failure='';generation++;
+          if(!enabled){clearTimeout(timer);timer=0;for(const a of actors)a.root?.removeFromParent();actors=[];drawn=0;if(shared){shared.traffic.visible=false;shared.invalidate();}message();return;}
+          try {const first=!shared;shared=await ensureBiganeActorsLayer();if(first){shared.updates.add(update);shared.cleanups.add(dispose);}if(!enabled||removed)return;dirty=true;wake();}
+          catch(e){failure='3D-verkeer kon niet laden: '+e.message;enabled=false;toggle.checked=false;status.hidden=false;status.textContent=failure;}
+        }
+        const changed=()=>{dirty=true;for(const a of actors)a.heightAt=0;wake();};
+        const onMotion=()=>{reduced=motion.matches;lastStep=0;changed();};
+        const sourceChanged=e=>{if(e.sourceId==='bigane-dem'&&e.isSourceLoaded){for(const a of actors)if(a.cartTerrain)a.cartTerrain.sampleAt=-Infinity;changed();}};
         const onToggle=()=>setEnabled(toggle.checked);
-        toggle.checked=false;toggle.addEventListener('change',onToggle);
-        const onMotion=()=>{reduced=motion.matches;changed();};
-        motion.addEventListener?.('change',onMotion);
-        document.addEventListener('visibilitychange',changed);
-        for(const event of ['move','moveend','resize','terrain'])map.on(event,changed);
-        // A final terrain tile can change projection without changing the camera.
-        const sourceChanged=e=>{if(e.sourceId==='bigane-dem'&&e.isSourceLoaded)changed();};
-        map.on('sourcedata',sourceChanged);
-        const dispose=()=>{removed=true;enabled=false;generation++;stop();canvas?.remove();actors=[];catalogue=null;projectionFrame=null;
-          if(ownsProjectionLayer&&map.getLayer(projectionLayerId)){try{map.removeLayer(projectionLayerId);}catch(_){}}ownsProjectionLayer=false;
-          toggle.removeEventListener('change',onToggle);motion.removeEventListener?.('change',onMotion);
-          document.removeEventListener('visibilitychange',changed);
-          for(const event of ['move','moveend','resize','terrain'])map.off(event,changed);
-          map.off('sourcedata',sourceChanged);map.off('remove',dispose);};
-        map.on('remove',dispose);
-        window.BiganeTradeTraffic={setEnabled,getStats:()=>({enabled,loading,routeCount:catalogue?.length||0,actors:actors.length,drawn,
-          maxActors:limits.carts+limits.ships,minZoom:limits.minZoom,maximumFPS:limits.fps,reducedMotion:reduced,projection:'world-space-meshes',projectionRevision,error:failure||null}),dispose};
+        function dispose(){if(removed)return;removed=true;enabled=false;generation++;clearTimeout(timer);
+          for(const a of actors)a.root?.removeFromParent();actors=[];for(const p of prototypes.values())biganeDisposeModel(p);prototypes.clear();
+          shared?.updates.delete(update);toggle.removeEventListener('change',onToggle);motion.removeEventListener?.('change',onMotion);document.removeEventListener('visibilitychange',changed);
+          for(const e of ['move','moveend','resize','terrain'])map.off(e,changed);map.off('sourcedata',sourceChanged);map.off('remove',dispose);
+        }
+        toggle.checked=false;toggle.addEventListener('change',onToggle);motion.addEventListener?.('change',onMotion);
+        document.addEventListener('visibilitychange',changed);for(const e of ['move','moveend','resize','terrain'])map.on(e,changed);map.on('sourcedata',sourceChanged);map.on('remove',dispose);
+        window.BiganeTradeTraffic={setEnabled,getStats:()=>({enabled,loading,actors:actors.length,drawn,maxActors:3,minZoom:8,maximumFPS:20,reducedMotion:reduced,projection:'shared-WebGL-3d',error:failure||null}),dispose};
       }
-      /* BIGANE_TRADE_TRAFFIC_V2_END */
+      /* BIGANE_TRADE_TRAFFIC_V3_END */
+
+
+      /* BIGANE_PARTY_MARKERS_V1_BEGIN */
+      function installBiganePartyMarkers() {
+        const id=x=>document.getElementById(x),panel=id('party-tools-details'),select=id('party-select');
+        const KEY='bigane-party-markers-draft-v1:'+new URL('.',document.baseURI).pathname;
+        const FORMAT='bigane-party-markers-v1',MODEL='./Bigane_Party_Marker.glb',FILE='./bigane-party-markers.json';
+        const MAX=24,clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+        let records=[],published={format:FORMAT,revision:'empty',markers:[]},draft=null,selected=null,focusIndex=-1;
+        let placing=false,handle=null,shared=null,template=null,modelPromise=null,modelFailure='',modelHeight=1;
+        let removed=false,dirty=true,sharedPromise=null,lastHeight=0,revisionRead=false,mutation=0;
+        const nodes=new Map(),heights=new Map(),abort=new AbortController();
+        const uuid=()=>globalThis.crypto?.randomUUID?.()||('party-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,9));
+        function say(text){id('party-status').textContent=text;}
+        function normalize(data) {
+          if(!data||data.format!==FORMAT||!Array.isArray(data.markers)||data.markers.length>MAX)throw Error('Ongeldig partybestand (maximaal 24 markers).');
+          const ids=new Set(),markers=data.markers.map((p,i)=>{
+            if(!p||typeof p!=='object'||!Number.isFinite(p.lng)||!Number.isFinite(p.lat)||Math.abs(p.lng)>180||Math.abs(p.lat)>85)throw Error('Ongeldige positie bij marker '+(i+1));
+            const key=typeof p.id==='string'&&/^[a-zA-Z0-9_-]{1,90}$/.test(p.id)&&!ids.has(p.id)?p.id:uuid();ids.add(key);
+            return {id:key,name:String(p.name||'Party '+(i+1)).trim().slice(0,80)||'Party '+(i+1),lng:p.lng,lat:p.lat,visible:p.visible!==false,
+              heightMeters:Number.isFinite(p.heightMeters)?clamp(p.heightMeters,100,50000):6500,
+              rotationDeg:Number.isFinite(p.rotationDeg)?((p.rotationDeg%360)+360)%360:0,
+              elevationOffsetMeters:Number.isFinite(p.elevationOffsetMeters)?clamp(p.elevationOffsetMeters,-100000,100000):0};
+          });
+          return {format:FORMAT,revision:typeof data.revision==='string'?data.revision.slice(0,120):'legacy',markers};
+        }
+        try {const d=JSON.parse(localStorage.getItem(KEY)||'null');if(d?.data){const valid=normalize(d.data);draft={baseRevision:String(d.baseRevision||'empty'),data:valid};records=valid.markers;}}
+        catch(_){/* Bad local data must not prevent the map loading. */}
+        function current(){return records.find(r=>r.id===selected)||null;}
+        function visibleRecords(){return records.filter(r=>r.visible);}
+        function fillFields(){
+          if(!records.some(r=>r.id===selected))selected=records[0]?.id||null;
+          select.replaceChildren();for(const r of records){const o=document.createElement('option');o.value=r.id;o.textContent=r.name+(r.visible?'':' (verborgen)');select.append(o);}select.value=selected||'';
+          const r=current();for(const x of ['party-name','party-visible','party-move','party-delete','party-selected-focus','party-size','party-rotation','party-offset'])id(x).disabled=!r;
+          id('party-name').value=r?.name||'';id('party-visible').checked=r?.visible!==false;
+          id('party-size').value=r?.heightMeters||6500;id('party-rotation').value=r?.rotationDeg||0;id('party-offset').value=r?.elevationOffsetMeters||0;
+          id('party-add').disabled=records.length>=MAX;
+          const v=visibleRecords();id('party-focus').disabled=!v.length;
+          id('party-focus').textContent=v.length>1?'Naar de volgende party':'Naar de party';
+          id('party-focus-note').textContent=v.length?(v.length===1?v[0].name:v.length+' markers - elke klik kiest de volgende'):'Nog geen markers. Voeg er een toe via Beheren.';
+          updateHandle();
+        }
+        function persist() {
+          mutation++;draft={baseRevision:published.revision,data:{format:FORMAT,revision:'draft',markers:records}};
+          try{localStorage.setItem(KEY,JSON.stringify(draft));say('Lokaal bewaard. Exporteer om met spelers te delen.');}
+          catch(_){say('Alleen deze sessie bewaard. Download het spelersbestand.');}
+          dirty=true;heights.clear();fillFields();requestScene();
+        }
+        function updateFields(){const r=current();if(!r)return;
+          r.name=id('party-name').value.trim().slice(0,80)||'Party';r.visible=id('party-visible').checked;
+          const size=Number(id('party-size').value),rotation=Number(id('party-rotation').value),offset=Number(id('party-offset').value);
+          if(Number.isFinite(size))r.heightMeters=clamp(size,100,50000);
+          if(Number.isFinite(rotation))r.rotationDeg=((rotation%360)+360)%360;
+          if(Number.isFinite(offset))r.elevationOffsetMeters=clamp(offset,-100000,100000);
+          persist();
+        }
+        function cancelMove(){placing=false;document.body.classList.remove('bigane-party-placing');id('party-cancel').hidden=true;id('party-move').textContent='Verplaatsen op kaart';}
+        function updateHandle() {
+          if(handle){handle.remove();handle=null;}
+          const r=current();if(!panel.open||!r||removed)return;
+          const element=document.createElement('div');element.className='bigane-party-handle';element.title='Sleep de partymarker';element.setAttribute('aria-label','Sleep '+r.name);
+          element.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();});
+          handle=new maplibregl.Marker({element,anchor:'center',draggable:true}).setLngLat([r.lng,r.lat]).addTo(map);
+          handle.on('dragstart',()=>{cancelMove();removeInfoPopups(true);});
+          handle.on('drag',()=>{const c=handle.getLngLat();r.lng=c.lng;r.lat=clamp(c.lat,-85,85);heights.delete(r.id);dirty=true;requestScene();});
+          handle.on('dragend',()=>persist());
+        }
+        function focus(r,cycle=false) {
+          if(!r)return;cancelMove();removeInfoPopups(true);
+          const v=visibleRecords();if(cycle)focusIndex=v.findIndex(x=>x.id===r.id);
+          map.flyTo({center:[r.lng,r.lat],zoom:9,pitch:Math.min(map.getPitch(),55),bearing:map.getBearing(),duration:950,essential:false});
+          id('party-focus-note').textContent=r.name+(v.length>1?' ('+(v.indexOf(r)+1)+'/'+v.length+')':'');
+        }
+        id('party-focus').addEventListener('click',()=>{const v=visibleRecords();if(v.length)focus(v[(focusIndex+1)%v.length],true);});
+        id('party-selected-focus').addEventListener('click',()=>focus(current()));
+        select.addEventListener('change',()=>{cancelMove();selected=select.value;fillFields();});
+        panel.addEventListener('toggle',()=>{if(!panel.open)cancelMove();updateHandle();});
+        id('party-add').addEventListener('click',()=>{
+          if(records.length>=MAX)return;cancelMove();const c=map.getCenter();
+          const r={id:uuid(),name:'Party '+(records.length+1),lng:((c.lng+180)%360+360)%360-180,lat:clamp(c.lat,-85,85),visible:true,heightMeters:6500,rotationDeg:0,elevationOffsetMeters:0};
+          records.push(r);selected=r.id;focusIndex=-1;persist();
+        });
+        id('party-delete').addEventListener('click',()=>{const r=current();if(!r||!confirm('Partymarker "'+r.name+'" verwijderen?'))return;cancelMove();records=records.filter(x=>x!==r);focusIndex=-1;persist();});
+        id('party-move').addEventListener('click',()=>{if(!current())return;placing=true;document.body.classList.add('bigane-party-placing');id('party-cancel').hidden=false;id('party-move').textContent='Klik op de nieuwe plek';say('Klik op de kaart. Esc annuleert.');removeInfoPopups(true);});
+        id('party-cancel').addEventListener('click',cancelMove);
+        const keydown=e=>{if(e.key==='Escape'&&placing){cancelMove();say('Verplaatsen geannuleerd.');}};document.addEventListener('keydown',keydown);
+        const place=e=>{if(!placing||!current())return;e.__biganePartyPlacement=true;const r=current();r.lng=e.lngLat.lng;r.lat=clamp(e.lngLat.lat,-85,85);cancelMove();persist();};map.on('click',place);
+        for(const x of ['party-name','party-visible','party-size','party-rotation','party-offset'])id(x).addEventListener('change',updateFields);
+        function download() {
+          const data={format:FORMAT,revision:uuid(),markers:records.map(r=>({...r}))};
+          const blob=new Blob([JSON.stringify(data,null,2)+'\n'],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+          a.href=url;a.download='bigane-party-markers.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
+          say('Gedownload. Vervang bigane-party-markers.json op de website; spelers herladen daarna.');return data;
+        }
+        id('party-export').addEventListener('click',download);
+        id('party-import').addEventListener('click',()=>id('party-import-file').click());
+        id('party-import-file').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;
+          try{if(f.size>256000)throw Error('Dit bestand is te groot.');const data=normalize(JSON.parse(await f.text()));
+            if(records.length&&!confirm('De huidige lokale partymarkers vervangen door dit bestand?'))return;
+            cancelMove();records=data.markers;selected=null;focusIndex=-1;persist();
+          }catch(error){say('Import mislukt: '+error.message);}finally{e.target.value='';}
+        });
+        id('party-published').addEventListener('click',()=>{
+          if(!revisionRead){say('Het spelersbestand wordt nog geladen.');return;}
+          if(draft&&!confirm('Lokale wijzigingen verwijderen en de gepubliceerde posities gebruiken?'))return;
+          cancelMove();try{localStorage.removeItem(KEY);}catch(_){}draft=null;records=published.markers.map(r=>({...r}));selected=null;focusIndex=-1;dirty=true;fillFields();requestScene();say('Gepubliceerde posities geladen.');
+        });
+        function inView(r){if(!r.visible||map.getZoom()<4||document.hidden)return false;const p=map.project([r.lng,r.lat]),c=map.getCanvas();return Number.isFinite(p.x)&&Number.isFinite(p.y)&&p.x>=0&&p.y>=0&&p.x<c.clientWidth&&p.y<c.clientHeight;}
+        async function loadTemplate() {
+          if(template||modelPromise||modelFailure||removed)return modelPromise;
+          modelPromise=(async()=>{
+            const response=await fetch(MODEL,{signal:abort.signal});if(!response.ok)throw Error('Bigane_Party_Marker.glb ontbreekt (HTTP '+response.status+').');
+            const gltf=await new GLTFLoader().parseAsync(await response.arrayBuffer(),new URL('.',document.baseURI).href);
+            if(removed){biganeDisposeModel(gltf.scene);return;}
+            // This supplied GLB explicitly declares Y-up and origin on terrain.
+            // Rotate to MapLibre Z-up, preserving the below-ground foundations.
+            const upright=new THREE.Group();upright.rotation.x=Math.PI/2;upright.add(gltf.scene);
+            template=new THREE.Group();template.add(upright);template.updateMatrixWorld(true);
+            const box=new THREE.Box3().setFromObject(template);modelHeight=Math.max(1,box.max.z);
+            template.traverse(o=>{if(o.isMesh){o.frustumCulled=false;for(const m of (Array.isArray(o.material)?o.material:[o.material])){m.depthTest=true;m.depthWrite=true;}}});
+            dirty=true;shared?.invalidate();
+          })().catch(e=>{if(e.name!=='AbortError'){modelFailure=e.message;say(modelFailure);console.warn('Partymarker:',e);}}).finally(()=>{modelPromise=null;});
+          return modelPromise;
+        }
+        function updateScene(now) {
+          if(!shared||removed)return;
+          const valid=new Set(records.map(r=>r.id));for(const [key,node]of nodes)if(!valid.has(key)){node.removeFromParent();nodes.delete(key);}
+          const timed=now-lastHeight>=250;if(timed)lastHeight=now;
+          const onscreen=records.some(inView);if(onscreen&&!template&&!modelPromise&&!modelFailure)loadTemplate();
+          if(!template)return;
+          for(const r of records){let node=nodes.get(r.id);if(!node&&inView(r)){node=template.clone(true);nodes.set(r.id,node);shared.parties.add(node);}
+            if(!node)continue;node.visible=inView(r);if(!node.visible)continue;
+            let h=heights.get(r.id)||0;if(timed||dirty||!heights.has(r.id)){const value=map.getTerrain()?map.queryTerrainElevation([r.lng,r.lat]):0;if(Number.isFinite(value)){h=value;heights.set(r.id,h);}}
+            const m=maplibregl.MercatorCoordinate.fromLngLat([r.lng,r.lat],h+r.elevationOffsetMeters);
+            node.position.set(m.x,m.y,m.z);node.scale.setScalar(m.meterInMercatorCoordinateUnits()*r.heightMeters/modelHeight);node.rotation.z=r.rotationDeg*Math.PI/180;
+          }
+          dirty=false;
+        }
+        function requestScene(){
+          if(removed)return;
+          if(shared){shared.invalidate();return;}
+          if(!records.some(inView)||sharedPromise)return;
+          sharedPromise=ensureBiganeActorsLayer().then(s=>{if(removed)return;shared=s;s.updates.add(updateScene);s.cleanups.add(dispose);s.invalidate();})
+            .catch(e=>say('3D-partymarkers niet geladen: '+e.message)).finally(()=>{sharedPromise=null;});
+        }
+        const viewChanged=()=>{dirty=true;requestScene();};
+        const sourceChanged=e=>{if(e.sourceId==='bigane-dem'&&e.isSourceLoaded)viewChanged();};
+        for(const e of ['move','resize','terrain'])map.on(e,viewChanged);map.on('sourcedata',sourceChanged);document.addEventListener('visibilitychange',viewChanged);
+        function dispose(){if(removed)return;removed=true;abort.abort();cancelMove();handle?.remove();for(const node of nodes.values())node.removeFromParent();nodes.clear();biganeDisposeModel(template);template=null;
+          shared?.updates.delete(updateScene);map.off('click',place);for(const e of ['move','resize','terrain'])map.off(e,viewChanged);map.off('sourcedata',sourceChanged);map.off('remove',dispose);document.removeEventListener('keydown',keydown);document.removeEventListener('visibilitychange',viewChanged);
+        }
+        map.on('remove',dispose);
+        window.BiganePartyMarkers={isPlacing:()=>placing,export:()=>({format:FORMAT,revision:uuid(),markers:records.map(r=>({...r}))}),
+          getStats:()=>({markers:records.length,visible:visibleRecords().length,rendered:[...nodes.values()].filter(n=>n.visible).length,modelLoaded:!!template,localDraft:!!draft,error:modelFailure||null}),focusNext:()=>id('party-focus').click(),dispose};
+        fillFields();requestScene();
+        const loadMutation=mutation;
+        fetch(FILE,{cache:'no-store',signal:abort.signal}).then(async response=>{
+          if(response.status===404)return {format:FORMAT,revision:'empty',markers:[]};
+          if(!response.ok)throw Error('Spelersbestand HTTP '+response.status);return normalize(await response.json());
+        }).then(data=>{
+          if(removed)return;published=data;revisionRead=true;
+          if(!draft&&mutation===loadMutation){records=data.markers.map(r=>({...r}));fillFields();requestScene();}
+          else if(draft?.baseRevision!==published.revision)say('Er is een ander spelersbestand. Je lokale wijzigingen blijven behouden; gebruik Gepubliceerde posities om die te laden.');
+        }).catch(e=>{if(e.name!=='AbortError'){revisionRead=true;say('Spelersbestand kon niet laden. Lokaal bewerken blijft mogelijk.');}});
+      }
+      /* BIGANE_PARTY_MARKERS_V1_END */
+
 
 
       async function installBiomeTextures() {
@@ -7362,6 +7599,7 @@
             };
             this.onMouseMove = null; // Shared dispatcher owns browsing hover/cursor.
             this.onClick = event => {
+              if (window.BiganePartyMarkers?.isPlacing?.() || event.__biganePartyPlacement) return;
               // Normal browsing is handled by one shared dispatcher. Keep the
               // existing editor-only model selection, without opening a popup.
               if (!biganeViewSettings.models || !placeInteractionAllowed(this.map.getZoom()) ||
@@ -8266,6 +8504,7 @@
         // original terrain, snow and model initialization. No farm planner runs.
         try { installStaticBiganeLanduse(); } catch (error) { ruralStartupError=String(error?.message||error);console.warn("Vaste landbouwbiomes overgeslagen:", error); }
         try { installBiganeTradeTraffic(); } catch (error) { console.warn('Verkeersanimatie niet beschikbaar:', error); }
+        try { installBiganePartyMarkers(); } catch (error) { console.warn('Partymarkers niet beschikbaar:', error); }
       });
       /* BIGANE_RURAL_START_END */
 
