@@ -1,0 +1,26 @@
+{
+  "format": "bigane-party-markers-v1",
+  "revision": "92afb234-d316-4b5a-9e14-41f5aad6749e",
+  "markers": [
+    {
+      "id": "194a0f78-4ee8-46c8-a4ca-0f5ac10beb58",
+      "name": "Party 1",
+      "lng": -12.847370801197485,
+      "lat": 45.62697745001299,
+      "visible": true,
+      "heightMeters": 6500,
+      "rotationDeg": 0,
+      "elevationOffsetMeters": 0
+    },
+    {
+      "id": "00834e0d-b809-4cc9-8520-76988adb6768",
+      "name": "Party 2",
+      "lng": -16.07642990394436,
+      "lat": 49.02296467023797,
+      "visible": true,
+      "heightMeters": 6500,
+      "rotationDeg": 0,
+      "elevationOffsetMeters": 0
+    }
+  ]
+}
