@@ -444,6 +444,40 @@
 }
 /* BIGANE_SEARCH_UI_V1_END */
 </style>
+
+<!-- BIGANE_QUALITY_CHOICE_V1_STYLE_BEGIN -->
+<style id="bigane-quality-style">
+ #bg49-progress [hidden],#bigane-quality-recovery[hidden]{display:none!important;}
+ #bg49-progress .bg49-card{max-height:calc(100dvh - 40px);overflow:auto;}
+ #bg-quality-choice fieldset{margin:0;padding:0;border:0;min-width:0;}
+ #bg-quality-choice legend{margin:0 0 12px;font-size:14px;color:#e9ece3;}
+ .bg-quality-options{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+ .bg-quality-option{display:grid;grid-template-columns:18px 1fr;align-content:start;gap:8px;padding:17px 14px;border:1px solid #647d76;border-radius:11px;background:#203637;cursor:pointer;}
+ .bg-quality-option:has(input:checked){border:2px solid #d3c28c;padding:16px 13px;background:#2d4541;box-shadow:0 0 0 1px #d3c28c33;}
+ .bg-quality-option input{margin:4px 0 0;accent-color:#d3c28c;width:16px;height:16px;}
+ .bg-quality-option strong{display:block;font-size:16px;color:#f4f0dd;}
+ .bg-quality-tag{display:inline-block;margin:6px 0 8px;padding:2px 7px;border-radius:12px;background:#ffffff12;font-size:10px;letter-spacing:.05em;text-transform:uppercase;}
+ .bg-quality-description{display:block;color:#c6d2c7;font-size:12px;line-height:1.55;}
+ .bg-quality-remember{display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#c6d2c7;margin:17px 0;cursor:pointer;}
+ .bg-quality-remember input{margin:3px 0 0;accent-color:#d3c28c;}
+ #bg-quality-start{width:100%;border:1px solid #e0ce98;border-radius:8px;background:#d3c28c;color:#20302b;padding:13px 16px;font:600 15px/1.3 system-ui,sans-serif;cursor:pointer;min-height:48px;}
+ #bg-quality-start:hover{background:#e3d3a3;}
+ #bg-quality-start:focus-visible,.bg-quality-option:focus-within{outline:3px solid #fff2b7;outline-offset:3px;}
+ #bg-quality-choice .bg-quality-hint{margin:13px 0 0;font-size:12px;line-height:1.5;color:#aebfb5;}
+ #bg-quality-storage-note{font-size:12px;color:#e2c699;margin:9px 0 0;}
+ #bg-quality-current{margin:0 0 16px;color:#d3c28c;font-size:12px;}
+ #bg-quality-restart-light{display:block;margin:12px auto 0;background:none;border:0;color:#d3c28c;text-decoration:underline;font:inherit;font-size:12px;cursor:pointer;}
+ .hud-quality-control{margin:0 0 14px;padding:12px;border:1px solid #d8dfd5;border-radius:9px;background:#f1f4ed;}
+ .hud-quality-control strong{display:block;margin:0 0 7px;font-size:13px;}
+ .hud-quality-control p{font-size:12px;line-height:1.45;color:#52655c;margin:6px 0 10px;}
+ .hud-quality-control select{width:100%;font:inherit;font-size:13px;padding:7px;background:white;border:1px solid #bccbbf;border-radius:6px;}
+ #hud-quality-apply{margin-top:8px;width:100%;padding:8px;border:1px solid #899e8e;border-radius:6px;background:#e2eadc;font:inherit;font-size:12px;cursor:pointer;}
+ #bigane-quality-recovery{position:fixed;z-index:11000;left:50%;top:16px;transform:translateX(-50%);width:min(440px,calc(100vw - 28px));padding:18px;background:#fff6df;border:1px solid #bfa069;border-radius:10px;color:#3c3426;font:14px/1.5 system-ui,sans-serif;box-shadow:0 8px 30px #0003;}
+ #bigane-quality-recovery p{margin:0 0 10px;}
+ #bigane-quality-recovery button{padding:9px 12px;border:1px solid #9a8251;border-radius:6px;background:#e9d7a8;color:#302b20;font:inherit;cursor:pointer;}
+ @media(max-width:540px){#bg49-progress{padding:12px;}#bg49-progress .bg49-card{padding:23px 20px;max-height:calc(100dvh - 24px);}#bg49-progress .bg49-brand{margin-bottom:14px;}#bg49-progress h1{font-size:25px;}#bg49-progress .bg49-intro{margin-bottom:18px;}.bg-quality-options{grid-template-columns:1fr;gap:9px;}.bg-quality-option{padding:12px;}.bg-quality-option:has(input:checked){padding:11px;}.bg-quality-tag{margin:3px 0 5px;}#bg-quality-choice .bg-quality-hint{font-size:11px;}}
+</style>
+<!-- BIGANE_QUALITY_CHOICE_V1_STYLE_END -->
 </head>
 <body>
 <!-- BIGANE_SEARCH_BODY_V1_BEGIN -->
@@ -466,11 +500,32 @@
 <div id="map"></div>
   <div id="status">Bigane + Kanka initialiseren...</div>
 <!-- BIGANE_V49_PASSIVE_LOADER_BODY_BEGIN -->
-<section id="bg49-progress" aria-labelledby="bg49-progress-title" hidden>
+<section id="bg49-progress" role="dialog" aria-modal="true" aria-labelledby="bg49-progress-title">
   <div class="bg49-card">
     <p class="bg49-brand">BIGANE</p>
-    <h1 id="bg49-progress-title">Je kaart wordt geopend</h1>
-    <p class="bg49-intro">De eerste kaartweergave wordt geladen.</p>
+    <h1 id="bg49-progress-title">Welkom in Bigane</h1>
+    <p class="bg49-intro" id="bg-quality-intro">Kies de weergave voordat de kaart begint te laden.</p>
+    <form id="bg-quality-choice">
+      <fieldset>
+        <legend>Welke kwaliteit wil je gebruiken?</legend>
+        <div class="bg-quality-options">
+          <label class="bg-quality-option">
+            <input id="bg-quality-high" type="radio" name="bigane-quality" value="high" checked />
+            <span><strong>Hoge kwaliteit</strong><span class="bg-quality-tag">Standaard</span><span class="bg-quality-description">Volledige schermscherpte en de oorspronkelijke blendafbeelding.</span></span>
+          </label>
+          <label class="bg-quality-option">
+            <input id="bg-quality-light" type="radio" name="bigane-quality" value="light" />
+            <span><strong>Light</strong><span class="bg-quality-tag">Tablet / minder belasting</span><span class="bg-quality-description">Lagere tekenresolutie en een kleinere blendafbeelding. Alle kaartfuncties blijven beschikbaar.</span></span>
+          </label>
+        </div>
+      </fieldset>
+      <label class="bg-quality-remember"><input id="bg-quality-remember" type="checkbox" />Onthoud mijn keuze op dit apparaat</label>
+      <button id="bg-quality-start" type="submit">Start met hoge kwaliteit</button>
+      <p class="bg-quality-hint">De 3D-kaart start pas na deze knop. Bij vastlopen: kies Light. Later wisselen kan via Kaartmenu &gt; Weergave.</p>
+      <p id="bg-quality-storage-note" role="status" hidden></p>
+    </form>
+    <div id="bg-quality-progress" hidden>
+    <p id="bg-quality-current"></p>
     <div class="bg49-meter-label"><span>Voortgang per onderdeel</span><span id="bg49-progress-count">0 / 9</span></div>
     <div class="bg49-track" id="bg49-progress-bar" role="progressbar" aria-label="Opstartonderdelen" aria-valuemin="0" aria-valuemax="9" aria-valuenow="0">
       <div class="bg49-fill" id="bg49-progress-fill"></div>
@@ -489,8 +544,85 @@
     <p class="bg49-note" id="bg49-progress-note" role="status" aria-live="polite">Je kunt de kaart ook alvast openen. Het laden gaat dan gewoon door.</p>
     <button id="bg49-progress-open" type="button">Kaart alvast openen</button>
     <p class="bg49-footnote">Kanka-afbeeldingen kunnen na het openen nog laden.</p>
+    <button id="bg-quality-restart-light" type="button" hidden>Opnieuw beginnen in Light</button>
+    </div>
   </div>
 </section>
+<section id="bigane-quality-recovery" role="alert" hidden>
+ <p id="bigane-quality-recovery-text"></p><button id="bigane-quality-recovery-button" type="button">Opnieuw openen in Light</button>
+</section>
+<script id="bigane-quality-startup-script">
+(() => {
+ 'use strict';
+ const KEY='bigane-render-quality-v1';
+ const byId=id=>document.getElementById(id);
+ const form=byId('bg-quality-choice'),remember=byId('bg-quality-remember');
+ const button=byId('bg-quality-start'),progress=byId('bg-quality-progress');
+ const valid=value=>value==='high'||value==='light';
+ let saved=null,requested=null,started=false,active=null,resolveStart;
+ try {const value=localStorage.getItem(KEY);if(valid(value))saved=value;} catch (_) {}
+ try {const value=new URL(location.href).searchParams.get('quality');if(valid(value))requested=value;} catch (_) {}
+ const initial=requested||saved||'high';
+ byId('bg-quality-'+initial).checked=true;remember.checked=!!saved;
+ const startPromise=new Promise(resolve=>{resolveStart=resolve;});
+ function profile(mode){
+  const light=mode==='light';
+  const ratio=Number(window.devicePixelRatio)||1;
+  return Object.freeze({mode, label:light?'Light':'Hoge kwaliteit',
+   // High deliberately omits pixelRatio: retain MapLibre's native default.
+   mapOptions:Object.freeze(light?{pixelRatio:Math.min(1,Math.max(.5,ratio))}:{}),
+   blendUrl:light?'./biome-blend-overlay-mercator-light-v1.png':'./biome-blend-overlay-mercator-v1.png'});
+ }
+ function selection(){return form.querySelector('input[name="bigane-quality"]:checked')?.value||'high';}
+ function syncButton(){button.textContent=selection()==='light'?'Start in Light':'Start met hoge kwaliteit';}
+ form.addEventListener('change',syncButton);syncButton();
+ function restart(mode){
+  if(!valid(mode))return;
+  const next=new URL(location.href);next.searchParams.set('quality',mode);
+  if(next.href===location.href)location.reload();else location.assign(next.href);
+ }
+ function start(event){
+  event?.preventDefault();if(started)return;
+  active=profile(selection());started=true;button.disabled=true;
+  try {if(remember.checked)localStorage.setItem(KEY,active.mode);else localStorage.removeItem(KEY);}
+  catch (_) {const note=byId('bg-quality-storage-note');note.hidden=false;note.textContent='De keuze kan niet worden bewaard, maar geldt wel voor dit bezoek.';}
+  form.hidden=true;progress.hidden=false;
+  byId('bg49-progress-title').textContent='Je kaart wordt geopend';
+  byId('bg-quality-intro').textContent='De eerste kaartweergave wordt geladen.';
+  byId('bg-quality-current').textContent=active.mode==='light'?'Light: lagere tekenresolutie, dezelfde kaartfuncties.':'Hoge kwaliteit: volledige schermscherpte.';
+  byId('bg-quality-restart-light').hidden=active.mode==='light';
+  byId('bg49-progress-open').focus({preventScroll:true});
+  document.documentElement.dataset.biganeQuality=active.mode;
+  window.dispatchEvent(new CustomEvent('bigane-quality-start',{detail:{mode:active.mode}}));
+  resolveStart(active);
+ }
+ form.addEventListener('submit',start);
+ byId('bg-quality-restart-light').addEventListener('click',()=>restart('light'));
+ byId('bigane-quality-recovery-button').addEventListener('click',()=>restart('light'));
+ function showFailure(message){
+  byId('bigane-quality-recovery-text').textContent=String(message);
+  byId('bigane-quality-recovery').hidden=false;
+ }
+ function attachMap(map){
+  const lost=()=>showFailure('De grafische verbinding is onderbroken. Dit kan ook een driverprobleem zijn. Je kunt de pagina opnieuw openen in Light.');
+  const restored=()=>{byId('bigane-quality-recovery').hidden=true;};
+  map.on('webglcontextlost',lost);map.on('webglcontextrestored',restored);
+  map.once('remove',()=>{map.off('webglcontextlost',lost);map.off('webglcontextrestored',restored);});
+ }
+ // Keep keyboard focus in the initial choice. A waiting tab never starts a map.
+ document.addEventListener('keydown',event=>{
+  if(started||event.key!=='Tab')return;
+  const controls=[...form.querySelectorAll('input,button')].filter(n=>!n.disabled&&(!n.type||n.type!=='radio'||n.checked));
+  const first=controls[0],last=controls.at(-1);
+  if(event.shiftKey&&(document.activeElement===first||!form.contains(document.activeElement))){event.preventDefault();last?.focus();}
+  else if(!event.shiftKey&&(document.activeElement===last||!form.contains(document.activeElement))){event.preventDefault();first?.focus();}
+ });
+ window.BiganeQualityStart=Object.freeze({wait:()=>startPromise,restart,showFailure,attachMap,
+  get started(){return started;},get active(){return active;},storageKey:KEY});
+ window.addEventListener('DOMContentLoaded',()=>{if(!started)button.focus({preventScroll:true});},{once:true});
+})();
+
+</script>
 <script id="bg49-progress-script">
 (() => {
   'use strict';
@@ -504,7 +636,7 @@
   const fill = document.getElementById('bg49-progress-fill');
   const counter = document.getElementById('bg49-progress-count');
   const rows = new Map(Array.from(root.querySelectorAll('[data-stage]'), row => [row.dataset.stage, row]));
-  const started = performance.now();
+  let started = null;
   const errors = new Set();
   const unsubscribers = [];
   let closed = false, attached = false, loaded = false, rendered = false;
@@ -544,7 +676,7 @@
       if (hadFocus) document.querySelector('#map canvas')?.focus({preventScroll:true});
     }, 180);
   }
-  function onOpen() { close(); }
+  function onOpen() { if (window.BiganeQualityStart?.started) close(); }
   function onPageError() {
     if (!closed) setNote('Een onderdeel meldt een fout. Je kunt de kaart alvast openen; de oorspronkelijke foutmelding blijft beschikbaar.');
   }
@@ -558,7 +690,8 @@
     else stage(key, 'pending', 'Laden');
   }
   function inspect() {
-    if (closed) return;
+    if (closed || !window.BiganeQualityStart?.started) return;
+    if (started === null) started = performance.now();
     try {
       if (map && read) {
         const state = read(); // Reads existing v49 state; never starts work.
@@ -1014,7 +1147,12 @@
   <button id="hud-tab-manage" type="button" role="tab" aria-selected="false" aria-controls="hud-page-manage" tabindex="-1" data-hud-tab="manage">Beheer</button>
   <button id="hud-tab-status" type="button" role="tab" aria-selected="false" aria-controls="hud-page-status" tabindex="-1" data-hud-tab="status">Status</button>
  </div>
- <div id="hud-page-view" role="tabpanel" aria-labelledby="hud-tab-view" class="hud-tab-panel"><p class="hud-intro">Kies wat je op de kaart wilt zien.</p><div id="hud-layer-slot"></div></div>
+ <div id="hud-page-view" role="tabpanel" aria-labelledby="hud-tab-view" class="hud-tab-panel"><p class="hud-intro">Kies wat je op de kaart wilt zien.</p><div class="hud-quality-control">
+   <strong>Weergavekwaliteit</strong><p id="hud-quality-active">Nog niet gestart</p>
+   <label class="bigane-search-sr-only" for="hud-quality-mode">Kwaliteit kiezen</label>
+   <select id="hud-quality-mode"><option value="high">Hoge kwaliteit</option><option value="light">Light</option></select>
+   <button id="hud-quality-apply" type="button">Toepassen en opnieuw laden</button>
+  </div><div id="hud-layer-slot"></div></div>
  <div id="hud-page-manage" role="tabpanel" aria-labelledby="hud-tab-manage" class="hud-tab-panel" hidden>
   <p class="hud-intro">Posities en instellingen aanpassen.</p>
   <div class="hud-action-list" id="hud-manage-actions">
@@ -1074,6 +1212,12 @@
  const partyClose=document.createElement('button');partyClose.id='party-drawer-close';partyClose.type='button';partyClose.textContent='\u00d7';partyClose.setAttribute('aria-label','Partybeheer sluiten');party.querySelector('summary').append(partyClose);
  on(partyClose,'click',e=>{e.preventDefault();e.stopPropagation();closeParty();button.focus({preventScroll:true});});
  on(button,'click',()=>{if(!drawer.hidden){hideMenu();return;}showMenu();});
+ on(id('hud-quality-apply'),'click',()=>{
+  const next=id('hud-quality-mode').value;
+  if(next===window.BiganeQualityStart?.active?.mode)return;
+  if(window.confirm('De kaart wordt opnieuw geladen om van kwaliteit te wisselen. Opgeslagen modelposities en het lokale partyconcept blijven bewaard. Doorgaan?'))
+   window.BiganeQualityStart.restart(next);
+ });
  on(id('hud-menu-close'),'click',()=>{hideMenu();button.focus({preventScroll:true});});
  on(id('hud-open-party'),'click',openParty);
  on(edit,'click',()=>{closeParty();hideMenu();});
@@ -1098,7 +1242,14 @@
   attach(instance){map=instance;sync();
    const error=e=>notice('source:'+String(e.sourceId||'kaart'),e.error?.message||'Een kaartonderdeel kon niet laden.',true);
    map.on('error',error);removers.push(()=>map?.off('error',error));
-   const updateBlend=()=>{const s=window.BiganeBlendTiles?.getStats?.();if(!s)return;id('hud-blend-status').textContent=s.ready?'De volledige kleurkaart is vooraf geladen als één geprojecteerde PNG. Er worden geen blendchunks per viewport ingeladen.':s.error?'Vooraf laden van de kleurkaart mislukte. De kaart gebruikt dezelfde PNG rechtstreeks: '+s.error:'Kleurkaart voorbereiden...';};
+   const updateBlend=()=>{const s=window.BiganeBlendTiles?.getStats?.();if(!s)return;
+    id('hud-blend-status').textContent=s.error?s.error:s.ready?
+      (s.quality==='light'?'Light-blend geladen (2048 x 1419).':'Oorspronkelijke blend geladen (4096 x 2838).')+' De afbeelding wordt alleen door de kaart gedecodeerd.':
+      'Blendafbeelding laden via de kaart...';};
+   window.addEventListener('bigane-blend-status',updateBlend);removers.push(()=>window.removeEventListener('bigane-blend-status',updateBlend));
+   const quality=window.BiganeQualityStart.active;
+   id('hud-quality-mode').value=quality.mode;
+   id('hud-quality-active').textContent=quality.mode==='light'?'Light actief: tekenresolutie maximaal 1 pixel per CSS-pixel.':'Hoge kwaliteit actief: de normale schermscherpte.';
    updateBlend();map.once('load',updateBlend);map.on('remove',()=>window.BiganeHUD.dispose());
   },
   getState:()=>({menuOpen:!drawer.hidden,tab,partyOpen:party.open,editorOpen:document.body.classList.contains('landmark-edit-mode')}),
@@ -1406,7 +1557,14 @@
 </script>
 
   <script type="module">
-    import * as maplibregl from "https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs";
+    const BIGANE_QUALITY = await window.BiganeQualityStart.wait();
+    let maplibregl;
+    try {
+      maplibregl = await import("https://unpkg.com/maplibre-gl@^6.13.0/dist/maplibre-gl.mjs");
+    } catch (error) {
+      window.BiganeQualityStart.showFailure('De kaartbibliotheek kon niet laden. Controleer de verbinding en probeer opnieuw.');
+      throw error;
+    }
 
     // Three.js is deliberately loaded lazily. A failed 3D dependency must never
     // prevent the base MapLibre map from starting.
@@ -1534,69 +1692,45 @@
     }
     /* BIGANE_TUNNEL_STYLE_FIX_V2_END */
 
-    /* BIGANE_SOFTBLEND_PACK_V3_BEGIN */
-    // Preload the already aligned world PNG once. Keep soft blend as one projected
-    // image so panning never swaps visible blend tiles chunk-by-chunk.
+    /* BIGANE_SOFTBLEND_SINGLE_DECODE_V4_BEGIN */
+    // MapLibre alone downloads/decodes the chosen image. No separate Image,
+    // object URL, canvas rescale or full-resolution duplicate is retained.
     const biganeBlendPack = (() => {
-      const file = './biome-blend-overlay-mercator-v1.png';
-      let ready = false, failed = '', disposed = false, promise = null, image = null;
-      let networkRequests = 0;
-      async function preload() {
-        if (promise) return promise;
-        promise = (async () => {
-          try {
-            networkRequests++;
-            const response = await fetch(new URL(file, document.baseURI), {cache:'default'});
-            if (!response.ok) throw Error(`Kleurkaart kon niet laden (HTTP ${response.status}).`);
-            const blob = await response.blob();
-            if (disposed) return false;
-            const url = URL.createObjectURL(blob);
-            image = new Image();
-            image.decoding = 'async';
-            image.src = url;
-            if (image.decode) await image.decode();
-            else await new Promise((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(Error('Kleurkaart kon niet worden gedecodeerd.'));});
-            URL.revokeObjectURL(url);
-            if (disposed) return false;
-            ready = true;
-            return true;
-          } catch (error) {
-            failed = String(error?.message || error);
-            console.warn('Kleurkaart vooraf laden mislukt; de kaart gebruikt dezelfde PNG rechtstreeks.', failed);
-            window.BiganeHUD?.notice('blend', failed + ' De bestaande zachte biome-overgangen blijven actief.', true);
-            return false;
-          }
-        })();
-        return promise;
+      let instance=null,ready=false,failed='',disposed=false;
+      const file=BIGANE_QUALITY.blendUrl;
+      function notify(){window.dispatchEvent(new Event('bigane-blend-status'));}
+      function observe(event){
+        if(disposed||!instance||(event?.sourceId&&event.sourceId!=='biome-softblend'))return;
+        let next=false;
+        try {next=!failed&&!!instance.getSource('biome-softblend')&&instance.isSourceLoaded('biome-softblend');} catch (_) {}
+        if(ready!==next){ready=next;notify();}
       }
-      function install() { /* No custom protocol needed for the single-image overlay. */ }
-      function dispose() {
-        disposed = true;
-        if (image) { image.onload = null; image.onerror = null; image = null; }
+      function onError(event){
+        if(event?.sourceId!=='biome-softblend')return;
+        ready=false;
+        failed=BIGANE_QUALITY.mode==='light'
+          ? 'Light-blend niet geladen. Zet biome-blend-overlay-mercator-light-v1.png naast index.html. De basiskaart blijft beschikbaar.'
+          : 'De blendafbeelding kon niet laden. Controleer biome-blend-overlay-mercator-v1.png. De basiskaart blijft beschikbaar.';
+        // Do NOT fall back to decoding the larger image on a constrained device.
+        window.BiganeHUD?.notice('blend',failed,true);notify();
       }
-      const stats = () => ({
-        ready,
-        mode: 'single-projected-png',
-        networkRequests,
-        error: failed || null,
-        file
-      });
-      window.BiganeBlendTiles = { getStats: stats };
-      return { preload, install, dispose, get ready(){ return ready; } };
+      function attach(map){instance=map;map.on('sourcedata',observe);map.on('load',observe);map.on('error',onError);observe();}
+      function dispose(){disposed=true;if(instance){instance.off('sourcedata',observe);instance.off('load',observe);instance.off('error',onError);}instance=null;}
+      const stats=()=>({ready,quality:BIGANE_QUALITY.mode,mode:'maplibre-single-image',file,
+        separatePredecode:false,error:failed||null});
+      window.BiganeBlendTiles={getStats:stats};
+      return {attach,dispose,stats,get ready(){return ready;}};
     })();
-
-    // Start the single PNG download in parallel with the style request.
-    biganeBlendPack.preload();
     function biganeSoftBlendSourceSpec() {
       return {
-        type:'image', url:'./biome-blend-overlay-mercator-v1.png',
+        type:'image',url:BIGANE_QUALITY.blendUrl,
         coordinates:[[-88.1391,52.7208],[93.3291,52.7208],[93.3291,-53.4408],[-88.1391,-53.4408]]
       };
     }
     function prepareBiganeSoftBlendStyle(style) {
-      style.sources = style.sources || {};
-      style.sources['biome-softblend'] = biganeSoftBlendSourceSpec();
-      style.layers = (style.layers || []).filter(layer => !['Biome soft blend','Biome blend overview'].includes(layer.id));
+      style.sources=style.sources||{};
+      style.sources['biome-softblend']=biganeSoftBlendSourceSpec();
+      style.layers=(style.layers||[]).filter(layer=>!['Biome soft blend','Biome blend overview'].includes(layer.id));
       const before=style.layers.findIndex(layer=>layer.id==='Biomes');
       style.layers.splice(before<0?style.layers.length:before,0,{
         id:'Biome soft blend',type:'raster',source:'biome-softblend',layout:{visibility:'visible'},
@@ -1606,7 +1740,8 @@
       if(base)base.paint={...base.paint,'fill-opacity':1};
       return style;
     }
-    /* BIGANE_SOFTBLEND_PACK_V3_END */
+    /* BIGANE_SOFTBLEND_SINGLE_DECODE_V4_END */
+
 
     function prepareBiganeLanduseStyle(original) {
       const style = JSON.parse(JSON.stringify(original));
@@ -1641,8 +1776,6 @@
       const response = await fetch("./style-maplibre.json", { cache: "no-store" });
       if (!response.ok) throw new Error(`style-maplibre.json kon niet worden geladen (HTTP ${response.status})`);
       const originalStyle = await response.json();
-      await biganeBlendPack.preload();
-      if (biganeBlendPack.ready) biganeBlendPack.install();
       const style = prepareBiganeSoftBlendStyle(prepareBiganeLanduseStyle(originalStyle));
 
       const map = new maplibregl.Map({
@@ -1656,13 +1789,16 @@
         maxZoom: 12,
         maxPitch: 60,
         cancelPendingTileRequestsWhileZooming: false,
-        renderWorldCopies: false
+        renderWorldCopies: false,
+        ...BIGANE_QUALITY.mapOptions
       });
 
 
       map.on('error', rememberBiganeLanduseSourceError);
       map.addControl(new maplibregl.NavigationControl(), "top-right");
       map.addControl(new KankaTokenControl(), "top-right");
+      biganeBlendPack.attach(map);
+      window.BiganeQualityStart.attachMap(map);
       window.BiganeHUD?.attach(map);
       map.once('remove', () => biganeBlendPack.dispose());
 
@@ -3568,7 +3704,7 @@
       async function installBiomeSoftBlend() {
         try {
           // Normally already present in the INITIAL style. Do not call
-          // updateImage here: the source is a preloaded raster pyramid (or the aligned PNG fallback).
+          // updateImage here: MapLibre owns this single image and its decoding.
           if (!map.getSource('biome-softblend')) {
             map.addSource('biome-softblend', biganeSoftBlendSourceSpec());
           }
@@ -3576,7 +3712,7 @@
             map.addLayer({
               id: 'Biome soft blend', type: 'raster', source: 'biome-softblend',
               layout: {visibility: 'visible'},
-              paint: {'raster-opacity': 1, 'raster-resampling': 'linear', 'raster-fade-duration': biganeBlendPack.ready ? 160 : 0}
+              paint: {'raster-opacity': 1, 'raster-resampling': 'linear', 'raster-fade-duration': 0}
             }, map.getLayer('Biomes') ? 'Biomes' : undefined);
           }
           map.setLayoutProperty('Biome soft blend', 'visibility', 'visible');
@@ -8767,6 +8903,7 @@
 
     } catch (error) {
       showError("Fout: ", error);
+      window.BiganeQualityStart.showFailure('De kaart kon niet starten. De foutmelding staat onder Kaartmenu > Status. Je kunt opnieuw beginnen in Light.');
     }
   </script>
 </body>
