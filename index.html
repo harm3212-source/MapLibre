@@ -471,14 +471,15 @@
     <p class="bg49-brand">BIGANE</p>
     <h1 id="bg49-progress-title">Je kaart wordt geopend</h1>
     <p class="bg49-intro">De eerste kaartweergave wordt geladen.</p>
-    <div class="bg49-meter-label"><span>Voortgang per onderdeel</span><span id="bg49-progress-count">0 / 8</span></div>
-    <div class="bg49-track" id="bg49-progress-bar" role="progressbar" aria-label="Opstartonderdelen" aria-valuemin="0" aria-valuemax="8" aria-valuenow="0">
+    <div class="bg49-meter-label"><span>Voortgang per onderdeel</span><span id="bg49-progress-count">0 / 9</span></div>
+    <div class="bg49-track" id="bg49-progress-bar" role="progressbar" aria-label="Opstartonderdelen" aria-valuemin="0" aria-valuemax="9" aria-valuenow="0">
       <div class="bg49-fill" id="bg49-progress-fill"></div>
     </div>
     <ul class="bg49-stages">
       <li class="bg49-stage" data-stage="base" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Basiskaart</span><span class="bg49-state">Wachten</span></li>
       <li class="bg49-stage" data-stage="terrain" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Terrein</span><span class="bg49-state">Wachten</span></li>
       <li class="bg49-stage" data-stage="landscape" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Landschap</span><span class="bg49-state">Wachten</span></li>
+      <li class="bg49-stage" data-stage="blend" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Zachte biome-overgangen</span><span class="bg49-state">Wachten</span></li>
       <li class="bg49-stage" data-stage="water" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Ondiep water</span><span class="bg49-state">Wachten</span></li>
       <li class="bg49-stage" data-stage="forest" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Bomen</span><span class="bg49-state">Wachten</span></li>
       <li class="bg49-stage" data-stage="snow" data-state="pending"><span class="bg49-dot" aria-hidden="true"></span><span class="bg49-label">Sneeuwinstellingen</span><span class="bg49-state">Wachten</span></li>
@@ -552,8 +553,8 @@
     catch (_) { return false; }
   }
   function sourceStage(key, id) {
-    if (sourceReady(id)) stage(key, 'ready', 'Gereed');
-    else if (errors.has(id)) stage(key, 'warning', 'Niet geladen');
+    if (errors.has(id)) stage(key, 'warning', 'Niet geladen');
+    else if (sourceReady(id)) stage(key, 'ready', 'Gereed');
     else stage(key, 'pending', 'Laden');
   }
   function inspect() {
@@ -564,6 +565,7 @@
         loaded = loaded || Boolean(map.loaded());
         stage('base', loaded ? 'ready' : 'pending', loaded ? 'Gereed' : 'Laden');
         sourceStage('terrain', 'bigane-dem');
+        sourceStage('blend', 'biome-softblend');
         const pattern = map.getLayer('Biomes') ? map.getPaintProperty('Biomes', 'fill-pattern') : null;
         const landscapeSource = map.getLayer('Biomes')?.source;
         const landscapeReady = Array.isArray(pattern) && pattern.includes('biome-deep-wood') && sourceReady(landscapeSource);
@@ -1179,7 +1181,7 @@
       if(!target||!validCoordinate(target.coordinates)){expand();show('Geen eenduidige hoofdstad gevonden. Er wordt niet naar een willekeurige plaats gesprongen.');return;}
       const serial=++selectionSerial;navigationCleanup?.();selectionAbort?.abort();selectionAbort=new AbortController();const signal=selectionAbort.signal;
       hooks.closePopups?.();input.value=entry.name;collapse();input.blur();clear.hidden=false;
-      const labelZoom=Number(hooks.cityZoom?.(target.properties));const zoom=Math.min(map.getMaxZoom?.()??22,Math.max(8.5,Number.isFinite(labelZoom)?labelZoom+0.35:9));
+      const labelZoom=Number(hooks.cityZoom?.(target.properties));const zoom=Math.min(map.getMaxZoom?.()??12,Math.max(8.5,Number.isFinite(labelZoom)?labelZoom+0.35:9));
       const options={center:target.coordinates.slice(),zoom,pitch:0,bearing:map.getBearing?.()??0,duration:1100,essential:false};
       // Fly immediately; a late precision result may not steal the user's view.
       let activeFlight=true,refined=null,moveEnded=false,precisionDone=false;
@@ -1352,6 +1354,41 @@
     }
     /* BIGANE_TUNNEL_STYLE_FIX_V2_END */
 
+    /* BIGANE_SOFTBLEND_STARTUP_V1_BEGIN */
+    // Include the corrected blend in the INITIAL style. MapLibre starts its
+    // request with the other map sources and decodes/uploads it only once.
+    // Coordinates and asset are the established Mercator projection fix.
+    function biganeSoftBlendSourceSpec() {
+      return {
+        type: 'image',
+        url: './biome-blend-overlay-mercator-v1.png',
+        coordinates: [
+          [-88.1391, 52.7208], [93.3291, 52.7208],
+          [93.3291, -53.4408], [-88.1391, -53.4408]
+        ]
+      };
+    }
+    function prepareBiganeSoftBlendStyle(style) {
+      style.sources = style.sources || {};
+      style.sources['biome-softblend'] = biganeSoftBlendSourceSpec();
+      style.layers = (style.layers || []).filter(layer => layer.id !== 'Biome soft blend');
+      const layer = {
+        id: 'Biome soft blend', type: 'raster', source: 'biome-softblend',
+        layout: {visibility: 'visible'},
+        paint: {
+          'raster-opacity': 1,
+          'raster-resampling': 'linear',
+          'raster-fade-duration': 0
+        }
+      };
+      const before = style.layers.findIndex(item => item.id === 'Biomes');
+      style.layers.splice(before < 0 ? style.layers.length : before, 0, layer);
+      const base = style.layers.find(item => item.id === 'Sandwich');
+      if (base) base.paint = {...base.paint, 'fill-opacity': 1};
+      return style;
+    }
+    /* BIGANE_SOFTBLEND_STARTUP_V1_END */
+
     function prepareBiganeLanduseStyle(original) {
       const style = JSON.parse(JSON.stringify(original));
       const biomes = style.layers?.find(layer => layer.id === 'Biomes');
@@ -1384,7 +1421,7 @@
     try {
       const response = await fetch("./style-maplibre.json", { cache: "no-store" });
       if (!response.ok) throw new Error(`style-maplibre.json kon niet worden geladen (HTTP ${response.status})`);
-      const style = prepareBiganeLanduseStyle(await response.json());
+      const style = prepareBiganeSoftBlendStyle(prepareBiganeLanduseStyle(await response.json()));
 
       const map = new maplibregl.Map({
         container: "map",
@@ -1394,7 +1431,7 @@
         pitch: 0,
         bearing: 0,
         minZoom: 1,
-        maxZoom: 22,
+        maxZoom: 12,
         maxPitch: 60,
         renderWorldCopies: false
       });
@@ -3305,53 +3342,23 @@
 
       async function installBiomeSoftBlend() {
         try {
-          // Offline Web Mercator correction. Soft blending remains enabled.
-          // Normalized biome colours avoid dark fringes at transparent coasts.
-          const sourceSpec = {
-            type: "image",
-            url: "./biome-blend-overlay-mercator-v1.png",
-            coordinates: [
-              [-88.1391, 52.7208],
-              [93.3291, 52.7208],
-              [93.3291, -53.4408],
-              [-88.1391, -53.4408]
-            ]
-          };
-          const existing = map.getSource("biome-softblend");
-          if (!existing) {
-            map.addSource("biome-softblend", sourceSpec);
-          } else if (typeof existing.updateImage === "function") {
-            // Also replace an old overlay inherited from an external style.
-            await existing.updateImage({
-              url: sourceSpec.url,
-              coordinates: sourceSpec.coordinates
-            });
+          // Normally already present in the INITIAL style. Do not call
+          // updateImage here: that would decode/upload the same PNG a second time.
+          if (!map.getSource('biome-softblend')) {
+            map.addSource('biome-softblend', biganeSoftBlendSourceSpec());
           }
-
-          if (!map.getLayer("Biome soft blend")) {
-            const layer = {
-              id: "Biome soft blend",
-              type: "raster",
-              source: "biome-softblend",
-              paint: { "raster-opacity": 1.0 }
-            };
-            if (map.getLayer("Biomes")) {
-              map.addLayer(layer, "Biomes");
-            } else {
-              map.addLayer(layer);
-            }
+          if (!map.getLayer('Biome soft blend')) {
+            map.addLayer({
+              id: 'Biome soft blend', type: 'raster', source: 'biome-softblend',
+              layout: {visibility: 'visible'},
+              paint: {'raster-opacity': 1, 'raster-resampling': 'linear', 'raster-fade-duration': 0}
+            }, map.getLayer('Biomes') ? 'Biomes' : undefined);
           }
-          map.setLayoutProperty("Biome soft blend", "visibility", "visible");
-
-          // The original opaque biome base remains under the corrected overlay.
-          if (map.getLayer("Sandwich")) {
-            map.setPaintProperty("Sandwich", "fill-opacity", 1);
-          }
+          map.setLayoutProperty('Biome soft blend', 'visibility', 'visible');
+          if (map.getLayer('Sandwich')) map.setPaintProperty('Sandwich', 'fill-opacity', 1);
         } catch (error) {
-          console.warn("Biome soft blend overgeslagen:", error);
-          if (map.getLayer("Sandwich")) {
-            map.setPaintProperty("Sandwich", "fill-opacity", 1);
-          }
+          console.warn('Biome soft blend overgeslagen:', error);
+          if (map.getLayer('Sandwich')) map.setPaintProperty('Sandwich', 'fill-opacity', 1);
         }
       }
 
